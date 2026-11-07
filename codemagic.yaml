@@ -1,0 +1,85 @@
+# Codemagic CI/CD – https://docs.codemagic.io/yaml-basic-configuration/yaml-getting-started/
+#
+# Required environment groups (Codemagic → Team/App settings → Environment variables):
+#   app_store_credentials: APP_STORE_CONNECT_KEY_IDENTIFIER, APP_STORE_CONNECT_ISSUER_ID,
+#                          APP_STORE_CONNECT_PRIVATE_KEY (App Store Connect API key, .p8 content)
+#   ios_credentials:       CERTIFICATE_PRIVATE_KEY (RSA key used for the distribution certificate)
+#
+# Trigger: push a tag like `ios-v0.1.0`, or start the workflow manually.
+
+workflows:
+  ios-testflight:
+    name: iOS TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "ios-v*"
+          include: true
+    environment:
+      groups:
+        - app_store_credentials
+        - ios_credentials
+      vars:
+        BUNDLE_ID: "org.sirplus.talk"
+        XCODE_PROJECT: "ios/TalkLegacy.xcodeproj"
+        XCODE_SCHEME: "TalkLegacy"
+      xcode: latest
+    cache:
+      cache_paths:
+        - $HOME/.cargo/registry
+        - $HOME/.cargo/git
+        - $CM_BUILD_DIR/core/target
+
+    scripts:
+      - name: Install Rust toolchain
+        script: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$CM_ENV"
+
+      - name: Build Rust core (xcframework + Swift bindings)
+        script: |
+          ios/scripts/build-core.sh
+
+      - name: Generate Xcode project
+        script: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          cd ios && xcodegen generate
+
+      - name: Set up code signing
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles --project "$XCODE_PROJECT"
+
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --archive-xcargs "CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - raphael.wintrich@mailbox.org
+        notify:
+          success: true
+          failure: true
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        submit_to_app_store: false

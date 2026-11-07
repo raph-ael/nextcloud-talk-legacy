@@ -29,3 +29,5 @@ DerivedData/
 
 # Generated bindings
 /core/bindings/
+/ios/Generated/
+/ios/*.xcodeproj/

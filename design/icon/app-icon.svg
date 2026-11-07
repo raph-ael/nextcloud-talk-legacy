@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2F7BF5"/>
+      <stop offset="1" stop-color="#1650C4"/>
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed square: iOS applies the rounded mask itself; no transparency allowed. -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g transform="translate(0,-45)">
+  <!-- Back bubble -->
+  <path d="M604 300h120c66 0 120 54 120 120v96c0 66-54 120-120 120h-6l4 74-86-74h-32c-66 0-120-54-120-120v-96c0-66 54-120 120-120z"
+        fill="#FFFFFF" fill-opacity="0.45"/>
+  <!-- Front bubble -->
+  <path d="M300 364h240c70 0 126 56 126 126v110c0 70-56 126-126 126H402l-118 92 10-92h6c-70 0-126-56-126-126V490c0-70 56-126 126-126z"
+        fill="#FFFFFF"/>
+  <circle cx="352" cy="545" r="30" fill="#1F63DE"/>
+  <circle cx="440" cy="545" r="30" fill="#1F63DE"/>
+  <circle cx="528" cy="545" r="30" fill="#1F63DE"/>
+  </g>
+</svg>

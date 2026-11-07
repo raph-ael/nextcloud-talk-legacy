@@ -16,4 +16,5 @@ path = "src/bin/uniffi-bindgen.rs"
 [dependencies]
 talk-core.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uniffi = { version = "0.32", features = ["tokio", "cli"] }

@@ -13,6 +13,55 @@ pub fn core_version() -> String {
     core::VERSION.to_string()
 }
 
+#[derive(uniffi::Record)]
+pub struct LoginResult {
+    pub server: String,
+    pub login_name: String,
+    pub app_password: String,
+}
+
+/// Login Flow v2: open `login_url()` in a browser, then await `wait()`.
+#[derive(uniffi::Object)]
+pub struct LoginFlow {
+    inner: core::LoginFlow,
+    cancel: tokio::sync::Notify,
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl LoginFlow {
+    #[uniffi::constructor]
+    pub async fn start(server: String, platform: ClientPlatform) -> Result<Arc<Self>, CoreError> {
+        let inner = core::LoginFlow::start(&server, platform.into()).await?;
+        Ok(Arc::new(Self {
+            inner,
+            cancel: tokio::sync::Notify::new(),
+        }))
+    }
+
+    pub fn login_url(&self) -> String {
+        self.inner.login_url.clone()
+    }
+
+    /// Resolves once the user approved in the browser (fails after 20 minutes,
+    /// or with `Cancelled` after `cancel()`).
+    pub async fn wait(&self) -> Result<LoginResult, CoreError> {
+        let c = tokio::select! {
+            r = self.inner.wait() => r?,
+            _ = self.cancel.notified() => return Err(CoreError::Cancelled),
+        };
+        Ok(LoginResult {
+            server: c.server,
+            login_name: c.login_name,
+            app_password: c.app_password,
+        })
+    }
+
+    /// Stop polling (e.g. the user closed the browser). Safe to call before `wait()`.
+    pub fn cancel(&self) {
+        self.cancel.notify_one();
+    }
+}
+
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum CoreError {
     #[error("unauthorized")]
@@ -21,6 +70,8 @@ pub enum CoreError {
     Network { message: String },
     #[error("server: {message}")]
     Server { message: String },
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl From<core::Error> for CoreError {
