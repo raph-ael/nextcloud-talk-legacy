@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use talk_core::{Account, ChatMessage, LoginFlow, Platform, TalkClient, new_reference_id};
 
 #[derive(Parser)]
-#[command(version, about = "Sirplus Talk core test CLI")]
+#[command(version, about = "Talk core test CLI")]
 struct Cli {
     /// Account from .env: me | a | b
     #[arg(short, long, default_value = "me", global = true)]
@@ -28,7 +28,7 @@ struct Cli {
 enum Cmd {
     /// Login Flow v2 in the browser; prints the resulting app password
     Login {
-        #[arg(default_value = "cloud.sirplus.org")]
+        /// e.g. cloud.example.org
         server: String,
     },
     /// List conversations (sorted by last activity)

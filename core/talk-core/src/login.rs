@@ -36,7 +36,7 @@ struct Poll {
 }
 
 impl LoginFlow {
-    /// Start a login flow against `server` (e.g. `https://cloud.sirplus.org`).
+    /// Start a login flow against `server` (e.g. `https://cloud.example.org`).
     pub async fn start(server: &str, platform: Platform) -> Result<Self> {
         let server = normalize_server(server);
         let http = base_http_builder(platform).build()?;
@@ -109,8 +109,8 @@ mod tests {
     #[test]
     fn normalizes() {
         assert_eq!(
-            normalize_server("cloud.sirplus.org/"),
-            "https://cloud.sirplus.org"
+            normalize_server("cloud.example.org/"),
+            "https://cloud.example.org"
         );
         assert_eq!(normalize_server(" https://x.y "), "https://x.y");
     }

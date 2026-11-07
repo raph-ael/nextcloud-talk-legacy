@@ -62,7 +62,7 @@ impl Platform {
 
 #[derive(Debug, Clone)]
 pub struct Account {
-    /// Base URL without trailing slash, e.g. `https://cloud.sirplus.org`.
+    /// Base URL without trailing slash, e.g. `https://cloud.example.org`.
     pub server: String,
     pub user: String,
     pub app_password: String,
