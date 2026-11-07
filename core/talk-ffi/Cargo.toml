@@ -1,0 +1,19 @@
+[package]
+name = "talk-ffi"
+description = "UniFFI bindings (Kotlin/Swift) for talk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "talk_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+talk-core.workspace = true
+thiserror.workspace = true
+uniffi = { version = "0.32", features = ["tokio", "cli"] }

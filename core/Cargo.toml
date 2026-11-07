@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["talk-core", "talk-ffi", "talk-node", "talk-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+talk-core = { path = "talk-core" }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "cookies", "query", "form"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+uuid = { version = "1.29", features = ["v4"] }
+sha2 = "0.11"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3

@@ -1,0 +1,31 @@
+# Secrets
+.env
+.env.*
+*.p8
+google-services.json
+*service-account*.json
+
+# Rust
+/core/target/
+/push-proxy/target/
+
+# Node / Electron
+node_modules/
+dist/
+out/
+*.node
+
+# Android
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+
+# Apple
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcuserdata/
+
+# Generated bindings
+/core/bindings/

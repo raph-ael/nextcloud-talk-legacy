@@ -1,0 +1,17 @@
+[package]
+name = "talk-node"
+description = "Node-API (napi-rs) bindings of talk-core for the Electron desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+talk-core.workspace = true
+napi = { version = "3", features = ["async"] }
+napi-derive = "3"
+
+[build-dependencies]
+napi-build = "2"
