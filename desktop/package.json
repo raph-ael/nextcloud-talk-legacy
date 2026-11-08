@@ -1,0 +1,66 @@
+{
+  "name": "sirplus-talk-desktop",
+  "productName": "Sirplus Talk",
+  "version": "0.1.0",
+  "description": "Fast Nextcloud Talk desktop client",
+  "license": "AGPL-3.0-or-later",
+  "author": "Sirplus Talk contributors",
+  "main": "out/main/index.js",
+  "private": true,
+  "scripts": {
+    "core": "scripts/build-core.sh",
+    "core:release": "PROFILE=release scripts/build-core.sh",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "electron-vite preview",
+    "dist:linux": "npm run core:release && electron-vite build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "org.sirplus.talk",
+    "productName": "Sirplus Talk",
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "native/talk_node.node",
+        "to": "native/talk_node.node"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network;InstantMessaging",
+      "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.social-networking"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}

@@ -99,6 +99,13 @@ pub struct RoomsBatch {
     pub talk_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CurrentUser {
+    pub id: String,
+    #[serde(rename = "displayname", default)]
+    pub display_name: String,
+}
+
 #[derive(Clone)]
 pub struct TalkClient {
     http: reqwest::Client,
@@ -274,6 +281,36 @@ impl TalkClient {
             Method::DELETE,
             &format!("{SPREED}/v4/room/{token}/participants/active"),
         );
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// The authenticated user (`id` may differ from the login name, e.g. e-mail logins).
+    pub async fn current_user(&self) -> Result<CurrentUser> {
+        let (data, _) = self
+            .ocs::<CurrentUser>(self.request(Method::GET, "/ocs/v2.php/cloud/user"))
+            .await?;
+        Ok(data)
+    }
+
+    /// Conversation avatar (image bytes plus content type). Talk renders initials or
+    /// the other user's avatar for 1:1 rooms, so this works for every room type.
+    pub async fn room_avatar(&self, token: &str, dark: bool) -> Result<(Vec<u8>, String)> {
+        let path = if dark {
+            format!("{SPREED}/v1/room/{token}/avatar/dark")
+        } else {
+            format!("{SPREED}/v1/room/{token}/avatar")
+        };
+        let resp = check(self.request(Method::GET, &path).send().await?).await?;
+        let content_type = header_str(resp.headers(), "content-type")
+            .unwrap_or_else(|| "application/octet-stream".into());
+        Ok((resp.bytes().await?.to_vec(), content_type))
+    }
+
+    /// Revokes the app password this client uses (sign-out). Afterwards every call fails
+    /// with `Unauthorized`.
+    pub async fn revoke_app_password(&self) -> Result<()> {
+        let rb = self.request(Method::DELETE, "/ocs/v2.php/core/apppassword");
         self.ocs::<serde_json::Value>(rb).await?;
         Ok(())
     }

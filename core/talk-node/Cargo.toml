@@ -10,8 +10,12 @@ crate-type = ["cdylib"]
 
 [dependencies]
 talk-core.workspace = true
-napi = { version = "3", features = ["async"] }
+napi = { version = "3", features = ["async", "serde-json"] }
 napi-derive = "3"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [build-dependencies]
 napi-build = "2"

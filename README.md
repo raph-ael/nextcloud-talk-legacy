@@ -4,8 +4,8 @@ Schnelle, Signal-artige Clients für [Nextcloud Talk](https://nextcloud.com/talk
 Android, iOS, Windows, macOS und Linux. Offline-first, einfache Bedienung,
 Chat und Anrufe über das Talk High-Performance-Backend.
 
-> **Status:** frühe Entwicklung. Der Rust-Kern spricht bereits mit Talk
-> (Gesprächsliste, Chat lesen/senden, Login Flow v2); die Apps entstehen gerade.
+> **Status:** frühe Entwicklung. Der Desktop-Client chattet bereits (Gesprächsliste,
+> Live-Chat, Antworten, Lesebestätigungen, Benachrichtigungen); Android und iOS folgen.
 
 **Ziel-MVP:** Login, Gesprächsliste, Text-Chats (1:1 und Gruppe), Audio-/Videoanrufe,
 eingehende Anrufe klingeln auch bei geschlossener App.
@@ -62,6 +62,21 @@ cargo run -p talk-ffi --bin uniffi-bindgen -- generate \
 cargo run -p talk-ffi --bin uniffi-bindgen -- generate \
   --library target/debug/libtalk_ffi.so --language swift --out-dir bindings/swift
 ```
+
+### Desktop (Electron)
+
+```sh
+cd desktop
+npm install
+npm run core                 # Rust-Kern → native/talk_node.node
+npm run dev                  # App mit Hot-Reload
+# Entwicklung ohne Login, mit Test-Account aus ../.env:
+TALK_DEV_ENV=../.env TALK_DEV_PREFIX=BOT_A npm run dev
+npm run dist:linux           # AppImage + .deb
+```
+
+Unter Ubuntu ≥ 24.04 verweigert Electron im Dev-Modus ggf. den Start
+(SUID-Sandbox/AppArmor): dann `npm run dev -- -- --no-sandbox`.
 
 ## Server-Eigenheiten, die man kennen sollte
 
