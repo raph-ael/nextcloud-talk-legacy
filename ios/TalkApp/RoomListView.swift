@@ -1,18 +1,12 @@
 import SwiftUI
 
-/// Conversation list (first iteration: straight from the server; DB-first cache comes with the sync engine).
+/// Conversation list, fed by `roomsChanged` events from the core.
 struct RoomListView: View {
-    let session: TalkSession
-    let accountName: String
-    let onLogout: () -> Void
-
-    @State private var rooms: [RoomSummary] = []
-    @State private var loaded = false
-    @State private var error: String?
+    let store: AccountStore
 
     var body: some View {
         NavigationStack {
-            List(rooms, id: \.token) { room in
+            List(store.rooms.filter { !$0.isArchived }, id: \.token) { room in
                 RoomRow(room: room)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             }
@@ -21,54 +15,41 @@ struct RoomListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Text(accountName)
-                        Button("Abmelden", role: .destructive, action: onLogout)
+                        Text(store.account?.loginName ?? "")
+                        Button("Abmelden", role: .destructive) { store.logout() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
             }
-            .refreshable { await load() }
-            .task { await load() }
+            .refreshable { await store.refresh() }
             .overlay {
-                if !loaded {
+                if store.rooms.isEmpty {
                     ProgressView()
-                } else if rooms.isEmpty, error == nil {
-                    ContentUnavailableView("Noch keine Chats", systemImage: "bubble.left.and.bubble.right")
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                if let error {
-                    Text(error)
+            .safeAreaInset(edge: .top) {
+                if !store.online {
+                    Text("Keine Verbindung – wird erneut versucht …")
                         .font(.footnote)
                         .padding(10)
                         .frame(maxWidth: .infinity)
-                        .background(.red.opacity(0.15))
+                        .background(.yellow.opacity(0.2))
                 }
             }
         }
-    }
-
-    private func load() async {
-        do {
-            rooms = try await session.rooms()
-            error = nil
-        } catch {
-            self.error = "Aktualisieren fehlgeschlagen"
-        }
-        loaded = true
     }
 }
 
 struct RoomRow: View {
-    let room: RoomSummary
+    let room: RoomView
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(name: room.displayName)
+            AvatarView(name: room.name)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(room.displayName)
+                    Text(room.name)
                         .font(.body.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -83,7 +64,7 @@ struct RoomRow: View {
                         .lineLimit(2)
                     Spacer(minLength: 8)
                     if room.unreadMessages > 0 {
-                        Text(room.unreadMessages > 99 ? "99+" : "\(room.unreadMessages)")
+                        Text(room.unreadMention ? "@" : room.unreadMessages > 99 ? "99+" : "\(room.unreadMessages)")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
@@ -97,10 +78,12 @@ struct RoomRow: View {
     }
 
     private var preview: String {
-        guard let text = room.lastMessagePreview else { return "" }
-        // 1:1 chats: no author prefix, like Signal.
-        if room.roomType == 1 || (room.lastMessageAuthor ?? "").isEmpty { return text }
-        return "\(room.lastMessageAuthor!): \(text)"
+        guard let last = room.lastMessage else { return "" }
+        if last.text.isEmpty { return "Nachricht gelöscht" }
+        // 1:1 chats and notes: no author prefix, like Signal.
+        if last.isSystem || room.roomType == 1 || room.roomType == 6 { return last.text }
+        let author = last.isOwn ? "Du" : String(last.author.split(separator: " ").first ?? "")
+        return "\(author): \(last.text)"
     }
 }
 

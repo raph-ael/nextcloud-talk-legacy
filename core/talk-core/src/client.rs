@@ -332,7 +332,10 @@ pub fn new_reference_id() -> String {
 }
 
 pub(crate) fn base_http_builder(platform: Platform) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder();
+    #[cfg(target_os = "android")]
+    let builder = builder.tls_certs_only(android_roots::system_roots());
+    builder
         .user_agent(platform.user_agent())
         // Short connect timeout: fail fast on broken IPv6 routes instead of hanging.
         .connect_timeout(Duration::from_secs(5))
@@ -368,4 +371,40 @@ fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
     header_str(headers, name)?.parse().ok()
+}
+
+/// Android: trust the system CA store without the JNI-based platform verifier.
+/// (User-installed CAs are not readable by apps; they would need the platform verifier.)
+#[cfg(target_os = "android")]
+mod android_roots {
+    use std::sync::OnceLock;
+
+    use reqwest::Certificate;
+
+    const DIRS: &[&str] = &[
+        "/apex/com.android.conscrypt/cacerts", // Android 14+ (updatable via Play)
+        "/system/etc/security/cacerts",
+    ];
+
+    pub fn system_roots() -> Vec<Certificate> {
+        static ROOTS: OnceLock<Vec<Certificate>> = OnceLock::new();
+        ROOTS
+            .get_or_init(|| {
+                for dir in DIRS {
+                    let Ok(entries) = std::fs::read_dir(dir) else { continue };
+                    let certs: Vec<Certificate> = entries
+                        .flatten()
+                        .filter_map(|e| std::fs::read(e.path()).ok())
+                        .filter_map(|pem| Certificate::from_pem(&pem).ok())
+                        .collect();
+                    if !certs.is_empty() {
+                        tracing::debug!(dir, count = certs.len(), "loaded system CA certificates");
+                        return certs;
+                    }
+                }
+                tracing::error!("no system CA certificates found");
+                Vec::new()
+            })
+            .clone()
+    }
 }

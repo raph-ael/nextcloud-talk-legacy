@@ -2,7 +2,8 @@
 //!
 //! Keep this layer thin: map core types to FFI records and forward calls.
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use talk_core as core;
 
@@ -66,10 +67,10 @@ impl LoginFlow {
 pub enum CoreError {
     #[error("unauthorized")]
     Unauthorized,
-    #[error("network: {message}")]
-    Network { message: String },
-    #[error("server: {message}")]
-    Server { message: String },
+    #[error("network: {detail}")]
+    Network { detail: String },
+    #[error("server: {detail}")]
+    Server { detail: String },
     #[error("cancelled")]
     Cancelled,
 }
@@ -79,10 +80,10 @@ impl From<core::Error> for CoreError {
         match e {
             core::Error::Unauthorized => Self::Unauthorized,
             core::Error::Network(e) => Self::Network {
-                message: e.to_string(),
+                detail: e.to_string(),
             },
             other => Self::Server {
-                message: other.to_string(),
+                detail: other.to_string(),
             },
         }
     }
@@ -105,53 +106,218 @@ impl From<ClientPlatform> for core::Platform {
     }
 }
 
+// --- UI models (mirrors of talk_core::engine views) --------------------------------
+
 #[derive(uniffi::Record)]
-pub struct RoomSummary {
+pub struct MessagePreview {
+    pub author: String,
+    pub text: String,
+    pub is_own: bool,
+    pub is_system: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct RoomView {
     pub token: String,
-    pub display_name: String,
+    pub name: String,
+    pub description: String,
+    /// 1 one-to-one, 2 group, 3 public, 4 changelog, 5 former 1:1, 6 note to self.
     pub room_type: u8,
     pub unread_messages: i64,
     pub unread_mention: bool,
     pub last_activity: i64,
-    pub last_message_author: Option<String>,
-    pub last_message_preview: Option<String>,
+    pub last_read_message: i64,
+    pub last_common_read_message: i64,
+    pub last_message: Option<MessagePreview>,
+    pub is_favorite: bool,
+    pub is_archived: bool,
+    pub read_only: bool,
     pub has_call: bool,
+    /// 0 default, 1 always, 2 mentions only, 3 never.
+    pub notification_level: u8,
+    pub avatar_version: String,
 }
 
-impl From<&core::Room> for RoomSummary {
-    fn from(r: &core::Room) -> Self {
+impl From<core::RoomView> for RoomView {
+    fn from(r: core::RoomView) -> Self {
         Self {
-            token: r.token.clone(),
-            display_name: r.display_name.clone(),
-            room_type: r.room_type.into(),
+            token: r.token,
+            name: r.name,
+            description: r.description,
+            room_type: r.room_type,
             unread_messages: r.unread_messages,
             unread_mention: r.unread_mention,
             last_activity: r.last_activity,
-            last_message_author: r
-                .last_message
-                .as_ref()
-                .map(|m| m.actor_display_name.clone()),
-            last_message_preview: r.last_message.as_ref().map(|m| m.rendered_text()),
+            last_read_message: r.last_read_message,
+            last_common_read_message: r.last_common_read_message,
+            last_message: r.last_message.map(|m| MessagePreview {
+                author: m.author,
+                text: m.text,
+                is_own: m.is_own,
+                is_system: m.is_system,
+            }),
+            is_favorite: r.is_favorite,
+            is_archived: r.is_archived,
+            read_only: r.read_only,
             has_call: r.has_call,
+            notification_level: r.notification_level,
+            avatar_version: r.avatar_version,
         }
     }
 }
 
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    Text,
+    System,
+    Deleted,
+}
+
+#[derive(uniffi::Record)]
+pub struct ReplyPreview {
+    pub id: i64,
+    pub author: String,
+    pub text: String,
+    pub is_own: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct MessageView {
+    pub id: i64,
+    pub token: String,
+    pub actor_type: String,
+    pub actor_id: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub text: String,
+    pub kind: MessageKind,
+    pub system_message: String,
+    pub reference_id: String,
+    pub is_own: bool,
+    pub edited: bool,
+    pub markdown: bool,
+    pub reply_to: Option<ReplyPreview>,
+    pub reactions: HashMap<String, i64>,
+    pub reactions_self: Vec<String>,
+}
+
+impl From<core::MessageView> for MessageView {
+    fn from(m: core::MessageView) -> Self {
+        Self {
+            id: m.id,
+            token: m.token,
+            actor_type: m.actor_type,
+            actor_id: m.actor_id,
+            author: m.author,
+            timestamp: m.timestamp,
+            text: m.text,
+            kind: match m.kind {
+                "system" => MessageKind::System,
+                "deleted" => MessageKind::Deleted,
+                _ => MessageKind::Text,
+            },
+            system_message: m.system_message,
+            reference_id: m.reference_id,
+            is_own: m.is_own,
+            edited: m.edited,
+            markdown: m.markdown,
+            reply_to: m.reply_to.map(|r| ReplyPreview {
+                id: r.id,
+                author: r.author,
+                text: r.text,
+                is_own: r.is_own,
+            }),
+            reactions: m.reactions.into_iter().collect(),
+            reactions_self: m.reactions_self,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct ChatPage {
+    pub messages: Vec<MessageView>,
+    pub has_more: bool,
+    pub oldest_id: Option<i64>,
+    pub last_common_read: Option<i64>,
+}
+
+impl From<core::ChatPage> for ChatPage {
+    fn from(p: core::ChatPage) -> Self {
+        Self {
+            messages: p.messages.into_iter().map(Into::into).collect(),
+            has_more: p.has_more,
+            oldest_id: p.oldest_id,
+            last_common_read: p.last_common_read,
+        }
+    }
+}
+
+fn views(v: Vec<core::MessageView>) -> Vec<MessageView> {
+    v.into_iter().map(Into::into).collect()
+}
+
 #[derive(uniffi::Enum)]
 pub enum CoreEvent {
-    RoomsUpdated { count: u32 },
+    RoomsChanged { rooms: Vec<RoomView> },
+    MessagesAdded { token: String, messages: Vec<MessageView> },
+    MessagesUpdated { token: String, messages: Vec<MessageView> },
+    ReadStatus { token: String, last_common_read: i64 },
+    Connection { online: bool },
+    AuthFailed,
+}
+
+impl From<core::Event> for CoreEvent {
+    fn from(e: core::Event) -> Self {
+        match e {
+            core::Event::RoomsChanged { rooms } => Self::RoomsChanged {
+                rooms: rooms.into_iter().map(Into::into).collect(),
+            },
+            core::Event::MessagesAdded { token, messages } => Self::MessagesAdded {
+                token,
+                messages: views(messages),
+            },
+            core::Event::MessagesUpdated { token, messages } => Self::MessagesUpdated {
+                token,
+                messages: views(messages),
+            },
+            core::Event::ReadStatus {
+                token,
+                last_common_read,
+            } => Self::ReadStatus {
+                token,
+                last_common_read,
+            },
+            core::Event::Connection { online } => Self::Connection { online },
+            core::Event::AuthFailed => Self::AuthFailed,
+        }
+    }
 }
 
 /// Implemented on the platform side (Kotlin/Swift) to receive core events.
+/// Called from a background thread: hop to the main thread before touching UI.
 #[uniffi::export(with_foreign)]
 pub trait CoreListener: Send + Sync {
     fn on_event(&self, event: CoreEvent);
 }
 
+struct ListenerSink(Arc<dyn CoreListener>);
+
+impl core::EventSink for ListenerSink {
+    fn emit(&self, event: core::Event) {
+        self.0.on_event(event.into());
+    }
+}
+
+/// Random id for optimistic messages; the server echo carries the same id.
+#[uniffi::export]
+pub fn new_reference_id() -> String {
+    core::new_reference_id()
+}
+
+/// One signed-in account: sync engine plus actions.
 #[derive(uniffi::Object)]
 pub struct TalkSession {
-    client: core::TalkClient,
-    listener: Mutex<Option<Arc<dyn CoreListener>>>,
+    engine: Arc<core::Engine>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -162,42 +328,78 @@ impl TalkSession {
         user: String,
         app_password: String,
         platform: ClientPlatform,
+        listener: Arc<dyn CoreListener>,
     ) -> Result<Arc<Self>, CoreError> {
         let account = core::Account {
             server,
             user,
             app_password,
         };
-        Ok(Arc::new(Self {
-            client: core::TalkClient::new(account, platform.into())?,
-            listener: Mutex::new(None),
-        }))
+        let client = core::TalkClient::new(account, platform.into())?;
+        let engine = core::Engine::new(client, Arc::new(ListenerSink(listener)));
+        Ok(Arc::new(Self { engine }))
     }
 
-    pub fn set_listener(&self, listener: Arc<dyn CoreListener>) {
-        *self.listener.lock().unwrap() = Some(listener);
+    /// Resolves the user, loads conversations and starts background sync.
+    pub async fn start(&self) -> Result<(), CoreError> {
+        Ok(self.engine.start().await?)
     }
 
-    pub async fn rooms(&self) -> Result<Vec<RoomSummary>, CoreError> {
-        let mut batch = self.client.rooms(None, false).await?;
-        batch
-            .rooms
-            .sort_by_key(|r| std::cmp::Reverse(r.last_activity));
-        let rooms: Vec<RoomSummary> = batch.rooms.iter().map(Into::into).collect();
-        if let Some(l) = self.listener.lock().unwrap().clone() {
-            l.on_event(CoreEvent::RoomsUpdated {
-                count: rooms.len() as u32,
-            });
-        }
-        Ok(rooms)
+    pub fn shutdown(&self) {
+        self.engine.shutdown();
     }
 
-    /// Returns the server-assigned message id.
-    pub async fn send_message(&self, token: String, text: String) -> Result<i64, CoreError> {
-        let msg = self
-            .client
-            .send_message(&token, &text, &core::new_reference_id(), None)
-            .await?;
-        Ok(msg.id)
+    pub fn user_id(&self) -> String {
+        self.engine.user_id()
+    }
+
+    /// Current conversation list (sorted).
+    pub fn rooms(&self) -> Vec<RoomView> {
+        self.engine.rooms().into_iter().map(Into::into).collect()
+    }
+
+    pub async fn refresh_rooms(&self) -> Result<(), CoreError> {
+        Ok(self.engine.refresh_rooms(true).await?)
+    }
+
+    /// Newest page of a chat; live updates follow as `MessagesAdded` events.
+    pub async fn open_chat(&self, token: String) -> Result<ChatPage, CoreError> {
+        Ok(self.engine.open_chat(&token).await?.into())
+    }
+
+    pub fn close_chat(&self, token: String) {
+        self.engine.close_chat(&token);
+    }
+
+    pub async fn load_older(&self, token: String, before_id: i64) -> Result<ChatPage, CoreError> {
+        Ok(self.engine.load_older(&token, before_id).await?.into())
+    }
+
+    pub async fn send(
+        &self,
+        token: String,
+        text: String,
+        reference_id: String,
+        reply_to: Option<i64>,
+    ) -> Result<MessageView, CoreError> {
+        Ok(self
+            .engine
+            .send(&token, &text, &reference_id, reply_to)
+            .await?
+            .into())
+    }
+
+    pub async fn mark_read(&self, token: String, message_id: i64) -> Result<(), CoreError> {
+        Ok(self.engine.mark_read(&token, message_id).await?)
+    }
+
+    /// Revokes the app password on the server and stops sync.
+    pub async fn logout(&self) -> Result<(), CoreError> {
+        Ok(self.engine.logout().await?)
+    }
+
+    /// Conversation avatar image (PNG/SVG/JPEG bytes).
+    pub async fn avatar(&self, token: String, dark: bool) -> Result<Vec<u8>, CoreError> {
+        Ok(self.engine.avatar(&token, dark).await?.0)
     }
 }

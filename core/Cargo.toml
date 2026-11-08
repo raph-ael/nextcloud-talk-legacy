@@ -23,3 +23,10 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 opt-level = 3
+
+# Smaller dev builds: full debug info only for our own crates.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

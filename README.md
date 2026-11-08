@@ -78,6 +78,16 @@ npm run dist:linux           # AppImage + .deb
 Unter Ubuntu ≥ 24.04 verweigert Electron im Dev-Modus ggf. den Start
 (SUID-Sandbox/AppArmor): dann `npm run dev -- -- --no-sandbox`.
 
+### Android
+
+```sh
+cd android
+./gradlew :app:assembleDebug     # baut auch den Rust-Kern (cargo-ndk) und die Kotlin-Bindings
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Benötigt `cargo install cargo-ndk` und `rustup target add aarch64-linux-android x86_64-linux-android`.
+
 ## Server-Eigenheiten, die man kennen sollte
 
 - **User-Agent und HTTP 426:** Talk akzeptiert Clients mit offiziellem Talk-User-Agent
