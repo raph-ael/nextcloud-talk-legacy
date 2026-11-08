@@ -19,6 +19,11 @@ private val INLINE = Regex(
         "|(\\[[^\\]\\n]+\\]\\(https?://[^\\s)]+\\))|(https?://[^\\s<>\"']+[^\\s<>\"'.,;:!?)\\]])",
 )
 
+private val HEADING = Regex("^\\s{0,3}#{1,6}\\s+(.*)$")
+private val BULLET = Regex("^\\s*[-*+]\\s+(.*)$")
+private val QUOTE = Regex("^\\s*>\\s?(.*)$")
+private val RULE = Regex("^\\s{0,3}([-*_])(\\s*\\1){2,}\\s*$")
+
 /**
  * Talk's Markdown subset → AnnotatedString (headings, lists, quotes, code, emphasis, links).
  * Plain text when [markdown] is false (links are still clickable).
@@ -63,12 +68,12 @@ fun renderMessage(text: String, markdown: Boolean, linkColor: Color): AnnotatedS
         if (inCode) {
             withStyle(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp)) { append(raw) }
         } else {
-            val heading = Regex("^\\s{0,3}#{1,6}\\s+(.*)$").find(raw)
-            val bullet = Regex("^\\s*[-*+]\\s+(.*)$").find(raw)
-            val quote = Regex("^\\s*>\\s?(.*)$").find(raw)
+            val heading = HEADING.find(raw)
+            val bullet = BULLET.find(raw)
+            val quote = QUOTE.find(raw)
             when {
                 heading != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)) { inline(heading.groupValues[1]) }
-                Regex("^\\s{0,3}([-*_])(\\s*\\1){2,}\\s*$").matches(raw) -> append("———")
+                RULE.matches(raw) -> append("———")
                 bullet != null -> { append("•  "); inline(bullet.groupValues[1]) }
                 quote != null -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append("▎ "); inline(quote.groupValues[1]) }
                 else -> inline(raw)

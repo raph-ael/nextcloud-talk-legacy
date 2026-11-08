@@ -7,6 +7,7 @@ lifecycle = "2.9.4"
 core-ktx = "1.16.0"
 jna = "5.17.0"
 icons = "1.7.8"
+profileinstaller = "1.4.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
@@ -21,6 +22,7 @@ compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-icons = { module = "androidx.compose.material:material-icons-core", version.ref = "icons" }
+profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 [plugins]

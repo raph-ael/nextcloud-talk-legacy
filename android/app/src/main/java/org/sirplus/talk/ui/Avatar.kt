@@ -32,8 +32,9 @@ fun Avatar(
     sessions: SessionManager? = null,
 ) {
     val dark = isSystemInDarkTheme()
-    val image by produceState<ImageBitmap?>(null, token, version, dark) {
-        if (token != null && sessions != null) value = sessions.avatar(token, version, dark)
+    val cached = if (token != null) sessions?.cachedAvatar(token, version, dark) else null
+    val image by produceState(cached, token, version, dark) {
+        value = cached ?: if (token != null && sessions != null) sessions.avatar(token, version, dark) else null
     }
     val img = image
     if (img != null) {

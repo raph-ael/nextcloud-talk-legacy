@@ -119,7 +119,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
     }
     LaunchedEffect(listState, room.token) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
-            .collect { last -> if (last >= reversed.size - 8) sessions.loadOlder(room.token) }
+            .collect { last -> if (last >= reversed.size - 40) sessions.loadOlder(room.token) }
     }
     // Keep the newest message visible when sending / receiving while at the bottom.
     LaunchedEffect(messages.lastOrNull()?.key) {
@@ -153,7 +153,11 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 ) {
-                    itemsIndexed(reversed, key = { _, m -> m.key }) { i, m ->
+                    itemsIndexed(
+                        reversed,
+                        key = { _, m -> m.key },
+                        contentType = { _, m -> if (m.msg.kind == MessageKind.SYSTEM) 0 else if (m.msg.isOwn) 1 else 2 },
+                    ) { i, m ->
                         // reversed: i+1 is older (previous), i-1 is newer (next)
                         MessageRow(
                             m,
@@ -267,7 +271,7 @@ private fun MessageRow(
         val replyable = msg.kind == MessageKind.TEXT && m.status == null
         val threshold = 160f
 
-        Row(
+        Box(
             Modifier
                 .fillMaxWidth()
                 .padding(top = if (first) 8.dp else 2.dp)
@@ -290,109 +294,117 @@ private fun MessageRow(
                         }
                     }
                 },
-            horizontalArrangement = if (own) Arrangement.End else Arrangement.Start,
-            verticalAlignment = Alignment.Bottom,
         ) {
-            if (offset.value > 8f) {
+            if (replyable) {
+                // Always placed; only the draw phase reads the swipe offset (no recomposition per frame).
                 Icon(
                     ReplyIcon,
                     null,
                     tint = colors.muted,
-                    modifier = Modifier.align(Alignment.CenterVertically).graphicsLayer { alpha = (offset.value / threshold).coerceAtMost(1f) },
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 4.dp)
+                        .graphicsLayer { alpha = ((offset.value - 8f) / threshold).coerceIn(0f, 1f) },
                 )
             }
-            if (isGroup && !own) {
-                Box(Modifier.width(36.dp)) { if (last) Avatar(msg.author, 28.dp) }
-            }
-            Box(Modifier.offset { IntOffset(offset.value.roundToInt(), 0) }) {
-                Column(
-                    Modifier
-                        .widthIn(max = 300.dp)
-                        .clip(shape)
-                        .background(
-                            when {
-                                jumbo -> androidx.compose.ui.graphics.Color.Transparent
-                                own -> colors.bubbleOwn
-                                else -> colors.bubbleOther
-                            },
-                        )
-                        .combinedClickable(
-                            onClick = { if (m.status == SendStatus.FAILED) onRetry(msg) },
-                            onLongClick = {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                menu = true
-                            },
-                        )
-                        .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
-                        .padding(horizontal = if (jumbo) 0.dp else 12.dp, vertical = 7.dp),
-                ) {
-                    val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
-                    if (isGroup && !own && first) {
-                        Text(msg.author, color = colorFor(msg.author), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    msg.replyTo?.let { r ->
-                        Column(
-                            Modifier
-                                .padding(top = 2.dp, bottom = 6.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(textColor.copy(alpha = 0.1f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text(r.text.ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(
+                Modifier.fillMaxWidth().offset { IntOffset(offset.value.roundToInt(), 0) },
+                horizontalArrangement = if (own) Arrangement.End else Arrangement.Start,
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                if (isGroup && !own) {
+                    Box(Modifier.width(36.dp)) { if (last) Avatar(msg.author, 28.dp) }
+                }
+                Box {
+                    Column(
+                        Modifier
+                            .widthIn(max = 300.dp)
+                            .clip(shape)
+                            .background(
+                                when {
+                                    jumbo -> androidx.compose.ui.graphics.Color.Transparent
+                                    own -> colors.bubbleOwn
+                                    else -> colors.bubbleOther
+                                },
+                            )
+                            .combinedClickable(
+                                onClick = { if (m.status == SendStatus.FAILED) onRetry(msg) },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    menu = true
+                                },
+                            )
+                            .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
+                            .padding(horizontal = if (jumbo) 0.dp else 12.dp, vertical = 7.dp),
+                    ) {
+                        val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
+                        if (isGroup && !own && first) {
+                            Text(msg.author, color = colorFor(msg.author), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
-                    }
-                    when {
-                        msg.kind == MessageKind.DELETED ->
-                            Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
-                        jumbo -> Text(msg.text, fontSize = 44.sp)
-                        else -> Text(
-                            remember(msg.text, msg.markdown, textColor) { renderMessage(msg.text, msg.markdown, textColor) },
-                            color = textColor,
-                            style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
-                        )
-                    }
-                    if (msg.reactions.isNotEmpty()) {
-                        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            msg.reactions.forEach { (emoji, count) ->
+                        msg.replyTo?.let { r ->
+                            Column(
+                                Modifier
+                                    .padding(top = 2.dp, bottom = 6.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(textColor.copy(alpha = 0.1f))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            ) {
+                                Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text(r.text.ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        when {
+                            msg.kind == MessageKind.DELETED ->
+                                Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
+                            jumbo -> Text(msg.text, fontSize = 44.sp)
+                            else -> Text(
+                                remember(msg.text, msg.markdown, textColor) { renderMessage(msg.text, msg.markdown, textColor) },
+                                color = textColor,
+                                style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                            )
+                        }
+                        if (msg.reactions.isNotEmpty()) {
+                            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                msg.reactions.forEach { (emoji, count) ->
+                                    Text(
+                                        if (count > 1) "$emoji $count" else emoji,
+                                        fontSize = 13.sp,
+                                        color = textColor,
+                                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(textColor.copy(alpha = 0.1f)).padding(horizontal = 6.dp, vertical = 1.dp),
+                                    )
+                                }
+                            }
+                        }
+                        if (last || m.status != null) {
+                            Row(
+                                Modifier.align(Alignment.End).padding(top = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                val metaColor = if (jumbo) colors.muted else textColor.copy(alpha = 0.75f)
+                                if (msg.edited) Text("bearbeitet ·", fontSize = 11.sp, color = metaColor)
                                 Text(
-                                    if (count > 1) "$emoji $count" else emoji,
-                                    fontSize = 13.sp,
-                                    color = textColor,
-                                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(textColor.copy(alpha = 0.1f)).padding(horizontal = 6.dp, vertical = 1.dp),
+                                    when (m.status) {
+                                        SendStatus.SENDING -> "Wird gesendet …"
+                                        SendStatus.FAILED -> "Nicht gesendet · Tippen zum Wiederholen"
+                                        null -> messageTime(msg.timestamp)
+                                    },
+                                    fontSize = 11.sp,
+                                    color = if (m.status == SendStatus.FAILED) colors.danger else metaColor,
                                 )
+                                if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 11.sp, color = metaColor)
                             }
                         }
                     }
-                    if (last || m.status != null) {
-                        Row(
-                            Modifier.align(Alignment.End).padding(top = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            val metaColor = if (jumbo) colors.muted else textColor.copy(alpha = 0.75f)
-                            if (msg.edited) Text("bearbeitet ·", fontSize = 11.sp, color = metaColor)
-                            Text(
-                                when (m.status) {
-                                    SendStatus.SENDING -> "Wird gesendet …"
-                                    SendStatus.FAILED -> "Nicht gesendet · Tippen zum Wiederholen"
-                                    null -> messageTime(msg.timestamp)
-                                },
-                                fontSize = 11.sp,
-                                color = if (m.status == SendStatus.FAILED) colors.danger else metaColor,
-                            )
-                            if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 11.sp, color = metaColor)
+                    if (menu) DropdownMenu(expanded = true, onDismissRequest = { menu = false }) {
+                        if (replyable) {
+                            DropdownMenuItem(text = { Text("Antworten") }, onClick = { menu = false; onReply(msg) })
                         }
+                        DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
+                            menu = false
+                            clipboard.setText(AnnotatedString(msg.text))
+                        })
                     }
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    if (replyable) {
-                        DropdownMenuItem(text = { Text("Antworten") }, onClick = { menu = false; onReply(msg) })
-                    }
-                    DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
-                        menu = false
-                        clipboard.setText(AnnotatedString(msg.text))
-                    })
                 }
             }
         }

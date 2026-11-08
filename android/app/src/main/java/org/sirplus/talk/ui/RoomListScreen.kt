@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,6 +37,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,7 +49,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,6 +77,15 @@ fun RoomListScreen(sessions: SessionManager, state: UiState) {
         val q = query.trim().lowercase()
         state.rooms.filter { !it.isArchived && (q.isEmpty() || it.name.lowercase().contains(q)) }
     }
+    val (favorites, others) = remember(rooms) { rooms.partition { it.isFavorite } }
+    // Relative times ("5 Min.") need a clock.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -93,7 +107,7 @@ fun RoomListScreen(sessions: SessionManager, state: UiState) {
                             modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         )
                     } else {
-                        Text("Chats", fontWeight = FontWeight.Bold)
+                        Text("Chats", fontSize = 22.sp)
                     }
                 },
                 navigationIcon = {
@@ -101,6 +115,10 @@ fun RoomListScreen(sessions: SessionManager, state: UiState) {
                         IconButton(onClick = { searching = false; query = "" }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Suche schließen")
                         }
+                    } else {
+                        Box(
+                            Modifier.padding(start = 12.dp, end = 8.dp).clip(CircleShape).clickable { menu = true },
+                        ) { Avatar(state.user, 32.dp) }
                     }
                 },
                 actions = {
@@ -148,8 +166,15 @@ fun RoomListScreen(sessions: SessionManager, state: UiState) {
         ) {
             LazyColumn(Modifier.fillMaxSize()) {
                 if (!state.online) item { OfflineBanner() }
-                items(rooms, key = { it.token }) { room ->
-                    RoomRow(room, sessions) { sessions.openRoom(room.token) }
+                if (favorites.isNotEmpty()) {
+                    item(key = "h-fav", contentType = "header") { SectionHeader("Favoriten") }
+                    items(favorites, key = { it.token }, contentType = { "room" }) { room ->
+                        RoomRow(room, sessions, now) { sessions.openRoom(room.token) }
+                    }
+                    if (others.isNotEmpty()) item(key = "h-chats", contentType = "header") { SectionHeader("Chats") }
+                }
+                items(others, key = { it.token }, contentType = { "room" }) { room ->
+                    RoomRow(room, sessions, now) { sessions.openRoom(room.token) }
                 }
                 if (rooms.isEmpty()) {
                     item {
@@ -181,50 +206,73 @@ fun OfflineBanner() {
 }
 
 @Composable
-private fun RoomRow(room: RoomView, sessions: SessionManager, onClick: () -> Unit) {
+private fun SectionHeader(title: String) {
+    Text(
+        title,
+        style = ListType.section,
+        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 8.dp),
+    )
+}
+
+/** One conversation, laid out with Signal's metrics (48dp avatar, 2-line summary, 84dp min height). */
+@Composable
+private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onClick: () -> Unit) {
     val colors = LocalTalkColors.current
+    val onSurface = MaterialTheme.colorScheme.onSurface
     val unread = room.unreadMessages > 0
     val last = room.lastMessage
     val type = room.roomType.toInt()
-    val preview = when {
-        last == null -> ""
-        last.text.isEmpty() -> "Nachricht gelöscht"
-        last.isSystem || type == 1 || type == 6 -> last.text
-        else -> "${if (last.isOwn) "Du" else last.author.substringBefore(' ')}: ${last.text}"
+    val preview = remember(last, type) {
+        buildAnnotatedString {
+            when {
+                last == null -> {}
+                last.text.isEmpty() -> append("Nachricht gelöscht")
+                last.isSystem || type == 1 || type == 6 -> append(last.text)
+                else -> {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Medium, color = onSurface)) {
+                        append(if (last.isOwn) "Du" else last.author.substringBefore(' '))
+                        append(": ")
+                    }
+                    append(last.text)
+                }
+            }
+        }
     }
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 84.dp)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(room.name, 52.dp, room.token, room.avatarVersion, sessions)
-        Spacer(Modifier.width(14.dp))
+        Avatar(room.name, 48.dp, room.token, room.avatarVersion, sessions)
+        Spacer(Modifier.width(20.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     room.name,
-                    fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
-                    fontSize = 16.sp,
+                    style = ListType.title,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(12.dp))
                 Text(
-                    listTime(room.lastActivity),
-                    fontSize = 12.sp,
-                    color = if (unread) colors.accent else colors.muted,
-                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                    listTime(room.lastActivity, now),
+                    style = ListType.body,
+                    color = if (unread) onSurface else colors.muted,
+                    fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
                 )
             }
-            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     preview,
-                    fontSize = 14.sp,
-                    color = if (unread) MaterialTheme.colorScheme.onSurface else colors.muted,
+                    style = ListType.body,
+                    color = colors.muted,
                     fontStyle = if (last?.isSystem == true) FontStyle.Italic else FontStyle.Normal,
+                    minLines = 2,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -232,29 +280,25 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, onClick: () -> Uni
                 if (room.hasCall) {
                     Box(Modifier.padding(top = 6.dp).size(8.dp).clip(CircleShape).background(Color(0xFF2FB35A)))
                 }
-                if (unread) {
-                    Box(
-                        Modifier
-                            .padding(top = 2.dp)
-                            .widthIn(min = 22.dp)
-                            .clip(RoundedCornerShape(11.dp))
-                            .background(colors.accent)
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            when {
-                                room.unreadMention -> "@"
-                                room.unreadMessages > 99 -> "99+"
-                                else -> room.unreadMessages.toString()
-                            },
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
+                if (room.unreadMention) Badge("@", colors.accent)
+                if (unread) Badge(if (room.unreadMessages > 99) "99+" else room.unreadMessages.toString(), colors.accent)
             }
         }
+    }
+}
+
+@Composable
+private fun Badge(text: String, color: Color) {
+    Box(
+        Modifier
+            .padding(top = 2.dp)
+            .heightIn(min = 22.dp)
+            .widthIn(min = 22.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(color)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = Color.White, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
     }
 }

@@ -291,9 +291,13 @@ class SessionManager(private val context: Context) : CoreListener {
 
     fun refresh() = scope.launch { runCatching { session?.refreshRooms() } }
 
+    /** Already decoded avatar, for drawing the first frame without the initials flashing. */
+    fun cachedAvatar(token: String, version: String, dark: Boolean): ImageBitmap? =
+        avatars.get(avatarKey(token, version, dark))
+
     /** Server-rendered conversation avatar; `null` for SVG avatars (initials are drawn instead). */
     suspend fun avatar(token: String, version: String, dark: Boolean): ImageBitmap? {
-        val key = "$token|$version|$dark"
+        val key = avatarKey(token, version, dark)
         avatars.get(key)?.let { return it }
         val s = session ?: return null
         val bytes = try {
@@ -301,10 +305,26 @@ class SessionManager(private val context: Context) : CoreListener {
         } catch (e: CoreException) {
             return null
         }
-        val bitmap = withContext(Dispatchers.Default) {
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-        } ?: return null
+        val bitmap = withContext(Dispatchers.Default) { decodeAvatar(bytes) } ?: return null
         avatars.put(key, bitmap)
         return bitmap
+    }
+
+    private fun avatarKey(token: String, version: String, dark: Boolean) = "$token|$version|$dark"
+
+    /** Decodes downsampled to roughly the largest size shown (avoids huge texture uploads while scrolling). */
+    private fun decodeAvatar(bytes: ByteArray): ImageBitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0) return null
+        val target = (AVATAR_MAX_DP * context.resources.displayMetrics.density).toInt()
+        var sample = 1
+        while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= target) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+    }
+
+    private companion object {
+        const val AVATAR_MAX_DP = 56
     }
 }

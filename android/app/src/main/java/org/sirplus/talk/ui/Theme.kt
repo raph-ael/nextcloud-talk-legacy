@@ -9,6 +9,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 /** Design tokens shared with desktop (styles.css) and iOS. */
 @Immutable
@@ -44,6 +47,13 @@ private val DarkTalk = TalkColors(
     chip = Color(0xFF232325),
     danger = Color(0xFFFF6B63),
 )
+
+/** Conversation-list typography (Signal: BodyLarge/BodyMedium with tighter line spacing). */
+object ListType {
+    val title = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.Normal)
+    val body = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.25.sp)
+    val section = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
+}
 
 val LocalTalkColors = staticCompositionLocalOf { LightTalk }
 

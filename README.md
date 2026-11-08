@@ -82,9 +82,13 @@ Unter Ubuntu ≥ 24.04 verweigert Electron im Dev-Modus ggf. den Start
 
 ```sh
 cd android
-./gradlew :app:assembleDebug     # baut auch den Rust-Kern (cargo-ndk) und die Kotlin-Bindings
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:assembleRelease   # baut auch den Rust-Kern (cargo-ndk) und die Kotlin-Bindings
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
+
+Zum Ausprobieren und für Performance-Eindrücke immer den Release-Build nehmen (R8 + Baseline Profiles,
+vorerst mit Debug-Schlüssel signiert). Debug-Builds laufen interpretiert und ruckeln beim ersten Scrollen
+deutlich (gemessen: ~20 % verpasste Frames statt < 1 %).
 
 Benötigt `cargo install cargo-ndk` und `rustup target add aarch64-linux-android x86_64-linux-android`.
 

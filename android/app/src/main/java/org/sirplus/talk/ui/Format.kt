@@ -21,15 +21,19 @@ private val dayYearFmt = DateTimeFormatter.ofPattern("EEEE, d. MMMM yyyy", de)
 private fun date(unix: Long): LocalDate = Instant.ofEpochSecond(unix).atZone(zone).toLocalDate()
 private fun daysAgo(unix: Long): Long = ChronoUnit.DAYS.between(date(unix), LocalDate.now(zone))
 
-/** Conversation list: 14:03 · Gestern · Mo. · 03.11.26 */
-fun listTime(unix: Long): String {
+private val monthDayFmt = DateTimeFormatter.ofPattern("d. MMM", de)
+
+/** Conversation list, like Signal: Jetzt · 5 Min. · 3 Std. · Fr. · 12. Okt. · 12.10.25 */
+fun listTime(unix: Long, nowMillis: Long = System.currentTimeMillis()): String {
     if (unix <= 0) return ""
-    val d = daysAgo(unix)
+    val secs = nowMillis / 1000 - unix
     val dt = Instant.ofEpochSecond(unix).atZone(zone)
     return when {
-        d == 0L -> timeFmt.format(dt)
-        d == 1L -> "Gestern"
-        d < 7 -> weekdayFmt.format(dt)
+        secs < 60 -> "Jetzt"
+        secs < 3600 -> "${secs / 60} Min."
+        secs < 24 * 3600 -> "${secs / 3600} Std."
+        daysAgo(unix) < 7 -> weekdayFmt.format(dt)
+        dt.year == LocalDate.now(zone).year -> monthDayFmt.format(dt)
         else -> shortDateFmt.format(dt)
     }
 }
