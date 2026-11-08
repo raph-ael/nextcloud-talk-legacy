@@ -1,9 +1,6 @@
 package org.sirplus.talk.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -28,18 +25,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.materialIcon
 import androidx.compose.material.icons.materialPath
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,7 +51,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -108,6 +100,12 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
     val isGroup = room.roomType.toInt() !in setOf(1, 6)
     val lastCommonRead = maxOf(chat?.lastCommonRead ?: 0, room.lastCommonReadMessage)
     var replyTo by remember(room.token) { mutableStateOf<MessageView?>(null) }
+    var overlay by remember(room.token) { mutableStateOf<Overlay?>(null) }
+    val openCamera = rememberCameraOpener { overlay = Overlay.Camera }
+    val pickFromCamera = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) overlay = Overlay.Send(uri, fromCamera = false) }
+    DarkSystemBars(overlay != null)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -126,6 +124,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
         if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
     }
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -160,6 +159,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                     ) { i, m ->
                         // reversed: i+1 is older (previous), i-1 is newer (next)
                         MessageRow(
+                            sessions,
                             m,
                             prev = reversed.getOrNull(i + 1),
                             next = reversed.getOrNull(i - 1),
@@ -167,6 +167,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                             read = m.msg.isOwn && m.status == null && m.msg.id <= lastCommonRead,
                             onReply = { replyTo = it },
                             onRetry = { sessions.retry(room.token, it) },
+                            onOpenImage = { id, bmp -> overlay = Overlay.Viewer(id, bmp) },
                         )
                     }
                     if (chat?.loadingOlder == true || chat?.loading == true) {
@@ -201,7 +202,72 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                         replyTo = null
                         scope.launch { listState.animateScrollToItem(0) }
                     },
+                    onOpenCamera = openCamera,
+                    onImagePicked = { uri -> overlay = Overlay.Send(uri, fromCamera = false) },
                 )
+            }
+        }
+    }
+    when (val o = overlay) {
+        null -> Unit
+        Overlay.Camera -> CameraScreen(
+            onClose = { overlay = null },
+            onCaptured = { uri -> overlay = Overlay.Send(uri, fromCamera = true) },
+            onGallery = {
+                pickFromCamera.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
+                    ),
+                )
+            },
+        )
+        is Overlay.Send -> MediaSendScreen(
+            uri = o.uri,
+            roomName = room.name,
+            onClose = {
+                if (o.fromCamera) {
+                    o.uri.path?.let { java.io.File(it).delete() }
+                    overlay = Overlay.Camera
+                } else {
+                    overlay = null
+                }
+            },
+            onSend = { caption ->
+                sessions.sendImageUri(room.token, o.uri, caption, replyTo, deleteSource = o.fromCamera)
+                replyTo = null
+                overlay = null
+                scope.launch { listState.animateScrollToItem(0) }
+            },
+        )
+        is Overlay.Viewer -> ImageViewer(sessions, o.fileId, o.initial, onClose = { overlay = null })
+    }
+    }
+}
+
+/** Full-screen layers above the chat. */
+private sealed interface Overlay {
+    data object Camera : Overlay
+    data class Send(val uri: android.net.Uri, val fromCamera: Boolean) : Overlay
+    data class Viewer(val fileId: String, val initial: androidx.compose.ui.graphics.ImageBitmap?) : Overlay
+}
+
+/** Light status/navigation bar icons while a black full-screen layer is shown. */
+@Composable
+private fun DarkSystemBars(active: Boolean) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(active) {
+        val window = (view.context as? android.app.Activity)?.window
+        val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, view) }
+        val light = controller?.isAppearanceLightStatusBars
+        val lightNav = controller?.isAppearanceLightNavigationBars
+        if (active && controller != null) {
+            controller.isAppearanceLightStatusBars = false
+            controller.isAppearanceLightNavigationBars = false
+        }
+        onDispose {
+            if (active && controller != null) {
+                controller.isAppearanceLightStatusBars = light ?: true
+                controller.isAppearanceLightNavigationBars = lightNav ?: true
             }
         }
     }
@@ -217,6 +283,7 @@ private fun continues(a: UiMessage?, b: UiMessage?): Boolean {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageRow(
+    sessions: SessionManager,
     m: UiMessage,
     prev: UiMessage?,
     next: UiMessage?,
@@ -224,6 +291,7 @@ private fun MessageRow(
     read: Boolean,
     onReply: (MessageView) -> Unit,
     onRetry: (MessageView) -> Unit,
+    onOpenImage: (fileId: String, preview: androidx.compose.ui.graphics.ImageBitmap?) -> Unit,
 ) {
     val colors = LocalTalkColors.current
     val msg = m.msg
@@ -260,7 +328,11 @@ private fun MessageRow(
         } else {
             RoundedCornerShape(if (first) big else small, big, big, if (last) big else small)
         }
-        val jumbo = msg.kind == MessageKind.TEXT && msg.replyTo == null && isJumboEmoji(msg.text)
+        val attachment = msg.attachment.takeIf { msg.kind != MessageKind.DELETED }
+        val image = attachment?.isImage() == true
+        val jumbo = msg.kind == MessageKind.TEXT && attachment == null && msg.replyTo == null && isJumboEmoji(msg.text)
+        // Photos sit edge to edge in the bubble (3dp frame); everything else keeps the text inset.
+        val inset = if (image) Modifier.padding(horizontal = 9.dp) else Modifier
 
         // Swipe right to reply (Signal gesture).
         val offset = remember { Animatable(0f) }
@@ -318,7 +390,7 @@ private fun MessageRow(
                 Box {
                     Column(
                         Modifier
-                            .widthIn(max = 300.dp)
+                            .then(if (image) Modifier.width(ChatImageWidth + 6.dp) else Modifier.widthIn(max = 300.dp))
                             .clip(shape)
                             .background(
                                 when {
@@ -335,25 +407,75 @@ private fun MessageRow(
                                 },
                             )
                             .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
-                            .padding(horizontal = if (jumbo) 0.dp else 12.dp, vertical = 7.dp),
+                            .padding(
+                                horizontal = if (jumbo) 0.dp else if (image) 3.dp else 12.dp,
+                                vertical = if (image) 3.dp else 7.dp,
+                            ),
                     ) {
                         val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
                         if (isGroup && !own && first) {
-                            Text(msg.author, color = colorFor(msg.author), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                msg.author,
+                                color = colorFor(msg.author),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = inset.padding(top = if (image) 4.dp else 0.dp, bottom = if (image) 4.dp else 0.dp),
+                            )
                         }
                         msg.replyTo?.let { r ->
                             Column(
-                                Modifier
+                                inset
                                     .padding(top = 2.dp, bottom = 6.dp)
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(textColor.copy(alpha = 0.1f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text(r.text.ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(withAttachment(r.text, r.attachment).ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
                         }
+                        val metaOnImage = image && msg.text.isEmpty() && msg.reactions.isEmpty()
+                        val showMeta = last || m.status != null
+                        if (image) {
+                            // Rounded like the bubble, but squarer where text continues above/below.
+                            val above = (isGroup && !own && first) || msg.replyTo != null
+                            val below = !metaOnImage
+                            val inner = androidx.compose.foundation.shape.CornerSize(4.dp)
+                            val imgShape = RoundedCornerShape(
+                                if (above) inner else shape.topStart,
+                                if (above) inner else shape.topEnd,
+                                if (below) inner else shape.bottomEnd,
+                                if (below) inner else shape.bottomStart,
+                            )
+                            ChatImage(
+                                sessions,
+                                m,
+                                shape = imgShape,
+                                onOpen = { bmp -> onOpenImage(attachment!!.id, bmp) },
+                                onLongPress = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    menu = true
+                                },
+                            ) {
+                                if (metaOnImage && showMeta) {
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(6.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.4f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    ) {
+                                        MessageMeta(m, own, read, androidx.compose.ui.graphics.Color.White, colors.danger)
+                                    }
+                                }
+                            }
+                        } else if (attachment != null) {
+                            FileRow(attachment, textColor, Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp))
+                        }
                         when {
+                            image && msg.text.isEmpty() -> Unit
+                            attachment != null && msg.text.isEmpty() -> Unit
                             msg.kind == MessageKind.DELETED ->
                                 Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
                             jumbo -> Text(msg.text, fontSize = 44.sp)
@@ -361,10 +483,11 @@ private fun MessageRow(
                                 remember(msg.text, msg.markdown, textColor) { renderMessage(msg.text, msg.markdown, textColor) },
                                 color = textColor,
                                 style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                                modifier = inset.padding(top = if (image) 6.dp else 0.dp),
                             )
                         }
                         if (msg.reactions.isNotEmpty()) {
-                            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(inset.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 msg.reactions.forEach { (emoji, count) ->
                                     Text(
                                         if (count > 1) "$emoji $count" else emoji,
@@ -375,24 +498,20 @@ private fun MessageRow(
                                 }
                             }
                         }
-                        if (last || m.status != null) {
-                            Row(
-                                Modifier.align(Alignment.End).padding(top = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        if (showMeta && !metaOnImage) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.End)
+                                    .then(inset)
+                                    .padding(top = 2.dp, bottom = if (image) 4.dp else 0.dp),
                             ) {
-                                val metaColor = if (jumbo) colors.muted else textColor.copy(alpha = 0.75f)
-                                if (msg.edited) Text("bearbeitet ·", fontSize = 11.sp, color = metaColor)
-                                Text(
-                                    when (m.status) {
-                                        SendStatus.SENDING -> "Wird gesendet …"
-                                        SendStatus.FAILED -> "Nicht gesendet · Tippen zum Wiederholen"
-                                        null -> messageTime(msg.timestamp)
-                                    },
-                                    fontSize = 11.sp,
-                                    color = if (m.status == SendStatus.FAILED) colors.danger else metaColor,
+                                MessageMeta(
+                                    m,
+                                    own,
+                                    read,
+                                    if (jumbo) colors.muted else textColor.copy(alpha = 0.75f),
+                                    colors.danger,
                                 )
-                                if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 11.sp, color = metaColor)
                             }
                         }
                     }
@@ -400,10 +519,12 @@ private fun MessageRow(
                         if (replyable) {
                             DropdownMenuItem(text = { Text("Antworten") }, onClick = { menu = false; onReply(msg) })
                         }
-                        DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
-                            menu = false
-                            clipboard.setText(AnnotatedString(msg.text))
-                        })
+                        if (msg.text.isNotEmpty()) {
+                            DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
+                                menu = false
+                                clipboard.setText(AnnotatedString(msg.text))
+                            })
+                        }
                     }
                 }
             }
@@ -411,65 +532,20 @@ private fun MessageRow(
     }
 }
 
+/** Time, "edited", send status and read ticks below (or on) a bubble. */
 @Composable
-private fun Composer(
-    token: String,
-    replyTo: MessageView?,
-    onCancelReply: () -> Unit,
-    onSend: (String) -> Unit,
-) {
-    val colors = LocalTalkColors.current
-    var text by rememberSaveable(token) { mutableStateOf("") }
-    Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-        replyTo?.let { r ->
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.chip)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    Text(if (r.isOwn) "Du" else r.author, color = colors.accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    Text(r.text, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
-                }
-                IconButton(onClick = onCancelReply) { Icon(Icons.Default.Close, "Antwort abbrechen") }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
-            BasicTextField(
-                value = text,
-                onValueChange = { text = it },
-                textStyle = TextStyle(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(colors.accent),
-                maxLines = 6,
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 44.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(colors.chip),
-                decorationBox = { inner ->
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                        if (text.isEmpty()) Text("Nachricht", color = colors.muted, fontSize = 16.sp)
-                        inner()
-                    }
-                },
-            )
-            AnimatedVisibility(visible = text.isNotBlank(), enter = scaleIn(), exit = scaleOut()) {
-                IconButton(
-                    onClick = {
-                        val value = text.trim()
-                        if (value.isNotEmpty()) {
-                            text = ""
-                            onSend(value)
-                        }
-                    },
-                    modifier = Modifier.padding(start = 8.dp).size(44.dp).clip(CircleShape).background(colors.accent),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, "Senden", tint = androidx.compose.ui.graphics.Color.White)
-                }
-            }
-        }
+private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androidx.compose.ui.graphics.Color, danger: androidx.compose.ui.graphics.Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (m.msg.edited) Text("bearbeitet ·", fontSize = 11.sp, color = color)
+        Text(
+            when (m.status) {
+                SendStatus.SENDING -> "Wird gesendet …"
+                SendStatus.FAILED -> "Nicht gesendet · Tippen zum Wiederholen"
+                null -> messageTime(m.msg.timestamp)
+            },
+            fontSize = 11.sp,
+            color = if (m.status == SendStatus.FAILED) danger else color,
+        )
+        if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 11.sp, color = color)
     }
 }

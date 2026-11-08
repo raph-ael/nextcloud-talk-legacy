@@ -20,6 +20,6 @@ pub use client::{
 pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, RoomView};
 pub use error::{Error, Result};
 pub use login::{LoginFlow, normalize_server};
-pub use models::{ChatMessage, IceServer, LoginCredentials, Room, RoomType, SignalingSettings};
+pub use models::{ChatMessage, FileAttachment, IceServer, LoginCredentials, Room, RoomType, SignalingSettings};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

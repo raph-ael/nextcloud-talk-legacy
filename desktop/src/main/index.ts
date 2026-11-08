@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, Notification, protocol, safeStorage, shell } from 'electron'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AccountInfo, AppEvent, CoreEvent, RoomView, TalkEvent } from '@shared/core'
+import { withAttachment, type AccountInfo, type AppEvent, type CoreEvent, type RoomView, type TalkEvent } from '@shared/core'
 
 // --- Native core -------------------------------------------------------------------
 
@@ -200,9 +200,10 @@ function notifyNewMessages(rooms: RoomView[]): void {
     if (focused && room.token === activeToken) continue
     if (!wantsNotification(room) || !room.lastMessage || room.lastMessage.isOwn) continue
     if (!Notification.isSupported()) continue
+    const text = withAttachment(room.lastMessage.text, room.lastMessage.attachment)
     const n = new Notification({
       title: room.name,
-      body: room.roomType === 1 ? room.lastMessage.text : `${room.lastMessage.author}: ${room.lastMessage.text}`,
+      body: room.roomType === 1 ? text : `${room.lastMessage.author}: ${text}`,
       silent: false,
     })
     n.on('click', () => {

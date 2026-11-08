@@ -9,8 +9,8 @@ license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
 talk-core = { path = "talk-core" }
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "cookies", "query", "form"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "cookies", "query", "form", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

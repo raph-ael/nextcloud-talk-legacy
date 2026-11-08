@@ -9,6 +9,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import uniffi.talk_ffi.FileAttachment
 
 private val zone get() = ZoneId.systemDefault()
 private val de = Locale.GERMANY
@@ -92,4 +93,26 @@ fun isJumboEmoji(text: String): Boolean {
         end = it.next()
     }
     return count in 1..3
+}
+
+/** Short label for a file message: "📷 Foto", "🎤 Sprachnachricht", "📎 name.pdf". */
+fun attachmentLabel(a: FileAttachment): String = when {
+    a.voiceMessage -> "🎤 Sprachnachricht"
+    a.mimetype.startsWith("image/") -> "📷 Foto"
+    a.mimetype.startsWith("video/") -> "🎬 Video"
+    else -> "📎 ${a.name}"
+}
+
+/** One-line preview of a message that may carry a file: label plus caption. */
+fun withAttachment(text: String, a: FileAttachment?): String = when {
+    a == null -> text
+    text.isEmpty() -> attachmentLabel(a)
+    else -> "${attachmentLabel(a)} · $text"
+}
+
+/** 1,2 MB style file size. */
+fun fileSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> String.format(de, "%.1f MB", bytes / (1024.0 * 1024.0))
 }

@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::client::TalkClient;
 use crate::error::{Error, Result};
-use crate::models::{ChatMessage, Room};
+use crate::models::{ChatMessage, FileAttachment, Room};
 
 /// Room list refresh while no signaling connection exists yet.
 const ROOMS_INTERVAL: Duration = Duration::from_secs(10);
@@ -105,9 +105,11 @@ pub struct RoomView {
 #[serde(rename_all = "camelCase")]
 pub struct MessagePreview {
     pub author: String,
+    /// One-line text; for file messages only the caption (may be empty).
     pub text: String,
     pub is_own: bool,
     pub is_system: bool,
+    pub attachment: Option<FileAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +121,7 @@ pub struct MessageView {
     pub actor_id: String,
     pub author: String,
     pub timestamp: i64,
+    /// Message text; for file messages the caption (empty without one).
     pub text: String,
     /// `text`, `system` or `deleted`.
     pub kind: &'static str,
@@ -130,6 +133,7 @@ pub struct MessageView {
     pub reply_to: Option<ReplyPreview>,
     pub reactions: BTreeMap<String, i64>,
     pub reactions_self: Vec<String>,
+    pub attachment: Option<FileAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +143,7 @@ pub struct ReplyPreview {
     pub author: String,
     pub text: String,
     pub is_own: bool,
+    pub attachment: Option<FileAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +174,7 @@ pub struct Engine {
     me: RwLock<String>,
     online: AtomicBool,
     state: Mutex<State>,
+    attachment_folder: RwLock<Option<String>>,
 }
 
 impl Engine {
@@ -180,6 +186,7 @@ impl Engine {
             me: RwLock::new(me),
             online: AtomicBool::new(true),
             state: Mutex::new(State::default()),
+            attachment_folder: RwLock::new(None),
         })
     }
 
@@ -359,6 +366,48 @@ impl Engine {
         self.client.room_avatar(token, dark).await
     }
 
+    /// Uploads a local file into the user's Talk attachment folder and posts it to the
+    /// conversation. The file message arrives through the live poll; match it via
+    /// `reference_id` like a text message.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_file(
+        &self,
+        token: &str,
+        local_path: &str,
+        name: &str,
+        mime: &str,
+        caption: Option<&str>,
+        reply_to: Option<i64>,
+        reference_id: &str,
+    ) -> Result<()> {
+        let folder = self.attachment_folder().await?;
+        let user = self.user_id();
+        let remote = self.guard(
+            self.client
+                .upload(&user, local_path, &folder, name, mime)
+                .await,
+        )?;
+        self.guard(
+            self.client
+                .share_to_room(token, &remote, reference_id, caption, reply_to)
+                .await,
+        )
+    }
+
+    /// Image preview bytes (JPEG/PNG) of a shared file, fitting into `width`×`height`.
+    pub async fn file_preview(&self, file_id: &str, width: u32, height: u32) -> Result<Vec<u8>> {
+        self.client.file_preview(file_id, width, height).await
+    }
+
+    async fn attachment_folder(&self) -> Result<String> {
+        if let Some(f) = self.attachment_folder.read().unwrap().clone() {
+            return Ok(f);
+        }
+        let f = self.guard(self.client.attachment_folder().await)?;
+        *self.attachment_folder.write().unwrap() = Some(f.clone());
+        Ok(f)
+    }
+
     // --- internals ---------------------------------------------------------------
 
     /// Tracks connectivity and auth state for every server call.
@@ -406,7 +455,7 @@ impl Engine {
             actor_id: m.actor_id.clone(),
             author: m.actor_display_name.clone(),
             timestamp: m.timestamp,
-            text: if deleted { String::new() } else { m.rendered_text() },
+            text: if deleted { String::new() } else { m.caption_text() },
             kind: if deleted {
                 "deleted"
             } else if m.is_system() {
@@ -425,12 +474,14 @@ impl Engine {
                 text: if p.message_type == "comment_deleted" {
                     String::new()
                 } else {
-                    preview_text(&p.rendered_text())
+                    preview_text(&p.caption_text())
                 },
                 is_own: self.is_own(&p.actor_type, &p.actor_id),
+                attachment: p.attachment(),
             }),
             reactions: m.reactions.clone(),
             reactions_self: m.reactions_self.clone(),
+            attachment: if deleted { None } else { m.attachment() },
         }
     }
 
@@ -460,10 +511,11 @@ impl Engine {
                 text: if m.message_type == "comment_deleted" {
                     String::new()
                 } else {
-                    preview_text(&m.rendered_text())
+                    preview_text(&m.caption_text())
                 },
                 is_own: self.is_own(&m.actor_type, &m.actor_id),
                 is_system: m.is_system(),
+                attachment: m.attachment(),
             }),
             is_favorite: r.is_favorite,
             is_archived: r.is_archived,

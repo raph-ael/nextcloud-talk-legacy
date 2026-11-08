@@ -1,5 +1,5 @@
 import { forwardRef, memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import type { RoomView } from '@shared/core'
+import { withAttachment, type RoomView } from '@shared/core'
 import { discard, loadOlder, markVisibleRead, retry, sendMessage, useStore, type UiMessage } from '../store'
 import { colorFor, dayLabel, fullTime, isJumboEmoji, messageTime, sameDay, splitLinks } from '../format'
 import { Markdown, plain } from './Markdown'
@@ -159,10 +159,18 @@ const MessageRow = memo(function MessageRow({ msg, prev, next, isGroup, read, on
           {msg.replyTo && (
             <div className="quote">
               <div className="quote-author">{msg.replyTo.isOwn ? 'Du' : msg.replyTo.author}</div>
-              <div className="quote-text">{msg.replyTo.text || 'Nachricht gelöscht'}</div>
+              <div className="quote-text">{withAttachment(msg.replyTo.text, msg.replyTo.attachment) || 'Nachricht gelöscht'}</div>
             </div>
           )}
           <div className="text">
+            {msg.attachment && (
+              <div>
+                <a href={msg.attachment.link || '#'} target="_blank" rel="noreferrer">
+                  {withAttachment('', msg.attachment)}
+                  {msg.attachment.mimetype.startsWith('image/') || msg.attachment.voiceMessage ? ` · ${msg.attachment.name}` : ''}
+                </a>
+              </div>
+            )}
             {msg.kind === 'deleted' ? (
               <em>Diese Nachricht wurde gelöscht.</em>
             ) : msg.markdown ? (

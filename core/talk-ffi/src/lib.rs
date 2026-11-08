@@ -108,12 +108,46 @@ impl From<ClientPlatform> for core::Platform {
 
 // --- UI models (mirrors of talk_core::engine views) --------------------------------
 
+/// A file shared into a conversation. `width`/`height` are 0 when unknown.
+#[derive(uniffi::Record, Clone)]
+pub struct FileAttachment {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub mimetype: String,
+    pub size: i64,
+    pub width: i64,
+    pub height: i64,
+    pub preview_available: bool,
+    pub link: String,
+    pub voice_message: bool,
+}
+
+impl From<core::FileAttachment> for FileAttachment {
+    fn from(a: core::FileAttachment) -> Self {
+        Self {
+            id: a.id,
+            name: a.name,
+            path: a.path,
+            mimetype: a.mimetype,
+            size: a.size,
+            width: a.width,
+            height: a.height,
+            preview_available: a.preview_available,
+            link: a.link,
+            voice_message: a.voice_message,
+        }
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct MessagePreview {
     pub author: String,
+    /// For file messages only the caption (may be empty).
     pub text: String,
     pub is_own: bool,
     pub is_system: bool,
+    pub attachment: Option<FileAttachment>,
 }
 
 #[derive(uniffi::Record)]
@@ -155,6 +189,7 @@ impl From<core::RoomView> for RoomView {
                 text: m.text,
                 is_own: m.is_own,
                 is_system: m.is_system,
+                attachment: m.attachment.map(Into::into),
             }),
             is_favorite: r.is_favorite,
             is_archived: r.is_archived,
@@ -179,6 +214,7 @@ pub struct ReplyPreview {
     pub author: String,
     pub text: String,
     pub is_own: bool,
+    pub attachment: Option<FileAttachment>,
 }
 
 #[derive(uniffi::Record)]
@@ -199,6 +235,8 @@ pub struct MessageView {
     pub reply_to: Option<ReplyPreview>,
     pub reactions: HashMap<String, i64>,
     pub reactions_self: Vec<String>,
+    /// For file messages; `text` is then the caption.
+    pub attachment: Option<FileAttachment>,
 }
 
 impl From<core::MessageView> for MessageView {
@@ -226,9 +264,11 @@ impl From<core::MessageView> for MessageView {
                 author: r.author,
                 text: r.text,
                 is_own: r.is_own,
+                attachment: r.attachment.map(Into::into),
             }),
             reactions: m.reactions.into_iter().collect(),
             reactions_self: m.reactions_self,
+            attachment: m.attachment.map(Into::into),
         }
     }
 }
@@ -396,6 +436,43 @@ impl TalkSession {
     /// Revokes the app password on the server and stops sync.
     pub async fn logout(&self) -> Result<(), CoreError> {
         Ok(self.engine.logout().await?)
+    }
+
+    /// Uploads `local_path` to the Talk attachment folder and posts it to the chat.
+    /// The message arrives as `MessagesAdded` carrying `reference_id`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_file(
+        &self,
+        token: String,
+        local_path: String,
+        name: String,
+        mime: String,
+        caption: Option<String>,
+        reply_to: Option<i64>,
+        reference_id: String,
+    ) -> Result<(), CoreError> {
+        Ok(self
+            .engine
+            .send_file(
+                &token,
+                &local_path,
+                &name,
+                &mime,
+                caption.as_deref(),
+                reply_to,
+                &reference_id,
+            )
+            .await?)
+    }
+
+    /// Preview image (JPEG/PNG bytes) of a shared file, fitting into `width`×`height`.
+    pub async fn file_preview(
+        &self,
+        file_id: String,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, CoreError> {
+        Ok(self.engine.file_preview(&file_id, width, height).await?)
     }
 
     /// Conversation avatar image (PNG/SVG/JPEG bytes).

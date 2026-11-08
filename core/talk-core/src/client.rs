@@ -315,6 +315,151 @@ impl TalkClient {
         Ok(())
     }
 
+    /// Uploads a local file into `folder` (e.g. `/Talk`) of `user_id`'s files and returns
+    /// its path relative to the user root (`/Talk/name.jpg`). Never overwrites: an existing
+    /// name gets a ` (2)`, ` (3)` … suffix. Creates the folder when it is missing.
+    pub async fn upload(
+        &self,
+        user_id: &str,
+        local_path: &str,
+        folder: &str,
+        name: &str,
+        mime: &str,
+    ) -> Result<String> {
+        let folder = format!("/{}", folder.trim_matches('/'));
+        let mut created_folder = false;
+        let mut attempt = 1;
+        loop {
+            let candidate = numbered_name(name, attempt);
+            let remote = if folder == "/" {
+                format!("/{candidate}")
+            } else {
+                format!("{folder}/{candidate}")
+            };
+            let file = tokio::fs::File::open(local_path)
+                .await
+                .map_err(|e| Error::Decode(format!("cannot read {local_path}: {e}")))?;
+            let len = file
+                .metadata()
+                .await
+                .map_err(|e| Error::Decode(format!("cannot read {local_path}: {e}")))?
+                .len();
+            let resp = self
+                .dav(Method::PUT, user_id, &remote)
+                .header(header::CONTENT_TYPE, mime)
+                // Nextcloud behind PHP-FPM stores chunked uploads as empty files:
+                // always send the length.
+                .header(header::CONTENT_LENGTH, len)
+                // Fail instead of overwriting an existing file.
+                .header(header::IF_NONE_MATCH, "*")
+                .timeout(Duration::from_secs(600))
+                .body(reqwest::Body::from(file))
+                .send()
+                .await?;
+            match resp.status() {
+                s if s.is_success() => return Ok(remote),
+                StatusCode::PRECONDITION_FAILED if attempt < 100 => attempt += 1,
+                StatusCode::NOT_FOUND | StatusCode::CONFLICT if !created_folder => {
+                    self.mkcol_all(user_id, &folder).await?;
+                    created_folder = true;
+                }
+                _ => return Err(check(resp).await.err().unwrap_or(Error::NotFound)),
+            }
+        }
+    }
+
+    /// Creates `folder` and its parents (existing ones are fine).
+    async fn mkcol_all(&self, user_id: &str, folder: &str) -> Result<()> {
+        let mut path = String::new();
+        for seg in folder.split('/').filter(|s| !s.is_empty()) {
+            path.push('/');
+            path.push_str(seg);
+            let resp = self
+                .dav(Method::from_bytes(b"MKCOL").unwrap(), user_id, &path)
+                .send()
+                .await?;
+            // 405: already exists.
+            if !resp.status().is_success() && resp.status() != StatusCode::METHOD_NOT_ALLOWED {
+                check(resp).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn dav(&self, method: Method, user_id: &str, path: &str) -> RequestBuilder {
+        let encoded: String = path
+            .split('/')
+            .map(encode_segment)
+            .collect::<Vec<_>>()
+            .join("/");
+        self.http
+            .request(
+                method,
+                format!(
+                    "{}/remote.php/dav/files/{}{}",
+                    self.account.server,
+                    encode_segment(user_id),
+                    encoded
+                ),
+            )
+            .basic_auth(&self.account.user, Some(&self.account.app_password))
+    }
+
+    /// Shares an uploaded file into a conversation; Talk posts it as a file message.
+    /// `reference_id` lets the caller match the echo like for text messages.
+    pub async fn share_to_room(
+        &self,
+        token: &str,
+        path: &str,
+        reference_id: &str,
+        caption: Option<&str>,
+        reply_to: Option<i64>,
+    ) -> Result<()> {
+        let mut meta = serde_json::Map::new();
+        meta.insert("messageType".into(), "comment".into());
+        if let Some(c) = caption.map(str::trim).filter(|c| !c.is_empty()) {
+            meta.insert("caption".into(), c.into());
+        }
+        if let Some(id) = reply_to {
+            meta.insert("replyTo".into(), id.into());
+        }
+        let rb = self
+            .request(Method::POST, "/ocs/v2.php/apps/files_sharing/api/v1/shares")
+            .form(&[
+                ("shareType", "10".to_string()),
+                ("shareWith", token.to_string()),
+                ("path", path.to_string()),
+                ("referenceId", reference_id.to_string()),
+                ("talkMetaData", serde_json::Value::Object(meta).to_string()),
+            ]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Server-rendered preview of a file, fitting into `width`×`height` (aspect kept).
+    pub async fn file_preview(&self, file_id: &str, width: u32, height: u32) -> Result<Vec<u8>> {
+        let rb = self.request(Method::GET, "/index.php/core/preview").query(&[
+            ("fileId", file_id.to_string()),
+            ("x", width.to_string()),
+            ("y", height.to_string()),
+            ("a", "1".to_string()),
+            ("forceIcon", "0".to_string()),
+        ]);
+        let resp = check(rb.send().await?).await?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Talk attachment folder of the current user (`/Talk` unless configured otherwise).
+    pub async fn attachment_folder(&self) -> Result<String> {
+        let caps = self.capabilities().await?;
+        Ok(caps
+            .pointer("/capabilities/spreed/config/attachments/folder")
+            .and_then(|v| v.as_str())
+            .filter(|f| !f.is_empty())
+            .unwrap_or("/Talk")
+            .to_string())
+    }
+
     /// Signaling settings incl. ticket/JWT and fresh TURN credentials. Fetch before every connect.
     pub async fn signaling_settings(&self, token: Option<&str>) -> Result<SignalingSettings> {
         let mut rb = self.request(Method::GET, &format!("{SPREED}/v3/signaling/settings"));
@@ -329,6 +474,43 @@ impl TalkClient {
 pub fn new_reference_id() -> String {
     let digest = Sha256::digest(uuid::Uuid::new_v4().as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `name.jpg` → `name (2).jpg` for `n == 2`; unchanged for `n == 1`.
+fn numbered_name(name: &str, n: u32) -> String {
+    if n <= 1 {
+        return name.to_string();
+    }
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => format!("{} ({n}){}", &name[..dot], &name[dot..]),
+        _ => format!("{name} ({n})"),
+    }
+}
+
+/// Percent-encodes one URL path segment (everything except RFC 3986 unreserved characters).
+fn encode_segment(seg: &str) -> String {
+    let mut out = String::with_capacity(seg.len());
+    for b in seg.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbering_and_encoding() {
+        assert_eq!(numbered_name("IMG_1.jpg", 1), "IMG_1.jpg");
+        assert_eq!(numbered_name("IMG_1.jpg", 3), "IMG_1 (3).jpg");
+        assert_eq!(numbered_name("README", 2), "README (2)");
+        assert_eq!(encode_segment("Foto vom Mai ü.jpg"), "Foto%20vom%20Mai%20%C3%BC.jpg");
+    }
 }
 
 pub(crate) fn base_http_builder(platform: Platform) -> reqwest::ClientBuilder {

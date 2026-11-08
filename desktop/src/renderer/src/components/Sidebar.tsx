@@ -1,5 +1,5 @@
 import { forwardRef, memo, useMemo, useState } from 'react'
-import type { RoomView } from '@shared/core'
+import { withAttachment, type RoomView } from '@shared/core'
 import { getState, openRoom, useStore } from '../store'
 import { listTime } from '../format'
 import { Avatar } from './Avatar'
@@ -74,9 +74,10 @@ const RoomItem = memo(function RoomItem({ room, active }: { room: RoomView; acti
   const last = room.lastMessage
   let preview = ''
   if (last) {
-    if (last.isSystem || room.roomType === 1 || room.roomType === 6) preview = last.text
-    else preview = `${last.isOwn ? 'Du' : last.author.split(' ')[0]}: ${last.text}`
-    if (!last.text) preview = 'Nachricht gelöscht'
+    const text = withAttachment(last.text, last.attachment)
+    if (last.isSystem || room.roomType === 1 || room.roomType === 6) preview = text
+    else preview = `${last.isOwn ? 'Du' : last.author.split(' ')[0]}: ${text}`
+    if (!text) preview = 'Nachricht gelöscht'
   }
   return (
     <button

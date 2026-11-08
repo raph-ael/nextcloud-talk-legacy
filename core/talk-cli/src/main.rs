@@ -38,6 +38,14 @@ enum Cmd {
     },
     /// Send a text message
     Send { token: String, text: String },
+    /// Upload a file to the Talk attachment folder and share it into a conversation
+    SendFile {
+        token: String,
+        path: String,
+        /// Caption shown with the file
+        #[arg(short, long)]
+        caption: Option<String>,
+    },
     /// Print recent messages, then follow new ones via long polling
     Tail {
         token: String,
@@ -117,6 +125,27 @@ async fn main() -> Result<()> {
                 .send_message(&token, &text, &new_reference_id(), None)
                 .await?;
             eprintln!("gesendet: id={} in {:?}", msg.id, t.elapsed());
+        }
+        Cmd::SendFile {
+            token,
+            path,
+            caption,
+        } => {
+            let t = Instant::now();
+            let user = client.current_user().await?;
+            let folder = client.attachment_folder().await?;
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+            let remote = client
+                .upload(&user.id, &path, &folder, &name, "application/octet-stream")
+                .await?;
+            client
+                .share_to_room(&token, &remote, &new_reference_id(), caption.as_deref(), None)
+                .await?;
+            eprintln!("gesendet: {remote} in {:?}", t.elapsed());
         }
         Cmd::Tail {
             token,

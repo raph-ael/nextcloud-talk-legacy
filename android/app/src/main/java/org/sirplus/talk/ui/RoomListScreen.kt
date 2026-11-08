@@ -224,16 +224,17 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onClick
     val type = room.roomType.toInt()
     val preview = remember(last, type) {
         buildAnnotatedString {
+            val text = last?.let { withAttachment(it.text, it.attachment) }.orEmpty()
             when {
                 last == null -> {}
-                last.text.isEmpty() -> append("Nachricht gelöscht")
-                last.isSystem || type == 1 || type == 6 -> append(last.text)
+                text.isEmpty() -> append("Nachricht gelöscht")
+                last.isSystem || type == 1 || type == 6 -> append(text)
                 else -> {
                     withStyle(SpanStyle(fontWeight = FontWeight.Medium, color = onSurface)) {
                         append(if (last.isOwn) "Du" else last.author.substringBefore(' '))
                         append(": ")
                     }
-                    append(last.text)
+                    append(text)
                 }
             }
         }

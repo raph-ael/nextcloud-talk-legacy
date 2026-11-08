@@ -134,10 +134,56 @@ impl ChatMessage {
         !self.system_message.is_empty()
     }
 
+    /// The shared file of a file message (`{file}` parameter of type `file`).
+    pub fn attachment(&self) -> Option<FileAttachment> {
+        let p = self.message_parameters.get("file")?;
+        if p.get("type").and_then(Value::as_str) != Some("file") {
+            return None;
+        }
+        let s = |k: &str| match p.get(k) {
+            Some(Value::String(v)) => v.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => String::new(),
+        };
+        let n = |k: &str| s(k).parse::<i64>().unwrap_or(0);
+        Some(FileAttachment {
+            id: s("id"),
+            name: s("name"),
+            path: s("path"),
+            mimetype: s("mimetype"),
+            size: n("size"),
+            width: n("width"),
+            height: n("height"),
+            preview_available: s("preview-available") == "yes",
+            link: s("link"),
+            voice_message: self.message_type == "voice-message",
+        })
+    }
+
+    /// Text a file message carries besides the file: its caption (empty for plain `{file}`).
+    /// For other messages the same as [`Self::rendered_text`].
+    pub fn caption_text(&self) -> String {
+        if self.attachment().is_some() {
+            if self.message.trim() == "{file}" {
+                return String::new();
+            }
+            return self.rendered_text_without("file");
+        }
+        self.rendered_text()
+    }
+
     /// Message text with `{placeholders}` replaced by their display names.
     pub fn rendered_text(&self) -> String {
+        self.rendered_text_without("")
+    }
+
+    fn rendered_text_without(&self, skip: &str) -> String {
         let mut out = self.message.clone();
         for (key, param) in &self.message_parameters {
+            if key == skip {
+                out = out.replace(&format!("{{{key}}}"), "");
+                continue;
+            }
             let name = param
                 .get("name")
                 .and_then(Value::as_str)
@@ -149,6 +195,30 @@ impl ChatMessage {
             out = out.replace(&format!("{{{key}}}"), &replacement);
         }
         out
+    }
+}
+
+/// A file shared into a conversation. `width`/`height` are 0 when the server has no
+/// image metadata; `id` is the file id for previews.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAttachment {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub mimetype: String,
+    pub size: i64,
+    pub width: i64,
+    pub height: i64,
+    pub preview_available: bool,
+    pub link: String,
+    /// Sent as a voice message (`messageType: voice-message`).
+    pub voice_message: bool,
+}
+
+impl FileAttachment {
+    pub fn is_image(&self) -> bool {
+        self.mimetype.starts_with("image/")
     }
 }
 
@@ -237,5 +307,29 @@ mod tests {
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.rendered_text(), "Hi @Bea");
         assert!(msg.reactions.is_empty());
+    }
+
+    #[test]
+    fn file_message_with_caption() {
+        let json = r#"{"id":6,"token":"abc","actorType":"users","actorId":"a","actorDisplayName":"A",
+            "timestamp":1,"message":"Look at this","messageType":"comment","messageParameters":
+            {"actor":{"type":"user","id":"a","name":"A"},"file":{"type":"file","id":"55341","name":"IMG.jpeg",
+            "size":"1709918","path":"Talk/IMG.jpeg","mimetype":"image/jpeg","preview-available":"yes"}}}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        let a = msg.attachment().unwrap();
+        assert_eq!(a.id, "55341");
+        assert_eq!(a.size, 1709918);
+        assert!(a.is_image() && a.preview_available);
+        assert_eq!(msg.caption_text(), "Look at this");
+    }
+
+    #[test]
+    fn file_message_without_caption() {
+        let json = r#"{"id":7,"token":"abc","actorType":"users","actorId":"a","actorDisplayName":"A",
+            "timestamp":1,"message":"{file}","messageParameters":
+            {"file":{"type":"file","id":"1","name":"a.pdf","size":3,"mimetype":"application/pdf"}}}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.caption_text(), "");
+        assert_eq!(msg.attachment().unwrap().size, 3);
     }
 }

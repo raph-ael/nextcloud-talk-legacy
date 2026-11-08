@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.LruCache
+import android.widget.Toast
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.Lifecycle
@@ -17,10 +18,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.sirplus.talk.media.PreparedImage
+import org.sirplus.talk.media.decodeSampled
+import org.sirplus.talk.media.prepareImage
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import uniffi.talk_ffi.ClientPlatform
 import uniffi.talk_ffi.CoreEvent
 import uniffi.talk_ffi.CoreException
 import uniffi.talk_ffi.CoreListener
+import uniffi.talk_ffi.FileAttachment
 import uniffi.talk_ffi.LoginFlow
 import uniffi.talk_ffi.MessageKind
 import uniffi.talk_ffi.MessageView
@@ -32,8 +39,11 @@ import uniffi.talk_ffi.newReferenceId
 enum class SessionState { LOADING, LOGGED_OUT, READY }
 enum class SendStatus { SENDING, FAILED }
 
-/** A message as shown in the UI; optimistic messages carry a [status]. */
-data class UiMessage(val msg: MessageView, val status: SendStatus? = null) {
+/**
+ * A message as shown in the UI; optimistic messages carry a [status], optimistic file
+ * messages also the [localFile] being uploaded.
+ */
+data class UiMessage(val msg: MessageView, val status: SendStatus? = null, val localFile: String? = null) {
     val key: String get() = if (status != null) msg.referenceId else msg.id.toString()
 }
 
@@ -69,6 +79,14 @@ class SessionManager(private val context: Context) : CoreListener {
     private var session: TalkSession? = null
     private var loginFlow: LoginFlow? = null
     private val avatars = LruCache<String, ImageBitmap>(64)
+    /** Chat image previews by file id, bounded by bytes. */
+    private val previews = object : LruCache<String, ImageBitmap>(PREVIEW_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+    }
+    /** Width/height of previews seen in this process, so bubbles keep their size on re-layout. */
+    private val aspects = ConcurrentHashMap<String, Float>()
+    /** Decoded local images of optimistic sends, by reference id, until the server echo arrives. */
+    private val localPreviews = ConcurrentHashMap<String, ImageBitmap>()
 
     init {
         val account = store.load()
@@ -132,6 +150,7 @@ class SessionManager(private val context: Context) : CoreListener {
         s.close()
         store.clear()
         avatars.evictAll()
+        previews.evictAll()
         _state.value = UiState(session = SessionState.LOGGED_OUT)
     }
 
@@ -140,7 +159,10 @@ class SessionManager(private val context: Context) : CoreListener {
     override fun onEvent(event: CoreEvent) {
         when (event) {
             is CoreEvent.RoomsChanged -> _state.update { it.copy(rooms = event.rooms) }
-            is CoreEvent.MessagesAdded -> updateChat(event.token) { it.copy(messages = merge(it.messages, event.messages)) }
+            is CoreEvent.MessagesAdded -> {
+                adoptLocalPreviews(event.messages)
+                updateChat(event.token) { it.copy(messages = merge(it.messages, event.messages)) }
+            }
             is CoreEvent.MessagesUpdated -> updateChat(event.token) { c ->
                 val byId = event.messages.associateBy { it.id }
                 c.copy(messages = c.messages.map { m -> byId[m.msg.id]?.let { UiMessage(it) } ?: m })
@@ -246,19 +268,119 @@ class SessionManager(private val context: Context) : CoreListener {
             isOwn = true,
             edited = false,
             markdown = true,
-            replyTo = replyTo?.let { ReplyPreview(it.id, it.author, it.text, it.isOwn) },
+            replyTo = replyTo?.let { ReplyPreview(it.id, it.author, it.text, it.isOwn, it.attachment) },
             reactions = emptyMap(),
             reactionsSelf = emptyList(),
+            attachment = null,
         )
         updateChat(token) { it.copy(messages = it.messages + UiMessage(optimistic, SendStatus.SENDING)) }
         deliver(token, optimistic)
     }
 
+    /**
+     * Sends a prepared image (see [org.sirplus.talk.media.prepareImage]) with an optional caption.
+     * Shows it immediately from the local file; the server echo takes over without flicker.
+     */
+    fun sendImage(token: String, image: PreparedImage, caption: String, replyTo: MessageView?) {
+        val ref = newReferenceId()
+        val optimistic = MessageView(
+            id = -System.currentTimeMillis(),
+            token = token,
+            actorType = "users",
+            actorId = "",
+            author = "",
+            timestamp = System.currentTimeMillis() / 1000,
+            text = caption.trim(),
+            kind = MessageKind.TEXT,
+            systemMessage = "",
+            referenceId = ref,
+            isOwn = true,
+            edited = false,
+            markdown = true,
+            replyTo = replyTo?.let { ReplyPreview(it.id, it.author, it.text, it.isOwn, it.attachment) },
+            reactions = emptyMap(),
+            reactionsSelf = emptyList(),
+            attachment = FileAttachment(
+                id = "",
+                name = image.name,
+                path = "",
+                mimetype = "image/jpeg",
+                size = image.file.length(),
+                width = image.width.toLong(),
+                height = image.height.toLong(),
+                previewAvailable = true,
+                link = "",
+                voiceMessage = false,
+            ),
+        )
+        scope.launch {
+            // Decode first so the optimistic bubble shows the photo from its first frame.
+            withContext(Dispatchers.IO) { decodePreview(image.file) }?.let { localPreviews[ref] = it }
+            updateChat(token) {
+                it.copy(messages = it.messages + UiMessage(optimistic, SendStatus.SENDING, image.file.path))
+            }
+            deliverFile(token, optimistic, image.file.path)
+        }
+    }
+
+    /**
+     * Downscales/re-encodes [uri] off the main thread, then sends it like [sendImage].
+     * [deleteSource]: a temporary camera capture to remove afterwards.
+     */
+    fun sendImageUri(token: String, uri: Uri, caption: String, replyTo: MessageView?, deleteSource: Boolean) {
+        scope.launch {
+            val prepared = withContext(Dispatchers.IO) {
+                runCatching { prepareImage(context, uri) }.also {
+                    if (deleteSource) uri.path?.let { p -> File(p).delete() }
+                }.getOrNull()
+            }
+            if (prepared == null) {
+                Toast.makeText(context, "Bild konnte nicht gelesen werden", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            sendImage(token, prepared, caption, replyTo)
+        }
+    }
+
     fun retry(token: String, msg: MessageView) {
+        val local = _state.value.chats[token]?.messages?.find { it.msg.referenceId == msg.referenceId }?.localFile
         updateChat(token) { c ->
             c.copy(messages = c.messages.map { if (it.msg.referenceId == msg.referenceId) it.copy(status = SendStatus.SENDING) else it })
         }
-        deliver(token, msg)
+        if (local != null) scope.launch { deliverFile(token, msg, local) } else deliver(token, msg)
+    }
+
+    private suspend fun deliverFile(token: String, msg: MessageView, path: String) {
+        val s = session ?: return
+        val a = msg.attachment ?: return
+        try {
+            s.sendFile(token, path, a.name, a.mimetype, msg.text.ifEmpty { null }, msg.replyTo?.id, msg.referenceId)
+            // The message itself arrives through the live poll (matched by reference id).
+        } catch (e: CoreException) {
+            markFailed(token, msg.referenceId)
+        }
+    }
+
+    /** Hands the decoded local image to the server message so its bubble does not reload. */
+    private fun adoptLocalPreviews(messages: List<MessageView>) {
+        if (localPreviews.isEmpty()) return
+        for (m in messages) {
+            val bitmap = localPreviews.remove(m.referenceId) ?: continue
+            val id = m.attachment?.id ?: continue
+            previews.put(id, bitmap)
+            aspects[id] = bitmap.width.toFloat() / bitmap.height
+            // The upload copy is no longer needed once the server has the file.
+            _state.value.chats[m.token]?.messages?.find { it.msg.referenceId == m.referenceId }?.localFile
+                ?.let { runCatching { File(it).delete() } }
+        }
+    }
+
+    private fun markFailed(token: String, referenceId: String) {
+        updateChat(token) { c ->
+            c.copy(messages = c.messages.map {
+                if (it.msg.referenceId == referenceId && it.status != null) it.copy(status = SendStatus.FAILED) else it
+            })
+        }
     }
 
     private fun deliver(token: String, msg: MessageView) {
@@ -268,11 +390,7 @@ class SessionManager(private val context: Context) : CoreListener {
                 val sent = s.send(token, msg.text, msg.referenceId, msg.replyTo?.id)
                 updateChat(token) { it.copy(messages = merge(it.messages, listOf(sent))) }
             } catch (e: CoreException) {
-                updateChat(token) { c ->
-                    c.copy(messages = c.messages.map {
-                        if (it.msg.referenceId == msg.referenceId && it.status != null) it.copy(status = SendStatus.FAILED) else it
-                    })
-                }
+                markFailed(token, msg.referenceId)
             }
         }
     }
@@ -312,6 +430,56 @@ class SessionManager(private val context: Context) : CoreListener {
 
     private fun avatarKey(token: String, version: String, dark: Boolean) = "$token|$version|$dark"
 
+    /** Already decoded chat image preview (synchronous, for the first frame). */
+    fun cachedPreview(fileId: String): ImageBitmap? = previews.get(fileId)
+
+    /** Known aspect ratio (width / height) of a file's preview, if it was loaded before. */
+    fun previewAspect(fileId: String): Float? = aspects[fileId]
+
+    /** Local image of an optimistic send, until the server message replaces it. */
+    fun localPreview(referenceId: String): ImageBitmap? = localPreviews[referenceId]
+
+    /** Chat-sized preview of a shared image, from the server's preview endpoint. */
+    suspend fun preview(fileId: String): ImageBitmap? {
+        previews.get(fileId)?.let { return it }
+        val s = session ?: return null
+        val bytes = try {
+            s.filePreview(fileId, PREVIEW_PX.toUInt(), PREVIEW_PX.toUInt())
+        } catch (e: CoreException) {
+            return null
+        }
+        val bitmap = withContext(Dispatchers.Default) { decodeBytes(bytes, previewEdge()) } ?: return null
+        previews.put(fileId, bitmap)
+        aspects[fileId] = bitmap.width.toFloat() / bitmap.height
+        return bitmap
+    }
+
+    /** Large version for the full-screen viewer (not cached). */
+    suspend fun fullImage(fileId: String): ImageBitmap? {
+        val s = session ?: return null
+        val bytes = try {
+            s.filePreview(fileId, FULL_PX.toUInt(), FULL_PX.toUInt())
+        } catch (e: CoreException) {
+            return null
+        }
+        return withContext(Dispatchers.Default) { decodeBytes(bytes, FULL_PX) }
+    }
+
+    /** Longest edge a chat bubble shows, in px (bubbles are at most ~300dp wide). */
+    private fun previewEdge() = (300 * context.resources.displayMetrics.density).toInt()
+
+    private fun decodePreview(file: File): ImageBitmap? = decodeSampled(file, previewEdge())?.asImageBitmap()
+
+    private fun decodeBytes(bytes: ByteArray, maxEdge: Int): ImageBitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?.asImageBitmap()
+    }
+
     /** Decodes downsampled to roughly the largest size shown (avoids huge texture uploads while scrolling). */
     private fun decodeAvatar(bytes: ByteArray): ImageBitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -326,5 +494,9 @@ class SessionManager(private val context: Context) : CoreListener {
 
     private companion object {
         const val AVATAR_MAX_DP = 56
+        /** Requested preview size; the server keeps the aspect ratio inside this box. */
+        const val PREVIEW_PX = 1024
+        const val FULL_PX = 2048
+        const val PREVIEW_CACHE_BYTES = 48 * 1024 * 1024
     }
 }

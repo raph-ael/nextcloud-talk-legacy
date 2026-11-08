@@ -1,11 +1,40 @@
 // Types of the data produced by the Rust core (talk-core/src/engine.rs, serde camelCase).
 // Keep in sync with the Rust structs.
 
+/** A file shared into a conversation; width/height are 0 when unknown. */
+export interface FileAttachment {
+  id: string
+  name: string
+  path: string
+  mimetype: string
+  size: number
+  width: number
+  height: number
+  previewAvailable: boolean
+  link: string
+  voiceMessage: boolean
+}
+
+/** Short label for a file message ("📷 Foto", "📎 name.pdf"), followed by its caption. */
+export function withAttachment(text: string, a: FileAttachment | null | undefined): string {
+  if (!a) return text
+  const label = a.voiceMessage
+    ? '🎤 Sprachnachricht'
+    : a.mimetype.startsWith('image/')
+      ? '📷 Foto'
+      : a.mimetype.startsWith('video/')
+        ? '🎬 Video'
+        : `📎 ${a.name}`
+  return text ? `${label} · ${text}` : label
+}
+
 export interface MessagePreview {
   author: string
+  /** For file messages only the caption (may be empty). */
   text: string
   isOwn: boolean
   isSystem: boolean
+  attachment: FileAttachment | null
 }
 
 export interface RoomView {
@@ -34,6 +63,7 @@ export interface ReplyPreview {
   author: string
   text: string
   isOwn: boolean
+  attachment?: FileAttachment | null
 }
 
 export interface MessageView {
@@ -54,6 +84,8 @@ export interface MessageView {
   replyTo: ReplyPreview | null
   reactions: Record<string, number>
   reactionsSelf: string[]
+  /** For file messages; `text` is then the caption. */
+  attachment?: FileAttachment | null
 }
 
 export interface ChatPage {
