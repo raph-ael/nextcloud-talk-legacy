@@ -58,6 +58,7 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
     implementation(libs.emojipicker)
+    implementation(libs.work.runtime)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
     implementation("${libs.jna.get()}@aar")

@@ -4,7 +4,13 @@
 //! (Talk binds room sessions to the PHP session cookie), so a slow or unreachable
 //! account never stalls another one.
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use futures_util::StreamExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
 
 use reqwest::header::{self, HeaderMap};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
@@ -250,7 +256,9 @@ impl TalkClient {
         let rb = self
             .request(Method::POST, &format!("{SPREED}/v1/chat/{token}"))
             .form(&form);
-        Ok(self.ocs::<ChatMessage>(rb).await?.0)
+        let msg = self.ocs::<ChatMessage>(rb).await?.0;
+        fault("send")?;
+        Ok(msg)
     }
 
     pub async fn set_read_marker(&self, token: &str, last_read: i64) -> Result<()> {
@@ -318,6 +326,7 @@ impl TalkClient {
     /// Uploads a local file into `folder` (e.g. `/Talk`) of `user_id`'s files and returns
     /// its path relative to the user root (`/Talk/name.jpg`). Never overwrites: an existing
     /// name gets a ` (2)`, ` (3)` … suffix. Creates the folder when it is missing.
+    /// One-shot helper; the outbox uses the resumable building blocks below.
     pub async fn upload(
         &self,
         user_id: &str,
@@ -330,54 +339,77 @@ impl TalkClient {
         let mut created_folder = false;
         let mut attempt = 1;
         loop {
-            let candidate = numbered_name(name, attempt);
-            let remote = if folder == "/" {
-                format!("/{candidate}")
-            } else {
-                format!("{folder}/{candidate}")
-            };
-            let file = tokio::fs::File::open(local_path)
-                .await
-                .map_err(|e| Error::Decode(format!("cannot read {local_path}: {e}")))?;
-            let len = file
-                .metadata()
-                .await
-                .map_err(|e| Error::Decode(format!("cannot read {local_path}: {e}")))?
-                .len();
-            let resp = self
-                .dav(Method::PUT, user_id, &remote)
-                .header(header::CONTENT_TYPE, mime)
-                // Nextcloud behind PHP-FPM stores chunked uploads as empty files:
-                // always send the length.
-                .header(header::CONTENT_LENGTH, len)
-                // Fail instead of overwriting an existing file.
-                .header(header::IF_NONE_MATCH, "*")
-                .timeout(Duration::from_secs(600))
-                .body(reqwest::Body::from(file))
-                .send()
-                .await?;
-            match resp.status() {
-                s if s.is_success() => return Ok(remote),
-                StatusCode::PRECONDITION_FAILED if attempt < 100 => attempt += 1,
-                StatusCode::NOT_FOUND | StatusCode::CONFLICT if !created_folder => {
+            let remote = remote_path(&folder, name, attempt);
+            match self.put_file(user_id, &remote, local_path, mime, None).await? {
+                PutOutcome::Created => return Ok(remote),
+                PutOutcome::Exists if attempt < 100 => attempt += 1,
+                PutOutcome::ParentMissing if !created_folder => {
                     self.mkcol_all(user_id, &folder).await?;
                     created_folder = true;
                 }
-                _ => return Err(check(resp).await.err().unwrap_or(Error::NotFound)),
+                other => return Err(Error::Decode(format!("upload failed: {other:?}"))),
             }
         }
     }
 
+    /// Single WebDAV PUT of a whole local file to `remote` (path below the user root).
+    /// Never overwrites (`If-None-Match: *`). `progress` receives the number of bytes
+    /// handed to the network, chunk by chunk.
+    pub async fn put_file(
+        &self,
+        user_id: &str,
+        remote: &str,
+        local_path: &str,
+        mime: &str,
+        progress: Option<Progress>,
+    ) -> Result<PutOutcome> {
+        let (file, len) = open_local(local_path).await?;
+        let rb = self
+            .dav(Method::PUT, user_id, remote)
+            .header(header::CONTENT_TYPE, mime)
+            // Nextcloud behind PHP-FPM stores chunked transfer-encoded uploads as empty
+            // files: always send the length.
+            .header(header::CONTENT_LENGTH, len)
+            .header(header::IF_NONE_MATCH, "*")
+            .timeout(UPLOAD_TIMEOUT);
+        let (body, watch) = file_body(file, len, progress);
+        let resp = stall_guard(rb.body(body).send(), watch).await?;
+        Ok(match resp.status() {
+            s if s.is_success() => {
+                fault("put")?;
+                PutOutcome::Created
+            }
+            StatusCode::PRECONDITION_FAILED => PutOutcome::Exists,
+            StatusCode::NOT_FOUND | StatusCode::CONFLICT => PutOutcome::ParentMissing,
+            _ => return Err(check(resp).await.err().unwrap_or(Error::NotFound)),
+        })
+    }
+
+    /// Size of a file below the user root, `None` when it does not exist.
+    pub async fn stat(&self, user_id: &str, remote: &str) -> Result<Option<u64>> {
+        let resp = self
+            .dav(propfind(), user_id, remote)
+            .header("Depth", "0")
+            .header(header::CONTENT_TYPE, "application/xml")
+            .body(PROPFIND_LENGTH)
+            .send()
+            .await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let xml = check(resp).await?.text().await?;
+        Ok(Some(
+            dav_responses(&xml).first().and_then(|r| r.1).unwrap_or(0),
+        ))
+    }
+
     /// Creates `folder` and its parents (existing ones are fine).
-    async fn mkcol_all(&self, user_id: &str, folder: &str) -> Result<()> {
+    pub async fn mkcol_all(&self, user_id: &str, folder: &str) -> Result<()> {
         let mut path = String::new();
         for seg in folder.split('/').filter(|s| !s.is_empty()) {
             path.push('/');
             path.push_str(seg);
-            let resp = self
-                .dav(Method::from_bytes(b"MKCOL").unwrap(), user_id, &path)
-                .send()
-                .await?;
+            let resp = self.dav(mkcol(), user_id, &path).send().await?;
             // 405: already exists.
             if !resp.status().is_success() && resp.status() != StatusCode::METHOD_NOT_ALLOWED {
                 check(resp).await?;
@@ -386,23 +418,164 @@ impl TalkClient {
         Ok(())
     }
 
+    // --- chunked upload v2 (resumable, for large files) ------------------------------
+    //
+    // MKCOL uploads/{user}/{id} → PUT …/{n} per chunk → MOVE …/.file to the target.
+    // Chunks live on the server until assembled (or cleaned up after about a day), so an
+    // interrupted upload continues with the missing chunks only. The final MOVE is
+    // atomic: the file appears completely or not at all.
+
+    /// Starts a chunked upload session for the target `remote`. Existing sessions are fine.
+    pub async fn chunk_begin(&self, user_id: &str, upload_id: &str, remote: &str) -> Result<()> {
+        let resp = self
+            .uploads(mkcol(), user_id, upload_id, None)
+            .header("Destination", self.dav_url(user_id, remote))
+            .send()
+            .await?;
+        if !resp.status().is_success() && resp.status() != StatusCode::METHOD_NOT_ALLOWED {
+            check(resp).await?;
+        }
+        Ok(())
+    }
+
+    /// Chunks already on the server as (number, size); `None` when the session is gone.
+    pub async fn chunk_list(&self, user_id: &str, upload_id: &str) -> Result<Option<Vec<(u32, u64)>>> {
+        let resp = self
+            .uploads(propfind(), user_id, upload_id, None)
+            .header("Depth", "1")
+            .header(header::CONTENT_TYPE, "application/xml")
+            .body(PROPFIND_LENGTH)
+            .send()
+            .await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let xml = check(resp).await?.text().await?;
+        Ok(Some(
+            dav_responses(&xml)
+                .into_iter()
+                .filter_map(|(href, len)| {
+                    let n = href.trim_end_matches('/').rsplit('/').next()?.parse().ok()?;
+                    Some((n, len.unwrap_or(0)))
+                })
+                .collect(),
+        ))
+    }
+
+    /// Uploads bytes `offset..offset+len` of `local_path` as chunk number `n` (1-based).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn chunk_put(
+        &self,
+        user_id: &str,
+        upload_id: &str,
+        n: u32,
+        local_path: &str,
+        offset: u64,
+        len: u64,
+        remote: &str,
+        total: u64,
+        progress: Option<Progress>,
+    ) -> Result<()> {
+        let (mut file, _) = open_local(local_path).await?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| Error::LocalFile(format!("{local_path}: {e}")))?;
+        let rb = self
+            .uploads(Method::PUT, user_id, upload_id, Some(&n.to_string()))
+            .header(header::CONTENT_LENGTH, len)
+            .header("Destination", self.dav_url(user_id, remote))
+            .header("OC-Total-Length", total)
+            .timeout(UPLOAD_TIMEOUT);
+        let (body, watch) = file_body(file, len, progress);
+        check(stall_guard(rb.body(body).send(), watch).await?).await?;
+        fault(&format!("chunk{n}"))?;
+        Ok(())
+    }
+
+    /// Assembles the uploaded chunks into `remote`. `Exists` when the target appeared
+    /// meanwhile (pick another name and call again).
+    pub async fn chunk_finish(
+        &self,
+        user_id: &str,
+        upload_id: &str,
+        remote: &str,
+        total: u64,
+    ) -> Result<PutOutcome> {
+        let resp = self
+            .uploads(Method::from_bytes(b"MOVE").unwrap(), user_id, upload_id, Some(".file"))
+            .header("Destination", self.dav_url(user_id, remote))
+            .header("OC-Total-Length", total)
+            .header("Overwrite", "F")
+            // Assembling large files takes a while on the server.
+            .timeout(UPLOAD_TIMEOUT)
+            .send()
+            .await?;
+        Ok(match resp.status() {
+            s if s.is_success() => {
+                fault("move")?;
+                PutOutcome::Created
+            }
+            StatusCode::PRECONDITION_FAILED => PutOutcome::Exists,
+            StatusCode::CONFLICT => PutOutcome::ParentMissing,
+            _ => return Err(check(resp).await.err().unwrap_or(Error::NotFound)),
+        })
+    }
+
+    /// Drops a chunked upload session (best effort).
+    pub async fn chunk_abort(&self, user_id: &str, upload_id: &str) -> Result<()> {
+        let resp = self.uploads(Method::DELETE, user_id, upload_id, None).send().await?;
+        if resp.status() != StatusCode::NOT_FOUND {
+            check(resp).await?;
+        }
+        Ok(())
+    }
+
+    fn dav_url(&self, user_id: &str, path: &str) -> String {
+        format!(
+            "{}/remote.php/dav/files/{}{}",
+            self.account.server,
+            encode_segment(user_id),
+            encode_path(path)
+        )
+    }
+
     fn dav(&self, method: Method, user_id: &str, path: &str) -> RequestBuilder {
-        let encoded: String = path
-            .split('/')
-            .map(encode_segment)
-            .collect::<Vec<_>>()
-            .join("/");
         self.http
-            .request(
-                method,
-                format!(
-                    "{}/remote.php/dav/files/{}{}",
-                    self.account.server,
-                    encode_segment(user_id),
-                    encoded
-                ),
-            )
+            .request(method, self.dav_url(user_id, path))
             .basic_auth(&self.account.user, Some(&self.account.app_password))
+    }
+
+    fn uploads(&self, method: Method, user_id: &str, upload_id: &str, item: Option<&str>) -> RequestBuilder {
+        let mut url = format!(
+            "{}/remote.php/dav/uploads/{}/{}",
+            self.account.server,
+            encode_segment(user_id),
+            encode_segment(upload_id)
+        );
+        if let Some(i) = item {
+            url.push('/');
+            url.push_str(&encode_segment(i));
+        }
+        self.http
+            .request(method, url)
+            .basic_auth(&self.account.user, Some(&self.account.app_password))
+    }
+
+    /// Whether `path` (below the user root) is already shared into conversation `token`.
+    /// Used before re-posting a file whose share request may have reached the server.
+    pub async fn is_shared_to_room(&self, path: &str, token: &str) -> Result<bool> {
+        let rb = self
+            .request(Method::GET, "/ocs/v2.php/apps/files_sharing/api/v1/shares")
+            .query(&[("path", path), ("reshares", "false")]);
+        let shares = match self.ocs::<Vec<serde_json::Value>>(rb).await {
+            Ok((s, _)) => s,
+            Err(Error::NotFound) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        Ok(shares.iter().any(|s| {
+            s.get("share_type").and_then(|t| t.as_i64()) == Some(10)
+                && s.get("share_with").and_then(|w| w.as_str()) == Some(token)
+        }))
     }
 
     /// Shares an uploaded file into a conversation; Talk posts it as a file message.
@@ -433,7 +606,7 @@ impl TalkClient {
                 ("talkMetaData", serde_json::Value::Object(meta).to_string()),
             ]);
         self.ocs::<serde_json::Value>(rb).await?;
-        Ok(())
+        fault("share")
     }
 
     /// Server-rendered preview of a file, fitting into `width`×`height` (aspect kept).
@@ -476,6 +649,147 @@ pub fn new_reference_id() -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Result of a WebDAV write that must not overwrite anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutOutcome {
+    Created,
+    /// The target exists already (412).
+    Exists,
+    /// The parent folder is missing (404/409).
+    ParentMissing,
+}
+
+/// Upload progress callback: receives the number of bytes just handed to the network.
+pub type Progress = Arc<dyn Fn(u64) + Send + Sync>;
+
+/// Upper bound for one upload request; stalls are caught much earlier by [`stall_guard`].
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
+/// An upload whose body made no progress for this long is considered dead.
+const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// After the last byte, the server must answer within this time.
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
+
+const PROPFIND_LENGTH: &str = r#"<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getcontentlength/></d:prop></d:propfind>"#;
+
+fn propfind() -> Method {
+    Method::from_bytes(b"PROPFIND").unwrap()
+}
+
+fn mkcol() -> Method {
+    Method::from_bytes(b"MKCOL").unwrap()
+}
+
+async fn open_local(path: &str) -> Result<(tokio::fs::File, u64)> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| Error::LocalFile(format!("{path}: {e}")))?;
+    let len = file
+        .metadata()
+        .await
+        .map_err(|e| Error::LocalFile(format!("{path}: {e}")))?
+        .len();
+    Ok((file, len))
+}
+
+/// Tracks when the request body last made progress and whether it is complete.
+struct BodyWatch {
+    start: Instant,
+    /// Milliseconds since `start` of the last progress.
+    last: AtomicU64,
+    done: AtomicBool,
+}
+
+/// Streams `len` bytes of `file`, reporting progress, and returns a watch for [`stall_guard`].
+fn file_body(file: tokio::fs::File, len: u64, progress: Option<Progress>) -> (reqwest::Body, Arc<BodyWatch>) {
+    let watch = Arc::new(BodyWatch {
+        start: Instant::now(),
+        last: AtomicU64::new(0),
+        done: AtomicBool::new(len == 0),
+    });
+    let w = watch.clone();
+    let mut sent = 0u64;
+    let stream = ReaderStream::with_capacity(file.take(len), 64 * 1024).inspect(move |r| {
+        if let Ok(b) = r {
+            sent += b.len() as u64;
+            w.last.store(w.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+            if sent >= len {
+                w.done.store(true, Ordering::Relaxed);
+            }
+            if let Some(p) = &progress {
+                p(b.len() as u64);
+            }
+        }
+    });
+    (reqwest::Body::wrap_stream(stream), watch)
+}
+
+/// Fails an upload whose body stopped moving (dead connection: the OS would otherwise
+/// retransmit for many minutes) or whose response does not come after the last byte.
+async fn stall_guard(
+    send: impl Future<Output = reqwest::Result<Response>>,
+    watch: Arc<BodyWatch>,
+) -> Result<Response> {
+    tokio::pin!(send);
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        tokio::select! {
+            r = &mut send => return Ok(r?),
+            _ = tick.tick() => {
+                let idle = watch.start.elapsed().saturating_sub(Duration::from_millis(watch.last.load(Ordering::Relaxed)));
+                let limit = if watch.done.load(Ordering::Relaxed) { RESPONSE_TIMEOUT } else { STALL_TIMEOUT };
+                if idle > limit {
+                    return Err(Error::Decode(format!("upload stalled for {}s", idle.as_secs())));
+                }
+            }
+        }
+    }
+}
+
+/// Test hook (feature `faults`, used by talk-cli): `TALK_FAULTS=put,share` makes the
+/// named step fail once *after* the server processed it, as if the response was lost.
+#[cfg(feature = "faults")]
+fn fault(point: &str) -> Result<()> {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static FIRED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+    let wanted = std::env::var("TALK_FAULTS").unwrap_or_default();
+    if !wanted.split(',').any(|w| w.trim() == point) {
+        return Ok(());
+    }
+    let mut fired = FIRED.lock().unwrap();
+    if fired.get_or_insert_with(HashSet::new).insert(point.to_string()) {
+        tracing::warn!("injected fault after {point}");
+        eprintln!("!! injizierter Fehler nach '{point}' (Antwort verloren)");
+        return Err(Error::Decode(format!("injected fault after {point}")));
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "faults"))]
+#[inline(always)]
+fn fault(_point: &str) -> Result<()> {
+    Ok(())
+}
+
+/// Splits a WebDAV multistatus into (href, getcontentlength) pairs.
+fn dav_responses(xml: &str) -> Vec<(String, Option<u64>)> {
+    xml.split("response>")
+        .filter_map(|part| {
+            let href = tag_text(part, "href>")?;
+            let len = tag_text(part, "getcontentlength>").and_then(|t| t.trim().parse().ok());
+            Some((href.to_string(), len))
+        })
+        .collect()
+}
+
+/// Text after the first `…name>` opening tag up to the next `<`.
+fn tag_text<'a>(part: &'a str, name: &str) -> Option<&'a str> {
+    let start = part.find(name)? + name.len();
+    let rest = &part[start..];
+    let end = rest.find('<')?;
+    Some(&rest[..end])
+}
+
 /// `name.jpg` → `name (2).jpg` for `n == 2`; unchanged for `n == 1`.
 fn numbered_name(name: &str, n: u32) -> String {
     if n <= 1 {
@@ -485,6 +799,16 @@ fn numbered_name(name: &str, n: u32) -> String {
         Some(dot) if dot > 0 => format!("{} ({n}){}", &name[..dot], &name[dot..]),
         _ => format!("{name} ({n})"),
     }
+}
+
+/// `{folder}/{name}` with the `n`-th numbered variant of `name`.
+pub fn remote_path(folder: &str, name: &str, n: u32) -> String {
+    let folder = folder.trim_end_matches('/');
+    format!("{folder}/{}", numbered_name(name, n))
+}
+
+fn encode_path(path: &str) -> String {
+    path.split('/').map(encode_segment).collect::<Vec<_>>().join("/")
 }
 
 /// Percent-encodes one URL path segment (everything except RFC 3986 unreserved characters).
@@ -510,6 +834,19 @@ mod tests {
         assert_eq!(numbered_name("IMG_1.jpg", 3), "IMG_1 (3).jpg");
         assert_eq!(numbered_name("README", 2), "README (2)");
         assert_eq!(encode_segment("Foto vom Mai ü.jpg"), "Foto%20vom%20Mai%20%C3%BC.jpg");
+        assert_eq!(remote_path("/Talk", "a.jpg", 2), "/Talk/a (2).jpg");
+        assert_eq!(remote_path("/", "a.jpg", 1), "/a.jpg");
+    }
+
+    #[test]
+    fn parses_multistatus() {
+        let xml = r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns"><d:response><d:href>/remote.php/dav/uploads/bot/abc/</d:href><d:propstat><d:prop/><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/remote.php/dav/uploads/bot/abc/1</d:href><d:propstat><d:prop><d:getcontentlength>10485760</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/remote.php/dav/uploads/bot/abc/2</d:href><d:propstat><d:prop><d:getcontentlength>42</d:getcontentlength></d:prop></d:propstat></d:response></d:multistatus>"#;
+        let r = dav_responses(xml);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[1], ("/remote.php/dav/uploads/bot/abc/1".to_string(), Some(10485760)));
+        assert_eq!(r[2].1, Some(42));
+        assert_eq!(r[0].1, None);
     }
 }
 
@@ -534,6 +871,10 @@ async fn check(resp: Response) -> Result<Response> {
     Err(match status {
         StatusCode::UNAUTHORIZED => Error::Unauthorized,
         StatusCode::NOT_FOUND => Error::NotFound,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => Error::RetryLater {
+            status: status.as_u16(),
+            after_secs: header_str(resp.headers(), "retry-after").and_then(|v| v.trim().parse().ok()),
+        },
         _ => Error::Http {
             status: status.as_u16(),
             message: resp

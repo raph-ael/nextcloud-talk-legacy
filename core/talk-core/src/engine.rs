@@ -9,12 +9,15 @@
 //! signaling connection replacing the room-list polling interval.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
+
+use crate::outbox::{Outbox, PendingMessage};
 
 use crate::client::TalkClient;
 use crate::error::{Error, Result};
@@ -75,6 +78,12 @@ pub enum Event {
     Connection { online: bool },
     /// App password was revoked: the platform must sign out.
     AuthFailed,
+    /// The pending (not yet delivered or failed) messages of a conversation changed.
+    /// Emitted for every conversation, open or not.
+    OutboxChanged {
+        token: String,
+        items: Vec<PendingMessage>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,7 +145,7 @@ pub struct MessageView {
     pub attachment: Option<FileAttachment>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyPreview {
     pub id: i64,
@@ -169,25 +178,41 @@ struct State {
 }
 
 pub struct Engine {
-    client: TalkClient,
-    sink: Arc<dyn EventSink>,
+    pub(crate) client: TalkClient,
+    pub(crate) sink: Arc<dyn EventSink>,
     me: RwLock<String>,
+    /// `me` came from the server (the login name may differ from the user id).
+    me_resolved: AtomicBool,
     online: AtomicBool,
     state: Mutex<State>,
     attachment_folder: RwLock<Option<String>>,
+    pub(crate) outbox: Outbox,
+    /// Runtime of `start`, for spawning from synchronous calls.
+    pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
+    weak: Weak<Self>,
 }
 
 impl Engine {
-    pub fn new(client: TalkClient, sink: Arc<dyn EventSink>) -> Arc<Self> {
+    /// `data_dir`: where the outbox keeps unsent messages across restarts (an app-private
+    /// directory). Without one, unsent messages live in memory only.
+    pub fn new(client: TalkClient, sink: Arc<dyn EventSink>, data_dir: Option<PathBuf>) -> Arc<Self> {
         let me = client.account().user.clone();
-        Arc::new(Self {
+        Arc::new_cyclic(|weak| Self {
             client,
             sink,
             me: RwLock::new(me),
+            me_resolved: AtomicBool::new(false),
             online: AtomicBool::new(true),
             state: Mutex::new(State::default()),
             attachment_folder: RwLock::new(None),
+            outbox: Outbox::open(data_dir.as_deref()),
+            runtime: OnceLock::new(),
+            weak: weak.clone(),
         })
+    }
+
+    pub(crate) fn weak_self(&self) -> Weak<Self> {
+        self.weak.clone()
     }
 
     pub fn client(&self) -> &TalkClient {
@@ -196,11 +221,22 @@ impl Engine {
 
     /// Resolves the user id, loads the conversation list and starts background refreshes.
     /// Must be called inside a tokio runtime.
+    /// Also resumes unsent messages of an earlier run. When offline, background sync and
+    /// the outbox start anyway and catch up once the server is reachable.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        let _ = self.runtime.set(tokio::runtime::Handle::current());
+        self.spawn_outbox();
         // User id and room list in parallel: saves a full round trip on cold start.
         let (user, rooms) = tokio::join!(self.client.current_user(), self.client.rooms(None, false));
-        let user = self.guard(user)?;
-        *self.me.write().unwrap() = user.id;
+        let user = match self.guard(user) {
+            Ok(u) => {
+                *self.me.write().unwrap() = u.id;
+                self.me_resolved.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(Error::Unauthorized) => return Err(Error::Unauthorized),
+            Err(e) => Err(e),
+        };
         let first = self.guard(rooms).map(|batch| self.apply_rooms(batch, true));
 
         let weak = Arc::downgrade(self);
@@ -208,6 +244,9 @@ impl Engine {
             loop {
                 tokio::time::sleep(ROOMS_INTERVAL).await;
                 let Some(engine) = weak.upgrade() else { break };
+                if engine.ensure_user().await.is_err() {
+                    continue;
+                }
                 let full = engine
                     .state
                     .lock()
@@ -222,11 +261,23 @@ impl Engine {
         if let Some(old) = self.state.lock().unwrap().rooms_task.replace(task) {
             old.abort();
         }
-        first
+        user.and(first)
     }
 
-    /// Stops all background work.
+    /// Resolves the real user id once (needed for WebDAV paths and own-message detection).
+    pub(crate) async fn ensure_user(&self) -> Result<()> {
+        if self.me_resolved.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let user = self.guard(self.client.current_user().await)?;
+        *self.me.write().unwrap() = user.id;
+        self.me_resolved.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Stops all background work (unsent messages stay stored for the next start).
     pub fn shutdown(&self) {
+        self.outbox.abort_all();
         let mut st = self.state.lock().unwrap();
         if let Some(t) = st.rooms_task.take() {
             t.abort();
@@ -303,6 +354,11 @@ impl Engine {
         }
     }
 
+    /// Whether the chat is being live-polled (its echoes will arrive).
+    pub(crate) fn chat_open(&self, token: &str) -> bool {
+        self.state.lock().unwrap().chats.contains_key(token)
+    }
+
     /// Messages older than `before_id`.
     pub async fn load_older(&self, token: &str, before_id: i64) -> Result<ChatPage> {
         let batch = self.guard(self.client.history(token, Some(before_id), PAGE_SIZE).await)?;
@@ -324,10 +380,15 @@ impl Engine {
                 .await,
         )?;
         let view = self.view(&msg);
+        self.update_room_after_send(token, msg);
+        Ok(view)
+    }
+
+    fn update_room_after_send(&self, token: &str, msg: ChatMessage) {
         let rooms = {
             let mut st = self.state.lock().unwrap();
             st.rooms.get_mut(token).map(|room| {
-                room.last_activity = msg.timestamp;
+                room.last_activity = room.last_activity.max(msg.timestamp);
                 room.last_message = Some(msg);
                 room.unread_messages = 0;
                 room.unread_mention = false;
@@ -335,7 +396,15 @@ impl Engine {
             self.sorted_views(&st.rooms)
         };
         self.sink.emit(Event::RoomsChanged { rooms });
-        Ok(view)
+    }
+
+    /// A message we sent from the outbox: show it in the chat and the room list.
+    pub(crate) fn note_own_message(&self, token: &str, msg: ChatMessage) {
+        self.sink.emit(Event::MessagesAdded {
+            token: token.to_string(),
+            messages: vec![self.view(&msg)],
+        });
+        self.update_room_after_send(token, msg);
     }
 
     pub async fn mark_read(&self, token: &str, message_id: i64) -> Result<()> {
@@ -359,6 +428,7 @@ impl Engine {
     /// Signs out on the server; call `shutdown` afterwards.
     pub async fn logout(&self) -> Result<()> {
         self.shutdown();
+        self.outbox.clear();
         self.client.revoke_app_password().await
     }
 
@@ -399,7 +469,7 @@ impl Engine {
         self.client.file_preview(file_id, width, height).await
     }
 
-    async fn attachment_folder(&self) -> Result<String> {
+    pub(crate) async fn attachment_folder(&self) -> Result<String> {
         if let Some(f) = self.attachment_folder.read().unwrap().clone() {
             return Ok(f);
         }
@@ -411,7 +481,7 @@ impl Engine {
     // --- internals ---------------------------------------------------------------
 
     /// Tracks connectivity and auth state for every server call.
-    fn guard<T>(&self, r: Result<T>) -> Result<T> {
+    pub(crate) fn guard<T>(&self, r: Result<T>) -> Result<T> {
         match &r {
             Ok(_) => self.set_online(true),
             Err(Error::Unauthorized) => self.sink.emit(Event::AuthFailed),
@@ -421,9 +491,16 @@ impl Engine {
         r
     }
 
+    pub(crate) fn is_online(&self) -> bool {
+        self.online.load(Ordering::Relaxed)
+    }
+
     fn set_online(&self, online: bool) {
         if self.online.swap(online, Ordering::Relaxed) != online {
             self.sink.emit(Event::Connection { online });
+            if online {
+                self.outbox.wake();
+            }
         }
     }
 
@@ -551,10 +628,13 @@ impl Engine {
         if added.is_empty() {
             return;
         }
+        let refs: Vec<String> = added.iter().map(|m| m.reference_id.clone()).collect();
         self.sink.emit(Event::MessagesAdded {
             token: token.to_string(),
             messages: added,
         });
+        // After the message itself, so the pending bubble is replaced without a gap.
+        self.outbox_echo(token, &refs.iter().map(String::as_str).collect::<Vec<_>>());
         if let Some(m) = latest {
             let rooms = {
                 let mut st = self.state.lock().unwrap();

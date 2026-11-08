@@ -5,11 +5,15 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use talk_core::{Account, ChatMessage, LoginFlow, Platform, TalkClient, new_reference_id};
+use talk_core::{
+    Account, ChatMessage, Engine, Event, EventSink, LoginFlow, Platform, TalkClient,
+    new_reference_id,
+};
 
 #[derive(Parser)]
 #[command(version, about = "Talk core test CLI")]
@@ -20,6 +24,9 @@ struct Cli {
     /// Path to .env (default: search upwards from the current directory)
     #[arg(long, global = true)]
     env_file: Option<PathBuf>,
+    /// Outbox directory (default: ~/.cache/talk-cli/<account>)
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -57,11 +64,31 @@ enum Cmd {
     },
     /// Show signaling server, STUN/TURN (credentials redacted)
     Signaling,
+    /// Send through the persistent outbox (retries, resumes after a kill) and wait until
+    /// delivered. Fault injection: TALK_FAULTS=put,chunk2,move,share,send
+    Enqueue {
+        token: String,
+        /// Text message (or caption with --file)
+        #[arg(short, long)]
+        text: Option<String>,
+        /// File to send (copied into the outbox first)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+    /// Resume the outbox of an earlier (killed) run until everything is delivered
+    OutboxRun,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "talk_core=info".into()),
+        )
+        .with_writer(std::io::stderr)
+        .init();
 
     if let Cmd::Login { server } = &cli.cmd {
         let flow = LoginFlow::start(server, Platform::Cli).await?;
@@ -79,8 +106,12 @@ async fn main() -> Result<()> {
 
     let client = TalkClient::new(load_account(&cli)?, Platform::Cli)?;
 
+    if let Cmd::Enqueue { .. } | Cmd::OutboxRun = &cli.cmd {
+        return run_outbox(&cli, client).await;
+    }
+
     match cli.cmd {
-        Cmd::Login { .. } => unreachable!(),
+        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun => unreachable!(),
         Cmd::Rooms { json } => {
             let t = Instant::now();
             let mut batch = client.rooms(None, true).await?;
@@ -184,6 +215,116 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Prints outbox state changes (deduplicated per message).
+struct PrintSink {
+    last: Mutex<HashMap<String, String>>,
+}
+
+impl EventSink for PrintSink {
+    fn emit(&self, event: Event) {
+        let Event::OutboxChanged { items, .. } = event else { return };
+        let mut last = self.last.lock().unwrap();
+        for p in items {
+            let r = &p.message.reference_id[..8];
+            let what = match &p.message.attachment {
+                Some(a) => format!("Datei {}", a.name),
+                None => format!("Text \"{}\"", one_line(&p.message.text, 30)),
+            };
+            let progress = if p.progress >= 0.0 {
+                format!(" {:>3.0} %", p.progress * 100.0)
+            } else {
+                String::new()
+            };
+            let line = format!("{:?}{progress}{}", p.state, p.error.map(|e| format!(" {e:?}")).unwrap_or_default());
+            if last.get(r) != Some(&line) {
+                eprintln!("[{r}] {what}: {line}");
+                last.insert(r.to_string(), line);
+            }
+        }
+    }
+}
+
+async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
+    let dir = match &cli.data_dir {
+        Some(d) => d.clone(),
+        None => PathBuf::from(std::env::var("HOME")?)
+            .join(".cache/talk-cli")
+            .join(&cli.account),
+    };
+    let engine = Engine::new(
+        client,
+        Arc::new(PrintSink {
+            last: Mutex::default(),
+        }),
+        Some(dir.clone()),
+    );
+    let t = Instant::now();
+    if let Err(e) = engine.start().await {
+        eprintln!("Start offline ({e}), Outbox läuft trotzdem");
+    }
+    if let Cmd::Enqueue { token, text, file } = &cli.cmd {
+        let text = text.clone().unwrap_or_default();
+        match file {
+            Some(path) => {
+                // The outbox takes ownership of the file: hand it a copy.
+                let staging = dir.join("staging");
+                std::fs::create_dir_all(&staging)?;
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let copy = staging.join(format!("{}-{name}", new_reference_id()));
+                std::fs::copy(path, &copy).with_context(|| format!("{}", path.display()))?;
+                engine.enqueue_file(
+                    token,
+                    &copy.to_string_lossy(),
+                    &name,
+                    mime_for(&name),
+                    0,
+                    0,
+                    &text,
+                    None,
+                    &new_reference_id(),
+                )?;
+            }
+            None if !text.is_empty() => {
+                engine.enqueue_text(token, &text, None, &new_reference_id());
+            }
+            None => bail!("--text oder --file angeben"),
+        }
+    }
+    loop {
+        let idle = engine.wait_outbox_idle().await;
+        if idle.waiting == 0 {
+            eprintln!(
+                "Outbox leer nach {:?}{}",
+                t.elapsed(),
+                if idle.failed > 0 {
+                    format!(", {} fehlgeschlagen", idle.failed)
+                } else {
+                    String::new()
+                }
+            );
+            break;
+        }
+        // Everything waits for the network: check again shortly.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    engine.shutdown();
+    Ok(())
+}
+
+fn mime_for(name: &str) -> &'static str {
+    match name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("txt") => "text/plain",
+        Some("pdf") => "application/pdf",
+        _ => "application/octet-stream",
+    }
 }
 
 fn print_message(m: &ChatMessage) {

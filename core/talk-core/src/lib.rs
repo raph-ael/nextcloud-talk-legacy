@@ -13,12 +13,14 @@ pub mod engine;
 pub mod error;
 pub mod login;
 pub mod models;
+pub mod outbox;
 
 pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };
-pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, RoomView};
+pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReplyPreview, RoomView};
 pub use error::{Error, Result};
+pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
 pub use login::{LoginFlow, normalize_server};
 pub use models::{ChatMessage, FileAttachment, IceServer, LoginCredentials, Room, RoomType, SignalingSettings};
 

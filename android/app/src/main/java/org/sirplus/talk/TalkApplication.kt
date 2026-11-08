@@ -8,6 +8,7 @@ class TalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Notifications.createChannels(this)
         sessions = SessionManager(this)
     }
 }

@@ -208,13 +208,105 @@ pub enum MessageKind {
     Deleted,
 }
 
-#[derive(uniffi::Record)]
+#[derive(uniffi::Record, Clone)]
 pub struct ReplyPreview {
     pub id: i64,
     pub author: String,
     pub text: String,
     pub is_own: bool,
     pub attachment: Option<FileAttachment>,
+}
+
+impl From<ReplyPreview> for core::ReplyPreview {
+    fn from(r: ReplyPreview) -> Self {
+        Self {
+            id: r.id,
+            author: r.author,
+            text: r.text,
+            is_own: r.is_own,
+            attachment: r.attachment.map(|a| core::FileAttachment {
+                id: a.id,
+                name: a.name,
+                path: a.path,
+                mimetype: a.mimetype,
+                size: a.size,
+                width: a.width,
+                height: a.height,
+                preview_available: a.preview_available,
+                link: a.link,
+                voice_message: a.voice_message,
+            }),
+        }
+    }
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PendingState {
+    Sending,
+    /// Waiting for the network or the server; retried automatically.
+    Waiting,
+    Failed,
+}
+
+/// Why a message could not be delivered.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SendError {
+    Expired,
+    Forbidden,
+    NotFound,
+    TooLarge,
+    QuotaExceeded,
+    FileMissing,
+    Rejected,
+}
+
+impl From<core::SendError> for SendError {
+    fn from(e: core::SendError) -> Self {
+        match e {
+            core::SendError::Expired => Self::Expired,
+            core::SendError::Forbidden => Self::Forbidden,
+            core::SendError::NotFound => Self::NotFound,
+            core::SendError::TooLarge => Self::TooLarge,
+            core::SendError::QuotaExceeded => Self::QuotaExceeded,
+            core::SendError::FileMissing => Self::FileMissing,
+            core::SendError::Rejected => Self::Rejected,
+        }
+    }
+}
+
+/// A message in the outbox: shown as a pending bubble until delivered.
+#[derive(uniffi::Record)]
+pub struct PendingMessage {
+    pub message: MessageView,
+    pub state: PendingState,
+    /// Upload progress 0..1, negative when not uploading.
+    pub progress: f32,
+    pub error: Option<SendError>,
+    /// Local copy of the attachment.
+    pub local_path: Option<String>,
+}
+
+impl From<core::PendingMessage> for PendingMessage {
+    fn from(p: core::PendingMessage) -> Self {
+        Self {
+            message: p.message.into(),
+            state: match p.state {
+                core::PendingState::Sending => PendingState::Sending,
+                core::PendingState::Waiting => PendingState::Waiting,
+                core::PendingState::Failed => PendingState::Failed,
+            },
+            progress: p.progress,
+            error: p.error.map(Into::into),
+            local_path: p.local_path,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct OutboxIdle {
+    /// Items waiting for the network or the server.
+    pub waiting: u32,
+    pub failed: u32,
 }
 
 #[derive(uniffi::Record)]
@@ -304,6 +396,8 @@ pub enum CoreEvent {
     ReadStatus { token: String, last_common_read: i64 },
     Connection { online: bool },
     AuthFailed,
+    /// Pending messages of a conversation changed (any conversation, open or not).
+    OutboxChanged { token: String, items: Vec<PendingMessage> },
 }
 
 impl From<core::Event> for CoreEvent {
@@ -329,6 +423,10 @@ impl From<core::Event> for CoreEvent {
             },
             core::Event::Connection { online } => Self::Connection { online },
             core::Event::AuthFailed => Self::AuthFailed,
+            core::Event::OutboxChanged { token, items } => Self::OutboxChanged {
+                token,
+                items: items.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
@@ -369,6 +467,7 @@ impl TalkSession {
         app_password: String,
         platform: ClientPlatform,
         listener: Arc<dyn CoreListener>,
+        data_dir: Option<String>,
     ) -> Result<Arc<Self>, CoreError> {
         let account = core::Account {
             server,
@@ -376,7 +475,11 @@ impl TalkSession {
             app_password,
         };
         let client = core::TalkClient::new(account, platform.into())?;
-        let engine = core::Engine::new(client, Arc::new(ListenerSink(listener)));
+        let engine = core::Engine::new(
+            client,
+            Arc::new(ListenerSink(listener)),
+            data_dir.map(Into::into),
+        );
         Ok(Arc::new(Self { engine }))
     }
 
@@ -463,6 +566,91 @@ impl TalkSession {
                 &reference_id,
             )
             .await?)
+    }
+
+    // --- outbox: reliable sending ---------------------------------------------------
+
+    /// Queues a text message; delivered in the background (retried, survives restarts).
+    /// The pending bubble also arrives as `OutboxChanged`.
+    pub fn enqueue_text(
+        &self,
+        token: String,
+        text: String,
+        reply_to: Option<ReplyPreview>,
+        reference_id: String,
+    ) -> PendingMessage {
+        self.engine
+            .enqueue_text(&token, &text, reply_to.map(Into::into), &reference_id)
+            .into()
+    }
+
+    /// Queues a file. `local_path` is moved into the outbox; don't use it afterwards.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enqueue_file(
+        &self,
+        token: String,
+        local_path: String,
+        name: String,
+        mime: String,
+        width: i64,
+        height: i64,
+        caption: String,
+        reply_to: Option<ReplyPreview>,
+        reference_id: String,
+    ) -> Result<PendingMessage, CoreError> {
+        Ok(self
+            .engine
+            .enqueue_file(
+                &token,
+                &local_path,
+                &name,
+                &mime,
+                width,
+                height,
+                &caption,
+                reply_to.map(Into::into),
+                &reference_id,
+            )?
+            .into())
+    }
+
+    /// Pending and failed messages of a conversation, in send order.
+    pub fn pending(&self, token: String) -> Vec<PendingMessage> {
+        self.engine.pending(&token).into_iter().map(Into::into).collect()
+    }
+
+    /// Sends a failed message again, or retries a waiting one right now.
+    pub fn retry_send(&self, reference_id: String) {
+        self.engine.retry_send(&reference_id);
+    }
+
+    /// Drops a pending or failed message.
+    pub fn discard(&self, reference_id: String) {
+        self.engine.discard(&reference_id);
+    }
+
+    /// Call when connectivity returns or changes: waiting messages are retried at once.
+    pub fn network_changed(&self) {
+        self.engine.network_changed();
+    }
+
+    /// Number of messages still to deliver (failed ones excluded).
+    pub fn outbox_unsent(&self) -> u32 {
+        self.engine.outbox_unsent()
+    }
+
+    /// Bytes of attachments still to upload.
+    pub fn outbox_upload_bytes(&self) -> u64 {
+        self.engine.outbox_upload_bytes()
+    }
+
+    /// Resolves once nothing is actively being sent (empty, or only waiting/failed items).
+    pub async fn wait_outbox_idle(&self) -> OutboxIdle {
+        let idle = self.engine.wait_outbox_idle().await;
+        OutboxIdle {
+            waiting: idle.waiting,
+            failed: idle.failed,
+        }
     }
 
     /// Preview image (JPEG/PNG bytes) of a shared file, fitting into `width`×`height`.

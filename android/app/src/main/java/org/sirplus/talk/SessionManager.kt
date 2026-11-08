@@ -8,7 +8,11 @@ import android.util.LruCache
 import android.widget.Toast
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import android.net.ConnectivityManager
+import android.net.Network
+import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,19 +35,30 @@ import uniffi.talk_ffi.FileAttachment
 import uniffi.talk_ffi.LoginFlow
 import uniffi.talk_ffi.MessageKind
 import uniffi.talk_ffi.MessageView
+import uniffi.talk_ffi.OutboxIdle
+import uniffi.talk_ffi.PendingMessage
+import uniffi.talk_ffi.PendingState
 import uniffi.talk_ffi.ReplyPreview
 import uniffi.talk_ffi.RoomView
+import uniffi.talk_ffi.SendError
 import uniffi.talk_ffi.TalkSession
 import uniffi.talk_ffi.newReferenceId
 
 enum class SessionState { LOADING, LOGGED_OUT, READY }
-enum class SendStatus { SENDING, FAILED }
+enum class SendStatus { SENDING, WAITING, FAILED }
 
 /**
- * A message as shown in the UI; optimistic messages carry a [status], optimistic file
- * messages also the [localFile] being uploaded.
+ * A message as shown in the UI. Messages from the outbox (not yet delivered) carry a
+ * [status], file messages also their [localFile], upload [progress] (0..1, negative when
+ * unknown) and, once failed, the [error].
  */
-data class UiMessage(val msg: MessageView, val status: SendStatus? = null, val localFile: String? = null) {
+data class UiMessage(
+    val msg: MessageView,
+    val status: SendStatus? = null,
+    val localFile: String? = null,
+    val progress: Float = -1f,
+    val error: SendError? = null,
+) {
     val key: String get() = if (status != null) msg.referenceId else msg.id.toString()
 }
 
@@ -85,23 +100,55 @@ class SessionManager(private val context: Context) : CoreListener {
     }
     /** Width/height of previews seen in this process, so bubbles keep their size on re-layout. */
     private val aspects = ConcurrentHashMap<String, Float>()
-    /** Decoded local images of optimistic sends, by reference id, until the server echo arrives. */
+    /** Decoded local images of pending sends, by reference id, until the server echo arrives. */
     private val localPreviews = ConcurrentHashMap<String, ImageBitmap>()
+    /** Failed sends already announced by a notification. */
+    private val notifiedFailures = ConcurrentHashMap.newKeySet<String>()
 
     init {
         val account = store.load()
         if (account == null) _state.update { it.copy(session = SessionState.LOGGED_OUT) }
         else startSession(account)
+        // Network back: retry waiting messages right away instead of after the backoff.
+        context.getSystemService(ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    session?.networkChanged()
+                }
+            },
+        )
+        // Images prepared but never handed to the outbox (process died in between).
+        scope.launch(Dispatchers.IO) {
+            val cutoff = System.currentTimeMillis() - 3_600_000
+            File(context.noBackupFilesDir, "talk/staging").listFiles()
+                ?.filter { it.lastModified() < cutoff }
+                ?.forEach { it.delete() }
+        }
+        // Leaving the app with unsent messages: hand them to the background worker.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStop(owner: LifecycleOwner) = scheduleOutboxIfNeeded()
+        })
+    }
+
+    /** The running session, for the background worker (`null` when signed out). */
+    fun currentSession(): TalkSession? = session
+
+    private fun scheduleOutboxIfNeeded() {
+        val s = session ?: return
+        if (s.outboxUnsent() > 0u) OutboxWorker.schedule(context)
     }
 
     // --- session ------------------------------------------------------------------
 
     private fun startSession(account: StoredAccount) {
-        val s = TalkSession(account.server, account.loginName, account.appPassword, ClientPlatform.ANDROID, this)
+        val dataDir = File(context.noBackupFilesDir, "talk").path
+        val s = TalkSession(account.server, account.loginName, account.appPassword, ClientPlatform.ANDROID, this, dataDir)
         session = s
         _state.update {
             it.copy(session = SessionState.READY, server = account.server, user = account.loginName)
         }
+        // Unsent messages of an earlier run continue in the background worker as well.
+        scheduleOutboxIfNeeded()
         scope.launch {
             try {
                 s.start()
@@ -149,6 +196,11 @@ class SessionManager(private val context: Context) : CoreListener {
         if (revoke) runCatching { s.logout() } else s.shutdown()
         s.close()
         store.clear()
+        // Unsent messages belong to this account: never deliver them under another one.
+        withContext(Dispatchers.IO) { File(context.noBackupFilesDir, "talk").deleteRecursively() }
+        OutboxWorker.cancel(context)
+        localPreviews.clear()
+        notifiedFailures.clear()
         avatars.evictAll()
         previews.evictAll()
         _state.value = UiState(session = SessionState.LOGGED_OUT)
@@ -172,6 +224,40 @@ class SessionManager(private val context: Context) : CoreListener {
             }
             is CoreEvent.Connection -> _state.update { it.copy(online = event.online) }
             CoreEvent.AuthFailed -> scope.launch { signOut(revoke = false) }
+            is CoreEvent.OutboxChanged -> {
+                updateChat(event.token) { c -> c.copy(messages = withPending(c.messages, event.items)) }
+                announceFailures(event.token, event.items)
+            }
+        }
+    }
+
+    /** Replaces the pending bubbles of a chat by the outbox state. */
+    private fun withPending(messages: List<UiMessage>, pending: List<PendingMessage>): List<UiMessage> =
+        messages.filter { it.status == null } + pending.map { it.toUi() }
+
+    private fun PendingMessage.toUi() = UiMessage(
+        msg = message,
+        status = when (state) {
+            PendingState.SENDING -> SendStatus.SENDING
+            PendingState.WAITING -> SendStatus.WAITING
+            PendingState.FAILED -> SendStatus.FAILED
+        },
+        localFile = localPath,
+        progress = progress,
+        error = error,
+    )
+
+    /** Notification for messages that finally failed while the user was not looking. */
+    private fun announceFailures(token: String, items: List<PendingMessage>) {
+        val failedNow = items.filter { it.state == PendingState.FAILED }.map { it.message.referenceId }
+        val fresh = failedNow.filter { notifiedFailures.add(it) }
+        if (fresh.isEmpty()) return
+        val st = _state.value
+        val visible = st.activeToken == token &&
+            ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        if (!visible) {
+            val room = st.rooms.find { it.token == token }?.name ?: "Unterhaltung"
+            Notifications.sendFailed(context, token, room)
         }
     }
 
@@ -202,7 +288,14 @@ class SessionManager(private val context: Context) : CoreListener {
         previous?.let { s.closeChat(it) }
         _state.update { st ->
             val chat = st.chats[token] ?: ChatState()
-            st.copy(activeToken = token, chats = st.chats + (token to chat.copy(loading = chat.messages.isEmpty())))
+            st.copy(
+                activeToken = token,
+                chats = st.chats + (token to chat.copy(
+                    loading = chat.messages.isEmpty(),
+                    // Unsent messages survive restarts: show them from the first frame.
+                    messages = withPending(chat.messages, s.pending(token)),
+                )),
+            )
         }
         scope.launch {
             try {
@@ -253,73 +346,41 @@ class SessionManager(private val context: Context) : CoreListener {
         }
     }
 
+    /** Queues a text message in the outbox; it shows up at once and is delivered reliably. */
     fun send(token: String, text: String, replyTo: MessageView?) {
-        val optimistic = MessageView(
-            id = -System.currentTimeMillis(),
-            token = token,
-            actorType = "users",
-            actorId = "",
-            author = "",
-            timestamp = System.currentTimeMillis() / 1000,
-            text = text,
-            kind = MessageKind.TEXT,
-            systemMessage = "",
-            referenceId = newReferenceId(),
-            isOwn = true,
-            edited = false,
-            markdown = true,
-            replyTo = replyTo?.let { ReplyPreview(it.id, it.author, it.text, it.isOwn, it.attachment) },
-            reactions = emptyMap(),
-            reactionsSelf = emptyList(),
-            attachment = null,
-        )
-        updateChat(token) { it.copy(messages = it.messages + UiMessage(optimistic, SendStatus.SENDING)) }
-        deliver(token, optimistic)
+        val s = session ?: return
+        s.enqueueText(token, text, replyTo?.toReply(), newReferenceId())
+        OutboxWorker.schedule(context)
     }
 
+    private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment)
+
     /**
-     * Sends a prepared image (see [org.sirplus.talk.media.prepareImage]) with an optional caption.
-     * Shows it immediately from the local file; the server echo takes over without flicker.
+     * Sends a prepared image (see [org.sirplus.talk.media.prepareImage]) with an optional
+     * caption. The outbox takes over the file; the bubble shows the local image until
+     * the server message replaces it without flicker.
      */
     fun sendImage(token: String, image: PreparedImage, caption: String, replyTo: MessageView?) {
+        val s = session ?: return
         val ref = newReferenceId()
-        val optimistic = MessageView(
-            id = -System.currentTimeMillis(),
-            token = token,
-            actorType = "users",
-            actorId = "",
-            author = "",
-            timestamp = System.currentTimeMillis() / 1000,
-            text = caption.trim(),
-            kind = MessageKind.TEXT,
-            systemMessage = "",
-            referenceId = ref,
-            isOwn = true,
-            edited = false,
-            markdown = true,
-            replyTo = replyTo?.let { ReplyPreview(it.id, it.author, it.text, it.isOwn, it.attachment) },
-            reactions = emptyMap(),
-            reactionsSelf = emptyList(),
-            attachment = FileAttachment(
-                id = "",
-                name = image.name,
-                path = "",
-                mimetype = "image/jpeg",
-                size = image.file.length(),
-                width = image.width.toLong(),
-                height = image.height.toLong(),
-                previewAvailable = true,
-                link = "",
-                voiceMessage = false,
-            ),
-        )
         scope.launch {
-            // Decode first so the optimistic bubble shows the photo from its first frame.
+            // Decode first so the pending bubble shows the photo from its first frame.
             withContext(Dispatchers.IO) { decodePreview(image.file) }?.let { localPreviews[ref] = it }
-            updateChat(token) {
-                it.copy(messages = it.messages + UiMessage(optimistic, SendStatus.SENDING, image.file.path))
+            val queued = withContext(Dispatchers.IO) {
+                runCatching {
+                    s.enqueueFile(
+                        token, image.file.path, image.name, "image/jpeg",
+                        image.width.toLong(), image.height.toLong(), caption.trim(), replyTo?.toReply(), ref,
+                    )
+                }
             }
-            deliverFile(token, optimistic, image.file.path)
+            if (queued.isFailure) {
+                localPreviews.remove(ref)
+                image.file.delete()
+                Toast.makeText(context, "Bild konnte nicht gespeichert werden", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            OutboxWorker.schedule(context)
         }
     }
 
@@ -342,23 +403,17 @@ class SessionManager(private val context: Context) : CoreListener {
         }
     }
 
+    /** Sends a failed message again (or a waiting one right now). */
     fun retry(token: String, msg: MessageView) {
-        val local = _state.value.chats[token]?.messages?.find { it.msg.referenceId == msg.referenceId }?.localFile
-        updateChat(token) { c ->
-            c.copy(messages = c.messages.map { if (it.msg.referenceId == msg.referenceId) it.copy(status = SendStatus.SENDING) else it })
-        }
-        if (local != null) scope.launch { deliverFile(token, msg, local) } else deliver(token, msg)
+        notifiedFailures.remove(msg.referenceId)
+        session?.retrySend(msg.referenceId)
+        OutboxWorker.schedule(context)
     }
 
-    private suspend fun deliverFile(token: String, msg: MessageView, path: String) {
-        val s = session ?: return
-        val a = msg.attachment ?: return
-        try {
-            s.sendFile(token, path, a.name, a.mimetype, msg.text.ifEmpty { null }, msg.replyTo?.id, msg.referenceId)
-            // The message itself arrives through the live poll (matched by reference id).
-        } catch (e: CoreException) {
-            markFailed(token, msg.referenceId)
-        }
+    /** Drops a pending or failed message. */
+    fun discard(msg: MessageView) {
+        localPreviews.remove(msg.referenceId)
+        session?.discard(msg.referenceId)
     }
 
     /** Hands the decoded local image to the server message so its bubble does not reload. */
@@ -369,31 +424,11 @@ class SessionManager(private val context: Context) : CoreListener {
             val id = m.attachment?.id ?: continue
             previews.put(id, bitmap)
             aspects[id] = bitmap.width.toFloat() / bitmap.height
-            // The upload copy is no longer needed once the server has the file.
-            _state.value.chats[m.token]?.messages?.find { it.msg.referenceId == m.referenceId }?.localFile
-                ?.let { runCatching { File(it).delete() } }
         }
     }
 
-    private fun markFailed(token: String, referenceId: String) {
-        updateChat(token) { c ->
-            c.copy(messages = c.messages.map {
-                if (it.msg.referenceId == referenceId && it.status != null) it.copy(status = SendStatus.FAILED) else it
-            })
-        }
-    }
-
-    private fun deliver(token: String, msg: MessageView) {
-        val s = session ?: return
-        scope.launch {
-            try {
-                val sent = s.send(token, msg.text, msg.referenceId, msg.replyTo?.id)
-                updateChat(token) { it.copy(messages = merge(it.messages, listOf(sent))) }
-            } catch (e: CoreException) {
-                markFailed(token, msg.referenceId)
-            }
-        }
-    }
+    /** For the background worker: waits until nothing is being sent actively. */
+    suspend fun waitOutboxIdle(): OutboxIdle? = session?.waitOutboxIdle()
 
     /** Marks the newest message read while the chat is visible and the app is in front. */
     fun markVisibleRead(token: String) {
@@ -436,8 +471,17 @@ class SessionManager(private val context: Context) : CoreListener {
     /** Known aspect ratio (width / height) of a file's preview, if it was loaded before. */
     fun previewAspect(fileId: String): Float? = aspects[fileId]
 
-    /** Local image of an optimistic send, until the server message replaces it. */
+    /** Local image of a pending send, until the server message replaces it. */
     fun localPreview(referenceId: String): ImageBitmap? = localPreviews[referenceId]
+
+    /** Decodes the outbox copy of a pending image (e.g. after an app restart). */
+    suspend fun loadLocalPreview(referenceId: String, path: String?): ImageBitmap? {
+        localPreviews[referenceId]?.let { return it }
+        if (path == null) return null
+        val bitmap = withContext(Dispatchers.IO) { decodePreview(File(path)) } ?: return null
+        localPreviews[referenceId] = bitmap
+        return bitmap
+    }
 
     /** Chat-sized preview of a shared image, from the server's preview endpoint. */
     suspend fun preview(fileId: String): ImageBitmap? {

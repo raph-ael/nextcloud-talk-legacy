@@ -136,7 +136,7 @@ impl TalkSession {
             app_password,
         };
         let client = core::TalkClient::new(account, core::Platform::Desktop).map_err(to_napi)?;
-        let engine = core::Engine::new(client, Arc::new(JsSink(on_event)));
+        let engine = core::Engine::new(client, Arc::new(JsSink(on_event)), None);
         Ok(Self { engine })
     }
 

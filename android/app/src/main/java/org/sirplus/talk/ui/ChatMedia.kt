@@ -66,7 +66,7 @@ fun ChatImage(
     val initial = if (id.isEmpty()) sessions.localPreview(m.msg.referenceId) else sessions.cachedPreview(id)
     val image by produceState(initial, id, m.msg.referenceId) {
         if (value == null) {
-            value = if (id.isEmpty()) sessions.localPreview(m.msg.referenceId) else sessions.preview(id)
+            value = if (id.isEmpty()) sessions.loadLocalPreview(m.msg.referenceId, m.localFile) else sessions.preview(id)
         }
     }
     val img = image
@@ -87,12 +87,26 @@ fun ChatImage(
         if (img != null) {
             Image(img, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         }
-        if (m.status == SendStatus.SENDING || (img == null && a.previewAvailable)) {
-            CircularProgressIndicator(
-                Modifier.align(Alignment.Center).size(36.dp),
-                color = Color.White,
-                strokeWidth = 3.dp,
-            )
+        when {
+            // Upload running: a real progress ring, like Signal.
+            m.status == SendStatus.SENDING && m.progress in 0f..0.999f -> Box(
+                Modifier.align(Alignment.Center).size(44.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.35f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    progress = { m.progress.coerceAtLeast(0.03f) },
+                    modifier = Modifier.size(36.dp),
+                    color = Color.White,
+                    trackColor = Color.White.copy(alpha = 0.25f),
+                    strokeWidth = 3.dp,
+                )
+            }
+            m.status == SendStatus.SENDING || (m.status == null && img == null && a.previewAvailable) ->
+                CircularProgressIndicator(
+                    Modifier.align(Alignment.Center).size(36.dp),
+                    color = Color.White,
+                    strokeWidth = 3.dp,
+                )
         }
         overlay()
     }

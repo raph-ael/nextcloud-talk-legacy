@@ -200,7 +200,7 @@ impl ChatMessage {
 
 /// A file shared into a conversation. `width`/`height` are 0 when the server has no
 /// image metadata; `id` is the file id for previews.
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileAttachment {
     pub id: String,

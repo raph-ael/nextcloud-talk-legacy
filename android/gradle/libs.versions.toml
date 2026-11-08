@@ -10,6 +10,7 @@ icons = "1.7.8"
 profileinstaller = "1.4.1"
 camerax = "1.4.2"
 emojipicker = "1.5.0"
+work = "2.10.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
@@ -29,6 +30,7 @@ camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cam
 camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 emojipicker = { module = "androidx.emoji2:emoji2-emojipicker", version.ref = "emojipicker" }
+work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 [plugins]

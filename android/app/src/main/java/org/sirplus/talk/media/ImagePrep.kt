@@ -11,7 +11,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.max
 
-/** An image ready for upload: re-encoded JPEG in the app cache. */
+/** An image ready for upload: re-encoded JPEG in the app's private staging folder. */
 data class PreparedImage(val file: File, val name: String, val width: Int, val height: Int)
 
 private const val MAX_EDGE = 2048
@@ -51,7 +51,8 @@ fun prepareImage(context: Context, source: Uri): PreparedImage {
         decoded
     }
 
-    val dir = File(context.cacheDir, "outgoing").apply { mkdirs() }
+    // Not the cache: the system may clear it before the outbox has taken the file over.
+    val dir = File(context.noBackupFilesDir, "talk/staging").apply { mkdirs() }
     val name = "IMG_${LocalDateTime.now().format(nameFmt)}.jpg"
     val file = File.createTempFile("img", ".jpg", dir)
     file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }

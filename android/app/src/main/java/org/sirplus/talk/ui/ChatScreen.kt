@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.sirplus.talk.SendStatus
+import uniffi.talk_ffi.SendError
 import org.sirplus.talk.SessionManager
 import org.sirplus.talk.UiMessage
 import org.sirplus.talk.UiState
@@ -102,6 +103,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
     var replyTo by remember(room.token) { mutableStateOf<MessageView?>(null) }
     var overlay by remember(room.token) { mutableStateOf<Overlay?>(null) }
     val openCamera = rememberCameraOpener { overlay = Overlay.Camera }
+    val askNotifications = rememberNotificationAsker()
     val pickFromCamera = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) overlay = Overlay.Send(uri, fromCamera = false) }
@@ -167,6 +169,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                             read = m.msg.isOwn && m.status == null && m.msg.id <= lastCommonRead,
                             onReply = { replyTo = it },
                             onRetry = { sessions.retry(room.token, it) },
+                            onDiscard = { sessions.discard(it) },
                             onOpenImage = { id, bmp -> overlay = Overlay.Viewer(id, bmp) },
                         )
                     }
@@ -233,6 +236,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                 }
             },
             onSend = { caption ->
+                askNotifications()
                 sessions.sendImageUri(room.token, o.uri, caption, replyTo, deleteSource = o.fromCamera)
                 replyTo = null
                 overlay = null
@@ -291,6 +295,7 @@ private fun MessageRow(
     read: Boolean,
     onReply: (MessageView) -> Unit,
     onRetry: (MessageView) -> Unit,
+    onDiscard: (MessageView) -> Unit,
     onOpenImage: (fileId: String, preview: androidx.compose.ui.graphics.ImageBitmap?) -> Unit,
 ) {
     val colors = LocalTalkColors.current
@@ -400,7 +405,7 @@ private fun MessageRow(
                                 },
                             )
                             .combinedClickable(
-                                onClick = { if (m.status == SendStatus.FAILED) onRetry(msg) },
+                                onClick = { if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) onRetry(msg) },
                                 onLongClick = {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     menu = true
@@ -516,6 +521,12 @@ private fun MessageRow(
                         }
                     }
                     if (menu) DropdownMenu(expanded = true, onDismissRequest = { menu = false }) {
+                        if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
+                            DropdownMenuItem(text = { Text("Erneut senden") }, onClick = { menu = false; onRetry(msg) })
+                        }
+                        if (m.status != null) {
+                            DropdownMenuItem(text = { Text("Löschen") }, onClick = { menu = false; onDiscard(msg) })
+                        }
                         if (replyable) {
                             DropdownMenuItem(text = { Text("Antworten") }, onClick = { menu = false; onReply(msg) })
                         }
@@ -532,6 +543,15 @@ private fun MessageRow(
     }
 }
 
+private fun failureText(e: SendError?): String = when (e) {
+    SendError.FORBIDDEN -> "keine Berechtigung"
+    SendError.NOT_FOUND -> "Unterhaltung nicht gefunden"
+    SendError.TOO_LARGE -> "Datei zu groß"
+    SendError.QUOTA_EXCEEDED -> "Speicher voll"
+    SendError.FILE_MISSING -> "Datei fehlt"
+    else -> "Tippen zum Wiederholen"
+}
+
 /** Time, "edited", send status and read ticks below (or on) a bubble. */
 @Composable
 private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androidx.compose.ui.graphics.Color, danger: androidx.compose.ui.graphics.Color) {
@@ -540,7 +560,8 @@ private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androi
         Text(
             when (m.status) {
                 SendStatus.SENDING -> "Wird gesendet …"
-                SendStatus.FAILED -> "Nicht gesendet · Tippen zum Wiederholen"
+                SendStatus.WAITING -> "Wartet auf Netz …"
+                SendStatus.FAILED -> "Nicht gesendet · " + failureText(m.error)
                 null -> messageTime(m.msg.timestamp)
             },
             fontSize = 11.sp,
