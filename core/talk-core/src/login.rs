@@ -69,6 +69,8 @@ impl LoginFlow {
             .http
             .post(&self.poll_endpoint)
             .form(&[("token", &self.poll_token)])
+            // Short: a request started before the app was frozen must not block for long.
+            .timeout(Duration::from_secs(10))
             .send()
             .await?;
         match resp.status() {
@@ -82,10 +84,17 @@ impl LoginFlow {
     }
 
     /// Poll every second until approved or expired.
+    ///
+    /// Network errors are retried: on mobile the app is usually in the background (often
+    /// frozen by the OS) while the user logs in, so single polls fail routinely.
     pub async fn wait(&self) -> Result<LoginCredentials> {
         loop {
-            if let Some(creds) = self.poll_once().await? {
-                return Ok(creds);
+            match self.poll_once().await {
+                Ok(Some(creds)) => return Ok(creds),
+                Ok(None) => {}
+                Err(Error::Network(e)) => tracing::debug!("login poll failed, retrying: {e}"),
+                Err(Error::Http { status, .. }) if status >= 500 => {}
+                Err(e) => return Err(e),
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
