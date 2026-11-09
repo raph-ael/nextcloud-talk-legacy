@@ -55,6 +55,9 @@ final class SessionStore {
     @ObservationIgnored private var notifiedFailures = Set<String>()
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var lastPathSatisfied = true
+    @ObservationIgnored private var lastPathKey = ""
+    /// WebRTC for calls; reports go back to the session.
+    @ObservationIgnored let callMedia = WebRTCMediaEngine()
     /// Unsent text per conversation while the app runs.
     @ObservationIgnored var textDrafts: [String: String] = [:]
 
@@ -70,13 +73,17 @@ final class SessionStore {
         } else {
             phase = .loggedOut
         }
-        // Network back: retry waiting messages right away instead of after the backoff.
+        // Network back or switched (Wi-Fi ↔ cellular): retry waiting messages right away,
+        // reconnect the call's signaling and restart ICE.
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let ok = path.status == .satisfied
+            let key = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
             Task { @MainActor in
                 guard let self else { return }
-                if ok && !self.lastPathSatisfied { self.session?.networkChanged() }
+                let switched = ok && self.lastPathSatisfied && key != self.lastPathKey && !self.lastPathKey.isEmpty
+                if (ok && !self.lastPathSatisfied) || switched { self.session?.networkChanged() }
                 self.lastPathSatisfied = ok
+                if ok { self.lastPathKey = key }
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "talk.path"))
@@ -133,6 +140,10 @@ final class SessionStore {
             return
         }
         session = s
+        callMedia.session = s
+        callMedia.onStartAudio = { _ in CallAudio.shared.startAudio() }
+        callMedia.onStopAudio = { _ in CallAudio.shared.stopAudio() }
+        s.setMediaEngine(media: callMedia)
         server = saved.server
         user = saved.loginName
         // Cached conversation list: shown in the first frame, before any request.
@@ -157,7 +168,9 @@ final class SessionStore {
     private func signOut(revoke: Bool) async {
         guard let s = session else { return }
         voice.reset()
+        s.hangUp()
         session = nil
+        callMedia.session = nil
         if revoke { try? await s.logout() } else { s.shutdown() }
         Keychain.deleteAccount()
         // Unsent messages belong to this account: never deliver them under another one.
@@ -204,6 +217,8 @@ final class SessionStore {
             self.online = online
         case .authFailed:
             Task { await signOut(revoke: false) }
+        case .callChanged(let call):
+            CallController.shared.update(call)
         case .outboxChanged(let token, let items):
             updateChat(token) { $0.messages = Self.withPending($0.messages, items) }
             announceFailures(token, items)

@@ -94,6 +94,17 @@ struct ChatView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("chat-title")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                let inCall = CallController.shared.call?.token == token
+                Button {
+                    CallController.shared.start(token: token, name: room?.name ?? "")
+                } label: {
+                    Image(systemName: room?.hasCall == true || inCall ? "phone.fill" : "phone")
+                        .foregroundStyle(room?.hasCall == true || inCall ? Talk.callDot : Talk.accent)
+                }
+                .accessibilityLabel(room?.hasCall == true ? "Anruf beitreten" : "Anrufen")
+                .accessibilityIdentifier("call-button")
+            }
         }
         .toolbarBackground(Talk.background, for: .navigationBar)
         .onChange(of: messages.count) { _, _ in

@@ -80,7 +80,7 @@ final class VoiceManager {
             Toast.show("Zu wenig freier Speicher für eine Aufnahme.")
             return false
         }
-        if VoiceCapture.callActive() {
+        if CallAudio.shared.inCall || VoiceCapture.callActive() {
             Toast.show("Während eines Anrufs kann nicht aufgenommen werden.")
             return false
         }
@@ -165,6 +165,12 @@ final class VoiceManager {
     /// Fire-and-forget `stopToDraft` (app left the foreground, chat closed).
     func interrupt() {
         if core != nil { Task { await stopToDraft() } }
+    }
+
+    /// A call starts: a recording becomes a draft, playback stops (rule 12 of docs/calls.md).
+    func stopForCall() {
+        interrupt()
+        player.stop()
     }
 
     func cancel() {

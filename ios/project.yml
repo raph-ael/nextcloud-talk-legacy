@@ -12,6 +12,12 @@ options:
   createIntermediateGroups: true
   developmentLanguage: de
 
+packages:
+  # libwebrtc (Google WebRTC M157) – the build has an x86_64 simulator slice (Intel Macs).
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    exactVersion: 157.0.0
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -35,6 +41,12 @@ targets:
         embed: false
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
+      - package: WebRTC
+      - sdk: CallKit.framework
+      - sdk: PushKit.framework
+    # aps-environment: development for Debug, production for Release (APS_ENVIRONMENT).
+    entitlements:
+      path: TalkApp/TalkLegacy.entitlements
     info:
       path: TalkApp/Info.plist
       properties:
@@ -46,13 +58,15 @@ targets:
           - UIInterfaceOrientationPortrait
         # Only standard HTTPS/TLS → exempt from export compliance documentation.
         ITSAppUsesNonExemptEncryption: false
-        NSMicrophoneUsageDescription: Zum Aufnehmen von Sprachnachrichten.
+        NSMicrophoneUsageDescription: Für Anrufe und zum Aufnehmen von Sprachnachrichten.
         NSCameraUsageDescription: Zum Aufnehmen und Senden von Fotos.
         NSPhotoLibraryUsageDescription: Zum Senden von Fotos aus deiner Mediathek.
-        # audio: voice messages keep playing with the screen locked;
-        # processing: the outbox finishes sending after the app was left.
+        # audio: voice messages keep playing with the screen locked, calls keep their audio;
+        # voip: incoming calls via PushKit; processing: the outbox finishes sending after
+        # the app was left.
         UIBackgroundModes:
           - audio
+          - voip
           - processing
         BGTaskSchedulerPermittedIdentifiers:
           - org.sirplus.talk.outbox
@@ -64,6 +78,11 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
 
   TalkLegacyUITests:
     type: bundle.ui-testing

@@ -10,6 +10,8 @@ struct TalkLegacyApp: App {
     init() {
         // Before the store starts a session (it may schedule the outbox task right away).
         BackgroundSender.register()
+        // Before any WebRTC track: audio is switched on by CallKit, not by WebRTC.
+        WebRTCMediaEngine.prepare()
     }
 
     var body: some Scene {
@@ -67,6 +69,7 @@ struct RootView: View {
                     ChatView(store: store, token: token)
                 }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { CallBar() }
     }
 }
 
@@ -76,6 +79,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        _ = CallController.shared
+        VoipPush.shared.register()
+        #if DEBUG
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            CallController.shared.showMockIfRequested()
+            CallController.shared.autoCallIfRequested()
+        }
+        #endif
         return true
     }
 

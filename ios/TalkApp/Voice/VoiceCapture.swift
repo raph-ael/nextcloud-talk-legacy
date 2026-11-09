@@ -96,7 +96,9 @@ final class VoiceCapture: @unchecked Sendable {
         }
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if !CallAudio.sessionInUse {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func observe() {

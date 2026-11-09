@@ -90,10 +90,17 @@ final class VoicePlayer: NSObject, AVAudioPlayerDelegate {
         loading = false
         positionMs = 0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // During a call the session belongs to it.
+        if !CallAudio.sessionInUse {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func play(_ key: String, title: String, artist: String, at fraction: Double, resolve: @escaping () async -> String?) {
+        if CallAudio.sessionInUse {
+            Toast.show("Während eines Anrufs nicht möglich")
+            return
+        }
         player?.stop()
         player = nil
         stopTicker()
@@ -160,7 +167,7 @@ final class VoicePlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     private func resume() {
-        guard let player else { return }
+        guard let player, !CallAudio.sessionInUse else { return }
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
         playing = true
