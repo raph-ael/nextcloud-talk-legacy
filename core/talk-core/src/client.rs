@@ -315,6 +315,20 @@ impl TalkClient {
         Ok((resp.bytes().await?.to_vec(), content_type))
     }
 
+    /// Avatar of a user (call tiles). 256 px, server-rendered initials as fallback.
+    pub async fn user_avatar(&self, user_id: &str, dark: bool) -> Result<(Vec<u8>, String)> {
+        let user = encode_segment(user_id);
+        let path = if dark {
+            format!("/index.php/avatar/{user}/256/dark")
+        } else {
+            format!("/index.php/avatar/{user}/256")
+        };
+        let resp = check(self.request(Method::GET, &path).send().await?).await?;
+        let content_type = header_str(resp.headers(), "content-type")
+            .unwrap_or_else(|| "application/octet-stream".into());
+        Ok((resp.bytes().await?.to_vec(), content_type))
+    }
+
     /// Revokes the app password this client uses (sign-out). Afterwards every call fails
     /// with `Unauthorized`.
     pub async fn revoke_app_password(&self) -> Result<()> {

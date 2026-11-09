@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
 use crate::cache::Cache;
+use crate::call::{CallManager, CallView, MediaEngine, MediaReport};
 use crate::outbox::{Outbox, PendingMessage};
 use crate::voice::VoiceStore;
 
@@ -94,6 +95,9 @@ pub enum Event {
         token: String,
         items: Vec<PendingMessage>,
     },
+    /// The call changed (state, participants, mute, speaking). `None`: no call any more
+    /// (always preceded by one event with state `Ended`).
+    CallChanged { call: Option<CallView> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +206,7 @@ pub struct Engine {
     pub(crate) outbox: Outbox,
     pub(crate) cache: Cache,
     pub(crate) voice: Arc<VoiceStore>,
+    pub(crate) calls: CallManager,
     /// Runtime of `start`, for spawning from synchronous calls.
     pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
     weak: Weak<Self>,
@@ -231,6 +236,7 @@ impl Engine {
             outbox: Outbox::open(data_dir.as_deref()),
             voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
             cache,
+            calls: CallManager::default(),
             runtime: OnceLock::new(),
             weak: weak.clone(),
         })
@@ -311,6 +317,48 @@ impl Engine {
         }
         self.cache.set_meta("user_id", id);
         self.me_resolved.store(true, Ordering::Relaxed);
+    }
+
+    // --- calls (see `crate::call` and docs/calls.md) -----------------------------------
+
+    /// Registers the platform's WebRTC implementation. Call once before any call starts.
+    pub fn set_media_engine(&self, media: Arc<dyn MediaEngine>) {
+        self.calls.set_media_engine(media);
+    }
+
+    /// The call in progress (also an incoming one that is ringing), if any.
+    pub fn current_call(&self) -> Option<CallView> {
+        self.calls.current()
+    }
+
+    /// Calls the conversation (or joins its running call). `silent`: nobody is rung
+    /// (automated tests in shared rooms). Fails if another call is in progress.
+    pub async fn start_call(&self, token: &str, silent: bool) -> Result<()> {
+        self.calls.start(token, silent).await
+    }
+
+    /// Answers the ringing incoming call of `token`.
+    pub async fn accept_call(&self, token: &str) -> Result<()> {
+        self.calls.accept(token).await
+    }
+
+    /// Stops ringing for the incoming call of `token` on this device.
+    pub fn decline_call(&self, token: &str) {
+        self.calls.decline(token);
+    }
+
+    /// Leaves the current call (or stops dialing). No-op without a call.
+    pub fn hang_up(&self) {
+        self.calls.hang_up();
+    }
+
+    pub fn set_call_muted(&self, muted: bool) {
+        self.calls.set_muted(muted);
+    }
+
+    /// Feedback from the platform's [`MediaEngine`].
+    pub fn media_report(&self, report: MediaReport) {
+        self.calls.report(report);
     }
 
     /// Stops all background work (unsent messages stay stored for the next start).
@@ -601,6 +649,17 @@ impl Engine {
         if !version.is_empty() {
             self.cache.media_put(&key, &data, &mime).await;
         }
+        Ok((data, mime))
+    }
+
+    /// Avatar of a user (call tiles), cached like other media.
+    pub async fn user_avatar(&self, user_id: &str, dark: bool) -> Result<(Vec<u8>, String)> {
+        let key = format!("avatar-user/{user_id}/{dark}");
+        if let Some(hit) = self.cache.media_get(&key).await {
+            return Ok(hit);
+        }
+        let (data, mime) = self.client.user_avatar(user_id, dark).await?;
+        self.cache.media_put(&key, &data, &mime).await;
         Ok((data, mime))
     }
 

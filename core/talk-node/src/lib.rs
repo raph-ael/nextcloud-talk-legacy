@@ -118,6 +118,47 @@ impl core::EventSink for JsSink {
     }
 }
 
+
+/// MediaEngine of the renderer: every command is one JSON object
+/// `{ cmd: "createPeer" | "createOffer" | …, peerId?, … }` (see docs/calls.md).
+struct JsMedia(EventCallback);
+
+impl JsMedia {
+    fn send(&self, v: Value) {
+        self.0.call(v, ThreadsafeFunctionCallMode::NonBlocking);
+    }
+}
+
+impl core::MediaEngine for JsMedia {
+    fn create_peer(&self, peer_id: String, kind: core::PeerKind, ice_servers: Vec<core::IceServer>) {
+        self.send(serde_json::json!({"cmd": "createPeer", "peerId": peer_id, "kind": kind, "iceServers": ice_servers}));
+    }
+    fn create_offer(&self, peer_id: String, ice_restart: bool) {
+        self.send(serde_json::json!({"cmd": "createOffer", "peerId": peer_id, "iceRestart": ice_restart}));
+    }
+    fn create_answer(&self, peer_id: String) {
+        self.send(serde_json::json!({"cmd": "createAnswer", "peerId": peer_id}));
+    }
+    fn set_remote_description(&self, peer_id: String, sdp_type: core::SdpType, sdp: String) {
+        self.send(serde_json::json!({"cmd": "setRemoteDescription", "peerId": peer_id, "sdpType": sdp_type, "sdp": sdp}));
+    }
+    fn add_remote_candidate(&self, peer_id: String, candidate: core::IceCandidate) {
+        self.send(serde_json::json!({"cmd": "addRemoteCandidate", "peerId": peer_id, "candidate": candidate}));
+    }
+    fn close_peer(&self, peer_id: String) {
+        self.send(serde_json::json!({"cmd": "closePeer", "peerId": peer_id}));
+    }
+    fn set_microphone_enabled(&self, enabled: bool) {
+        self.send(serde_json::json!({"cmd": "setMicrophoneEnabled", "enabled": enabled}));
+    }
+    fn start_audio(&self, call_id: String) {
+        self.send(serde_json::json!({"cmd": "startAudio", "callId": call_id}));
+    }
+    fn stop_audio(&self, call_id: String) {
+        self.send(serde_json::json!({"cmd": "stopAudio", "callId": call_id}));
+    }
+}
+
 #[napi(object)]
 pub struct Avatar {
     pub data: Buffer,
@@ -290,6 +331,73 @@ impl TalkSession {
     #[napi]
     pub fn discard(&self, reference_id: String) {
         self.engine.discard(&reference_id);
+    }
+
+    // --- calls (docs/calls.md) ---------------------------------------------------
+
+    /// Registers the renderer's media engine: `onCommand` receives one JSON command
+    /// per call, in order. Once, before any call.
+    #[napi]
+    pub fn set_media_engine(
+        &self,
+        #[napi(ts_arg_type = "(command: any) => void")] on_command: EventCallback,
+    ) {
+        self.engine.set_media_engine(Arc::new(JsMedia(on_command)));
+    }
+
+    /// The call in progress (also a ringing incoming one), or null.
+    #[napi(ts_return_type = "any")]
+    pub fn current_call(&self) -> Result<Value> {
+        json(&self.engine.current_call())
+    }
+
+    /// Calls the conversation or joins its running call. `silent`: nobody is rung.
+    #[napi]
+    pub async fn start_call(&self, token: String, silent: bool) -> Result<()> {
+        self.engine.start_call(&token, silent).await.map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn accept_call(&self, token: String) -> Result<()> {
+        self.engine.accept_call(&token).await.map_err(to_napi)
+    }
+
+    #[napi]
+    pub fn decline_call(&self, token: String) {
+        self.engine.decline_call(&token);
+    }
+
+    /// Avatar of a call participant (`participant.userId`).
+    #[napi]
+    pub async fn user_avatar(&self, user_id: String, dark: bool) -> Result<Avatar> {
+        let (data, content_type) = self.engine.user_avatar(&user_id, dark).await.map_err(to_napi)?;
+        Ok(Avatar {
+            data: data.into(),
+            content_type,
+        })
+    }
+
+    #[napi]
+    pub fn hang_up(&self) {
+        self.engine.hang_up();
+    }
+
+    #[napi]
+    pub fn set_call_muted(&self, muted: bool) {
+        self.engine.set_call_muted(muted);
+    }
+
+    /// Report of the media engine, e.g.
+    /// `{ type: "localDescription", peerId, sdpType: "offer", sdp }`,
+    /// `{ type: "localCandidate", peerId, candidate: { candidate, sdpMid, sdpMLineIndex } }`,
+    /// `{ type: "peerState", peerId, state: "connected" }`, `{ type: "peerError", peerId, message }`,
+    /// `{ type: "audioLevel", peerId, level }`.
+    #[napi]
+    pub fn media_report(&self, #[napi(ts_arg_type = "any")] report: Value) -> Result<()> {
+        let r: core::MediaReport =
+            serde_json::from_value(report).map_err(|e| Error::from_reason(format!("media report: {e}")))?;
+        self.engine.media_report(r);
+        Ok(())
     }
 
     /// Call when connectivity changes: waiting items are retried at once.

@@ -27,6 +27,10 @@ pub enum Error {
     /// A local file to upload is missing or unreadable.
     #[error("local file: {0}")]
     LocalFile(String),
+
+    /// A call action was not possible (`code` as in `call::EndReason::Failed`).
+    #[error("call: {code}: {message}")]
+    Call { code: String, message: String },
 }
 
 impl Error {

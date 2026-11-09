@@ -8,9 +8,11 @@
 //!
 //! - `cache`: SQLite cache of rooms and messages, avatar/preview files
 //! - [`voice`]: voice messages (MP3 recording, drafts, downloads, waveforms)
+//! - [`call`]: audio calls over the HPB (signaling, call state machine; media via [`MediaEngine`])
 //!
-//! Upcoming: signaling client (HPB), call state machine, push.
+//! Upcoming: push.
 
+pub mod call;
 pub(crate) mod cache;
 pub mod client;
 pub mod engine;
@@ -20,6 +22,10 @@ pub mod models;
 pub mod outbox;
 pub mod voice;
 
+pub use call::{
+    CallDirection, CallParticipant, CallState, CallView, EndReason, IceCandidate, MediaEngine,
+    MediaReport, PeerKind, PeerState, SdpType,
+};
 pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };

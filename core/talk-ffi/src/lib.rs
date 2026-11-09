@@ -9,6 +9,9 @@ use talk_core as core;
 
 uniffi::setup_scaffolding!();
 
+mod call;
+pub use call::*;
+
 #[uniffi::export]
 pub fn core_version() -> String {
     core::VERSION.to_string()
@@ -401,6 +404,8 @@ pub enum CoreEvent {
     AuthFailed,
     /// Pending messages of a conversation changed (any conversation, open or not).
     OutboxChanged { token: String, items: Vec<PendingMessage> },
+    /// The call changed; `None`: no call any more (preceded by one `Ended` state).
+    CallChanged { call: Option<CallView> },
 }
 
 impl From<core::Event> for CoreEvent {
@@ -429,6 +434,9 @@ impl From<core::Event> for CoreEvent {
             core::Event::OutboxChanged { token, items } => Self::OutboxChanged {
                 token,
                 items: items.into_iter().map(Into::into).collect(),
+            },
+            core::Event::CallChanged { call } => Self::CallChanged {
+                call: call.map(Into::into),
             },
         }
     }

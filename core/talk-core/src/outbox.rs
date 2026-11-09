@@ -1002,7 +1002,7 @@ pub(crate) fn classify(e: &Error) -> Verdict {
         Error::NotFound => Verdict::Fail(SendError::NotFound),
         Error::Unauthorized => Verdict::Pause,
         Error::LocalFile(_) => Verdict::Fail(SendError::FileMissing),
-        Error::LoginExpired => Verdict::Fail(SendError::Rejected),
+        Error::LoginExpired | Error::Call { .. } => Verdict::Fail(SendError::Rejected),
     }
 }
 
