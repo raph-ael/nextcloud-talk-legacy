@@ -163,12 +163,94 @@ export type CoreEvent =
   | { type: 'connection'; online: boolean }
   | { type: 'authFailed' }
   | { type: 'outboxChanged'; token: string; items: PendingMessage[] }
+  | { type: 'callChanged'; call: CallView | null }
+
+// --- Calls (docs/calls.md, talk-core/src/call/mod.rs) ------------------------------
+
+export type CallState = 'dialing' | 'ringing' | 'incoming' | 'connecting' | 'connected' | 'reconnecting' | 'ended'
+
+export type EndReason =
+  | { kind: 'hangup' }
+  | { kind: 'remoteHangup' }
+  | { kind: 'noAnswer' }
+  | { kind: 'declined' }
+  | { kind: 'answeredElsewhere' }
+  | { kind: 'missed' }
+  | { kind: 'failed'; code: string; message: string }
+
+/** Another participant of the call (never ourselves). */
+export interface CallParticipant {
+  /** Signaling session id: stable key while they stay in the call. */
+  sessionId: string
+  /** Nextcloud user id; empty for guests. */
+  userId: string
+  name: string
+  muted: boolean
+  speaking: boolean
+  /** Their audio reaches us. */
+  connected: boolean
+}
+
+export interface CallView {
+  /** Local id of this call (also the `callId` of `startAudio`). */
+  id: string
+  token: string
+  roomName: string
+  isGroup: boolean
+  direction: 'outgoing' | 'incoming'
+  state: CallState
+  /** Who started the call (incoming); empty for outgoing. */
+  callerName: string
+  /** Unix ms when the call became `connected`. */
+  startedAt: number | null
+  muted: boolean
+  participants: CallParticipant[]
+  endReason: EndReason | null
+}
+
+export interface IceServerConfig {
+  urls: string[]
+  username?: string | null
+  credential?: string | null
+}
+
+export interface IceCandidateInit {
+  candidate: string
+  sdpMid: string | null
+  sdpMLineIndex: number
+}
+
+export type PeerKind = 'publisher' | 'subscriber' | 'mesh'
+export type SdpType = 'offer' | 'answer'
+export type PeerState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
+
+/** Core → renderer media engine, delivered in the order the core issued them. */
+export type MediaCommand =
+  | { cmd: 'createPeer'; peerId: string; kind: PeerKind; iceServers: IceServerConfig[] }
+  | { cmd: 'createOffer'; peerId: string; iceRestart: boolean }
+  | { cmd: 'createAnswer'; peerId: string }
+  | { cmd: 'setRemoteDescription'; peerId: string; sdpType: SdpType; sdp: string }
+  | { cmd: 'addRemoteCandidate'; peerId: string; candidate: IceCandidateInit }
+  | { cmd: 'closePeer'; peerId: string }
+  | { cmd: 'setMicrophoneEnabled'; enabled: boolean }
+  | { cmd: 'startAudio'; callId: string }
+  | { cmd: 'stopAudio'; callId: string }
+
+/** Renderer media engine → core. */
+export type MediaReport =
+  | { type: 'localDescription'; peerId: string; sdpType: SdpType; sdp: string }
+  | { type: 'localCandidate'; peerId: string; candidate: IceCandidateInit }
+  | { type: 'peerState'; peerId: string; state: PeerState }
+  | { type: 'peerError'; peerId: string; message: string }
+  | { type: 'audioLevel'; peerId: string; level: number }
 
 /** Events produced by the Electron main process itself. */
 export type AppEvent =
   | { type: 'session'; state: 'loggedOut' }
   | { type: 'session'; state: 'ready'; account: AccountInfo }
   | { type: 'openRoom'; token: string }
+  /** Keyboard shortcut or notification action of the incoming-call bar. */
+  | { type: 'callAction'; action: 'accept' | 'decline' }
 
 export type TalkEvent = CoreEvent | AppEvent
 
@@ -225,6 +307,24 @@ export interface TalkApi {
   audioInfo(localPath: string): Promise<AudioInfo>
   markRead(token: string, messageId: number): Promise<void>
   setBadge(count: number): void
+
+  // --- calls ---
+  /** Calls the conversation or joins its running call; `silent`: nobody is rung (tests). */
+  startCall(token: string, silent: boolean): Promise<void>
+  acceptCall(token: string): Promise<void>
+  declineCall(token: string): Promise<void>
+  hangUp(): Promise<void>
+  setCallMuted(muted: boolean): Promise<void>
+  currentCall(): Promise<CallView | null>
+  /** Avatar of a call participant by Nextcloud user id. */
+  userAvatarUrl(userId: string): string
+  /** Registers the media engine; commands arrive in order. Call once, then `mediaReady`. */
+  onMediaCommand(cb: (cmd: MediaCommand) => void): () => void
+  /** The engine is listening: main flushes queued commands (also after a reload). */
+  mediaReady(): void
+  mediaReport(report: MediaReport): void
+  /** Attention for an incoming call (flash frame, silent notification); `null` stops it. */
+  ringAttention(call: { roomName: string; callerName: string; isGroup: boolean } | null): void
   onEvent(cb: (event: TalkEvent) => void): () => void
   avatarUrl(token: string, version: string): string
   /** Server preview of a shared file, fitting into width×height (CSS px ×2 for HiDPI). */

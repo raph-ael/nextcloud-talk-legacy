@@ -3,6 +3,7 @@ import { closeRoom, useStore } from './store'
 import { Login } from './components/Login'
 import { cycleRoom, Sidebar } from './components/Sidebar'
 import { Chat } from './components/Chat'
+import { CallLayer, ReturnToCallBar } from './call/CallScreen'
 
 /** Conversation list width like Signal Desktop: 320 px by default, at least 280 px. */
 const SIDEBAR_DEFAULT = 320
@@ -106,6 +107,8 @@ export function App() {
   if (session === 'loggedOut') return <Login />
 
   return (
+    <div className="app-shell">
+    <ReturnToCallBar />
     <div className={`app${activeToken ? ' has-chat' : ''}`} style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
       <Sidebar ref={search} />
       <div
@@ -123,6 +126,8 @@ export function App() {
           <p className="muted">Wähle einen Chat aus.</p>
         </section>
       )}
+    </div>
+    <CallLayer />
     </div>
   )
 }

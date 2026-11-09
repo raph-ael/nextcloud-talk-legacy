@@ -11,6 +11,7 @@ import {
   session as electronSession,
   shell,
   systemPreferences,
+  Tray,
 } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,6 +23,9 @@ import {
   type AccountInfo,
   type AppEvent,
   type AudioInfo,
+  type CallView,
+  type MediaCommand,
+  type MediaReport,
   type CoreEvent,
   type PendingMessage,
   type ReplyPreview,
@@ -31,6 +35,7 @@ import {
   type VoiceDraft,
   type RecordingStatus,
 } from '@shared/core'
+import trayIcon from '../../resources/tray.png?asset'
 
 // --- Native core -------------------------------------------------------------------
 
@@ -77,6 +82,15 @@ interface NativeSession {
   sendVoiceDraft(token: string, name: string, replyTo: ReplyPreview | null, referenceId: string): PendingMessage
   fetchFile(path: string, size: number): Promise<string>
   audioInfo(localPath: string): Promise<AudioInfo>
+  setMediaEngine(onCommand: (command: MediaCommand) => void): void
+  currentCall(): CallView | null
+  startCall(token: string, silent: boolean): Promise<void>
+  acceptCall(token: string): Promise<void>
+  declineCall(token: string): void
+  hangUp(): void
+  setCallMuted(muted: boolean): void
+  userAvatar(userId: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
+  mediaReport(report: MediaReport): void
 }
 interface NativeVoiceRecording {
   push(pcm: Buffer): RecordingStatus
@@ -117,6 +131,33 @@ const accountFile = join(dataDir, 'account.json')
 const coreDir = join(dataDir, 'talk')
 /** Room list cache of earlier versions (now in the core cache). */
 const legacyRoomsCache = join(dataDir, 'rooms-cache.json')
+
+const settingsFile = join(dataDir, 'settings.json')
+
+interface Settings {
+  /** Closing the window keeps the app in the tray, so calls can ring (Linux/Windows). */
+  closeToTray: boolean
+}
+
+function loadSettings(): Settings {
+  const defaults: Settings = { closeToTray: true }
+  try {
+    return { ...defaults, ...(JSON.parse(readFileSync(settingsFile, 'utf8')) as Partial<Settings>) }
+  } catch {
+    return defaults
+  }
+}
+
+const settings = loadSettings()
+
+function saveSettings(): void {
+  try {
+    mkdirSync(dataDir, { recursive: true })
+    writeFileSync(settingsFile, JSON.stringify(settings))
+  } catch (err) {
+    console.warn('saving settings failed:', (err as Error).message)
+  }
+}
 
 function loadAccount(): StoredAccount | null {
   try {
@@ -164,7 +205,9 @@ function send(event: TalkEvent): void {
 }
 
 function onCoreEvent(event: CoreEvent): void {
-  if (event.type === 'roomsChanged') {
+  if (event.type === 'callChanged') {
+    onCallChanged(event.call)
+  } else if (event.type === 'roomsChanged') {
     notifyNewMessages(event.rooms)
   } else if (event.type === 'authFailed') {
     void signOut(false)
@@ -181,6 +224,7 @@ function startSession(stored: StoredAccount, plainPassword?: string): void {
   // Dev accounts (not stored) get their own cache: never mix two accounts' messages.
   const dir = stored.secret ? coreDir : join(dataDir, 'talk-dev', stored.loginName)
   session = new core.TalkSession(stored.server, stored.loginName, password, onCoreEvent, dir)
+  session.setMediaEngine(onMediaCommand)
   sessionDir = dir
   // Leftovers of attachments that were picked but never sent.
   rmSync(join(dir, 'staging'), { recursive: true, force: true })
@@ -224,6 +268,8 @@ async function signOut(revoke: boolean): Promise<void> {
   recording?.rec.cancel()
   recording = null
   const s = session
+  s?.hangUp()
+  onCallChanged(null)
   session = null
   account = null
   activeToken = null
@@ -329,6 +375,110 @@ function announceFailures(token: string, items: PendingMessage[]): void {
   n.show()
 }
 
+// --- Calls: media engine bridge (core in this process, WebRTC in the renderer) -----
+
+/** Commands waiting for the renderer's engine (window loading or reloading). */
+let mediaQueue: MediaCommand[] = []
+/** The renderer's engine is listening on `talk:media`. */
+let mediaListening = false
+/** Peers created by the core and not closed yet. */
+const openPeers = new Set<string>()
+/** `startAudio` without `stopAudio` yet: replayed to a reloaded renderer. */
+let audioCallId: string | null = null
+let micEnabled = true
+/** The call shown last (state drives ringing attention and close-to-tray). */
+let call: CallView | null = null
+let ringNotification: Notification | null = null
+
+function onMediaCommand(cmd: MediaCommand): void {
+  switch (cmd.cmd) {
+    case 'createPeer':
+      openPeers.add(cmd.peerId)
+      break
+    case 'closePeer':
+      openPeers.delete(cmd.peerId)
+      break
+    case 'startAudio':
+      audioCallId = cmd.callId
+      break
+    case 'stopAudio':
+      if (audioCallId === cmd.callId) audioCallId = null
+      break
+    case 'setMicrophoneEnabled':
+      micEnabled = cmd.enabled
+      break
+  }
+  // A single channel keeps the core's order; queued commands go out first.
+  if (mediaListening && win && !win.isDestroyed()) win.webContents.send('talk:media', cmd)
+  else mediaQueue.push(cmd)
+}
+
+/** The renderer (and with it every peer connection) went away: reload, crash, window closed. */
+function mediaEngineLost(): void {
+  if (!mediaListening) return
+  mediaListening = false
+  const queued = new Set(mediaQueue.flatMap((c) => (c.cmd === 'createPeer' ? [c.peerId] : [])))
+  for (const peerId of [...openPeers]) {
+    if (queued.has(peerId)) continue
+    // The core replaces failed peers with new ones (new ids); late commands for these are ignored.
+    openPeers.delete(peerId)
+    session?.mediaReport({ type: 'peerState', peerId, state: 'failed' })
+  }
+}
+
+function mediaEngineReady(): void {
+  if (!win || win.isDestroyed()) return
+  const replay: MediaCommand[] = []
+  if (audioCallId && !mediaQueue.some((c) => c.cmd === 'startAudio')) {
+    replay.push({ cmd: 'startAudio', callId: audioCallId }, { cmd: 'setMicrophoneEnabled', enabled: micEnabled })
+  }
+  const pending = [...replay, ...mediaQueue]
+  mediaQueue = []
+  mediaListening = true
+  for (const cmd of pending) win.webContents.send('talk:media', cmd)
+}
+
+/** In a call (or ringing): the window must not go away, the renderer holds the media. */
+function callActive(): boolean {
+  return call !== null && call.state !== 'ended'
+}
+
+function onCallChanged(next: CallView | null): void {
+  const wasRinging = call?.state === 'incoming'
+  const wasActive = callActive()
+  call = next
+  const ringing = next?.state === 'incoming'
+  if (callActive() !== wasActive) updateTrayMenu()
+  if (ringing && !wasRinging) startRingAttention(next)
+  else if (!ringing && wasRinging) stopRingAttention()
+}
+
+/** Incoming call: blink the taskbar entry and show a silent notification (the bar rings). */
+function startRingAttention(c: CallView): void {
+  if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true)
+  if (!Notification.isSupported()) return
+  ringNotification?.close()
+  const n = new Notification({
+    title: c.isGroup ? `Gruppenanruf · ${c.roomName}` : c.roomName,
+    body: c.isGroup && c.callerName ? `${c.callerName} ruft an` : 'Eingehender Anruf',
+    silent: true,
+    urgency: 'critical',
+    timeoutType: 'never',
+  })
+  n.on('click', () => {
+    showWindow()
+    send({ type: 'openRoom', token: c.token })
+  })
+  n.show()
+  ringNotification = n
+}
+
+function stopRingAttention(): void {
+  if (win && !win.isDestroyed()) win.flashFrame(false)
+  ringNotification?.close()
+  ringNotification = null
+}
+
 // --- Attachments: staging ----------------------------------------------------------
 
 function stagingDir(): string {
@@ -422,6 +572,44 @@ async function stagePath(source: string, name: string, mime: string): Promise<St
   return { path, name: fileName, mime: mimeFor(fileName, mime), size: info.size, width: 0, height: 0 }
 }
 
+// --- Tray (Linux/Windows; macOS keeps the dock) -------------------------------------
+
+let tray: Tray | null = null
+
+function createTray(): void {
+  if (process.platform === 'darwin' || tray) return
+  try {
+    tray = new Tray(trayIcon)
+  } catch (err) {
+    console.warn('no tray:', (err as Error).message)
+    return
+  }
+  tray.setToolTip('Sirplus Talk')
+  tray.on('click', showWindow)
+  updateTrayMenu()
+}
+
+function updateTrayMenu(): void {
+  tray?.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Sirplus Talk öffnen', click: showWindow },
+      ...(callActive() ? [{ label: 'Auflegen', click: () => session?.hangUp() }] : []),
+      { type: 'separator' },
+      {
+        label: 'Beim Schließen im Hintergrund weiterlaufen',
+        type: 'checkbox',
+        checked: settings.closeToTray,
+        click: (item) => {
+          settings.closeToTray = item.checked
+          saveSettings()
+        },
+      },
+      { type: 'separator' },
+      { label: 'Beenden', click: () => app.quit() },
+    ]),
+  )
+}
+
 // --- Window ------------------------------------------------------------------------
 
 function showWindow(): void {
@@ -447,16 +635,34 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
       spellcheck: true,
+      // Calls live in this renderer: ringing, tones and media must not be throttled when hidden.
+      backgroundThrottling: false,
     },
   })
   win.once('ready-to-show', () => win?.show())
+  win.on('focus', () => win?.flashFrame(false))
+  win.on('close', (e) => {
+    // Keeps running in the tray so calls can ring (and a running call keeps its media).
+    if (quitting) return
+    if (callActive() || (process.platform !== 'darwin' && settings.closeToTray && tray)) {
+      e.preventDefault()
+      win?.hide()
+    }
+  })
   win.on('closed', () => {
     finishRecording()
+    mediaEngineLost()
     win = null
   })
   // Renderer crashed or reloaded mid-recording: what was recorded stays as draft.
-  win.webContents.on('render-process-gone', () => finishRecording())
-  win.webContents.on('did-start-loading', () => finishRecording())
+  win.webContents.on('render-process-gone', () => {
+    finishRecording()
+    mediaEngineLost()
+  })
+  win.webContents.on('did-start-loading', () => {
+    finishRecording()
+    mediaEngineLost()
+  })
 
   // Links open in the system browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -579,6 +785,27 @@ function registerIpc(): void {
   })
   ipcMain.handle('talk:markRead', (_e, token: string, messageId: number) => session?.markRead(token, messageId))
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
+
+  // Calls (docs/calls.md).
+  ipcMain.handle('talk:startCall', (_e, token: string, silent: boolean) => requireSession().startCall(token, silent))
+  ipcMain.handle('talk:acceptCall', (_e, token: string) => requireSession().acceptCall(token))
+  ipcMain.handle('talk:declineCall', (_e, token: string) => session?.declineCall(token))
+  ipcMain.handle('talk:hangUp', () => session?.hangUp())
+  ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => session?.setCallMuted(muted))
+  ipcMain.handle('talk:currentCall', () => session?.currentCall() ?? null)
+  ipcMain.on('talk:mediaReady', (e) => {
+    if (e.sender === win?.webContents) mediaEngineReady()
+  })
+  ipcMain.on('talk:mediaReport', (e, report: MediaReport) => {
+    if (e.sender !== win?.webContents || !session) return
+    // Reports of peers lost with an earlier renderer must not reach the core.
+    if (!openPeers.has(report.peerId)) return
+    try {
+      session.mediaReport(report)
+    } catch (err) {
+      console.warn('media report rejected:', (err as Error).message)
+    }
+  })
 }
 
 // --- Avatars: talk-avatar://room/<token>?v=<version> ---------------------------------
@@ -594,13 +821,14 @@ const avatarCache = new Map<string, { data: Buffer; contentType: string }>()
 function registerAvatarProtocol(): void {
   protocol.handle('talk-avatar', async (request) => {
     const url = new URL(request.url)
-    const token = url.pathname.replace(/^\//, '')
+    const id = decodeURIComponent(url.pathname.replace(/^\//, ''))
+    const user = url.hostname === 'user'
     const dark = nativeTheme.shouldUseDarkColors
-    const key = `${token}|${url.searchParams.get('v') ?? ''}|${dark}`
+    const key = `${url.hostname}|${id}|${url.searchParams.get('v') ?? ''}|${dark}`
     let hit = avatarCache.get(key)
     if (!hit && session) {
       try {
-        hit = await session.avatar(token, dark)
+        hit = user ? await session.userAvatar(id, dark) : await session.avatar(id, dark)
         avatarCache.set(key, hit)
       } catch {
         return new Response(null, { status: 404 })
@@ -692,6 +920,11 @@ async function quitAfterOutbox(): Promise<void> {
   quitting = true
   finishRecording()
   const s = session
+  if (s && callActive()) {
+    // Leave the call properly instead of letting the server time us out.
+    s.hangUp()
+    await new Promise((r) => setTimeout(r, 1000))
+  }
   if (s && s.outboxUnsent() > 0) {
     await Promise.race([s.waitOutboxIdle(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined)
   }
@@ -775,6 +1008,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc()
     registerAvatarProtocol()
     registerMediaProtocol()
+    createTray()
     // Microphone (voice messages) for our window only; nothing else asks for permissions.
     electronSession.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
       const own = wc === win?.webContents

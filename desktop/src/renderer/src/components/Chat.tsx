@@ -11,6 +11,7 @@ import { isAudioAttachment } from '../voice'
 import { ImageViewer } from './ImageViewer'
 import { MessageMenu, type MenuItem } from './MessageMenu'
 import { OfflineBanner } from './Sidebar'
+import { CallButton } from '../call/CallScreen'
 
 /** Messages of the same author within this window form one visual group. */
 const GROUP_WINDOW_S = 3 * 60
@@ -111,6 +112,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
         <div className="chat-title">
           <h2>{room.name}</h2>
           {room.description && <span className="muted ellipsis">{plain(room.description)}</span>}
+        </div>
+        <div className="chat-header-actions">
+          <CallButton room={room} />
         </div>
       </header>
       {!online && <OfflineBanner />}
