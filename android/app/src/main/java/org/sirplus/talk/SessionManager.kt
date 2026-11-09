@@ -145,7 +145,8 @@ class SessionManager(private val context: Context) : CoreListener {
         val s = TalkSession(account.server, account.loginName, account.appPassword, ClientPlatform.ANDROID, this, dataDir)
         session = s
         _state.update {
-            it.copy(session = SessionState.READY, server = account.server, user = account.loginName)
+            // Cached conversation list: shown in the first frame, before any request.
+            it.copy(session = SessionState.READY, server = account.server, user = account.loginName, rooms = s.rooms())
         }
         // Unsent messages of an earlier run continue in the background worker as well.
         scheduleOutboxIfNeeded()
@@ -286,14 +287,20 @@ class SessionManager(private val context: Context) : CoreListener {
         val previous = _state.value.activeToken
         if (previous == token) return
         previous?.let { s.closeChat(it) }
+        // Cached messages and unsent ones (both survive restarts): shown in the first frame.
+        val cached = s.cachedChat(token)
         _state.update { st ->
             val chat = st.chats[token] ?: ChatState()
+            val messages = merge(chat.messages, cached.messages)
+            val older = cached.oldestId != null && (chat.oldestId == null || cached.oldestId!! < chat.oldestId!!)
             st.copy(
                 activeToken = token,
                 chats = st.chats + (token to chat.copy(
-                    loading = chat.messages.isEmpty(),
-                    // Unsent messages survive restarts: show them from the first frame.
-                    messages = withPending(chat.messages, s.pending(token)),
+                    loading = messages.none { it.status == null },
+                    messages = withPending(messages, s.pending(token)),
+                    hasMore = if (older) cached.hasMore else chat.hasMore,
+                    oldestId = if (older) cached.oldestId else chat.oldestId,
+                    lastCommonRead = maxOf(chat.lastCommonRead, cached.lastCommonRead ?: 0),
                 )),
             )
         }
@@ -302,8 +309,10 @@ class SessionManager(private val context: Context) : CoreListener {
                 val page = s.openChat(token)
                 val room = _state.value.rooms.find { it.token == token }
                 updateChat(token) {
+                    // Outdated cache: drop what was shown (unsent messages stay).
+                    val base = if (page.reset) it.messages.filter { m -> m.status != null } else it.messages
                     it.copy(
-                        messages = merge(it.messages, page.messages),
+                        messages = merge(base, page.messages),
                         hasMore = page.hasMore,
                         oldestId = page.oldestId,
                         lastCommonRead = maxOf(page.lastCommonRead ?: 0, room?.lastCommonReadMessage ?: 0),

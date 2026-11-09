@@ -142,11 +142,27 @@ export async function openRoom(token: string): Promise<void> {
   set({ activeToken: token })
   setChat(token, (c) => ({ ...c, loading: c.messages.length === 0 }))
   try {
+    // Cached messages first, then the server state.
+    const cached: ChatPage = await window.talk.cachedChat(token)
+    if (state.activeToken === token && cached.messages.length > 0) {
+      setChat(token, (c) => {
+        const older = cached.oldestId != null && (c.oldestId == null || cached.oldestId < c.oldestId)
+        return {
+          ...c,
+          messages: merge(c.messages, cached.messages),
+          hasMore: older ? cached.hasMore : c.hasMore,
+          oldestId: older ? cached.oldestId : c.oldestId,
+          lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
+          loading: false,
+        }
+      })
+    }
     const page: ChatPage = await window.talk.openChat(token)
     const room = state.rooms.find((r) => r.token === token)
     setChat(token, (c) => ({
       ...c,
-      messages: merge(c.messages, page.messages),
+      // Outdated cache: drop what was shown (unsent messages stay).
+      messages: merge(page.reset ? c.messages.filter((m) => m.status) : c.messages, page.messages),
       hasMore: page.hasMore,
       oldestId: page.oldestId,
       lastCommonRead: Math.max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0),

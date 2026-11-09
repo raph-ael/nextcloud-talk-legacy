@@ -20,6 +20,7 @@ uuid.workspace = true
 sha2.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
+rusqlite.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

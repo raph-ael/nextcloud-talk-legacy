@@ -129,6 +129,7 @@ impl TalkSession {
         user: String,
         app_password: String,
         #[napi(ts_arg_type = "(event: any) => void")] on_event: EventCallback,
+        data_dir: Option<String>,
     ) -> Result<Self> {
         let account = core::Account {
             server,
@@ -136,7 +137,7 @@ impl TalkSession {
             app_password,
         };
         let client = core::TalkClient::new(account, core::Platform::Desktop).map_err(to_napi)?;
-        let engine = core::Engine::new(client, Arc::new(JsSink(on_event)), None);
+        let engine = core::Engine::new(client, Arc::new(JsSink(on_event)), data_dir.map(Into::into));
         Ok(Self { engine })
     }
 
@@ -164,6 +165,12 @@ impl TalkSession {
     #[napi]
     pub async fn refresh_rooms(&self) -> Result<()> {
         self.engine.refresh_rooms(true).await.map_err(to_napi)
+    }
+
+    /// Newest cached messages (empty without cache), for the first frame of a chat.
+    #[napi(ts_return_type = "any")]
+    pub fn cached_chat(&self, token: String) -> Result<Value> {
+        json(&self.engine.cached_chat(&token))
     }
 
     #[napi(ts_return_type = "Promise<any>")]

@@ -7,6 +7,7 @@ const api: TalkApi = {
   cancelLogin: () => ipcRenderer.invoke('talk:cancelLogin'),
   logout: () => ipcRenderer.invoke('talk:logout'),
   rooms: () => ipcRenderer.invoke('talk:rooms'),
+  cachedChat: (token) => ipcRenderer.invoke('talk:cachedChat', token),
   openChat: (token) => ipcRenderer.invoke('talk:openChat', token),
   closeChat: (token) => ipcRenderer.invoke('talk:closeChat', token),
   loadOlder: (token, beforeId) => ipcRenderer.invoke('talk:loadOlder', token, beforeId),

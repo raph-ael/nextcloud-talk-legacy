@@ -77,6 +77,13 @@ enum Cmd {
     },
     /// Resume the outbox of an earlier (killed) run until everything is delivered
     OutboxRun,
+    /// Cache check: shows the cached state (timed), then syncs a chat and shows the delta
+    Cache {
+        token: Option<String>,
+        /// Number of cached messages to print
+        #[arg(short = 'n', long, default_value_t = 10)]
+        lines: usize,
+    },
 }
 
 #[tokio::main]
@@ -109,9 +116,12 @@ async fn main() -> Result<()> {
     if let Cmd::Enqueue { .. } | Cmd::OutboxRun = &cli.cmd {
         return run_outbox(&cli, client).await;
     }
+    if let Cmd::Cache { token, lines } = &cli.cmd {
+        return run_cache(&cli, client, token.as_deref(), *lines).await;
+    }
 
     match cli.cmd {
-        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun => unreachable!(),
+        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } => unreachable!(),
         Cmd::Rooms { json } => {
             let t = Instant::now();
             let mut batch = client.rooms(None, true).await?;
@@ -246,13 +256,63 @@ impl EventSink for PrintSink {
     }
 }
 
-async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
-    let dir = match &cli.data_dir {
+fn data_dir(cli: &Cli) -> Result<PathBuf> {
+    Ok(match &cli.data_dir {
         Some(d) => d.clone(),
         None => PathBuf::from(std::env::var("HOME")?)
             .join(".cache/talk-cli")
             .join(&cli.account),
+    })
+}
+
+async fn run_cache(cli: &Cli, client: TalkClient, token: Option<&str>, lines: usize) -> Result<()> {
+    let t = Instant::now();
+    let engine = Engine::new(
+        client,
+        Arc::new(PrintSink {
+            last: Mutex::default(),
+        }),
+        Some(data_dir(cli)?),
+    );
+    let rooms = engine.rooms();
+    eprintln!("Cache: {} Räume in {:?} (ohne Netz)", rooms.len(), t.elapsed());
+    let show = |label: &str, page: &talk_core::ChatPage| {
+        eprintln!(
+            "{label}: {} sichtbare Nachrichten, älteste id {:?}, mehr: {}, reset: {}",
+            page.messages.len(),
+            page.oldest_id,
+            page.has_more,
+            page.reset
+        );
+        for m in page.messages.iter().rev().take(lines).rev() {
+            let edited = if m.edited { " (bearbeitet)" } else { "" };
+            let reactions: String = m.reactions.iter().map(|(k, v)| format!(" {k}{v}")).collect();
+            println!("  [{}] {} {}: {}{edited}{reactions}", m.id, m.kind, m.author, one_line(&m.text, 60));
+        }
     };
+    let Some(token) = token else {
+        for r in rooms.iter().take(lines) {
+            println!("  {} {}", r.token, r.name);
+        }
+        return Ok(());
+    };
+    let t = Instant::now();
+    let cached = engine.cached_chat(token);
+    eprintln!("cached_chat in {:?}", t.elapsed());
+    show("Cache", &cached);
+    if let Err(e) = engine.start().await {
+        eprintln!("Start: {e}");
+    }
+    let t = Instant::now();
+    let page = engine.open_chat(token).await?;
+    eprintln!("open_chat (Delta-Sync) in {:?}", t.elapsed());
+    show("Server", &page);
+    engine.shutdown();
+    Ok(())
+}
+
+async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
+    let dir = data_dir(cli)?;
     let engine = Engine::new(
         client,
         Arc::new(PrintSink {

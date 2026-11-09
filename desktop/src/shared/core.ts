@@ -93,6 +93,8 @@ export interface ChatPage {
   hasMore: boolean
   oldestId: number | null
   lastCommonRead: number | null
+  /** Replace the shown messages instead of merging (the cached copy was outdated). */
+  reset: boolean
 }
 
 export type CoreEvent =
@@ -125,6 +127,8 @@ export interface TalkApi {
   cancelLogin(): Promise<void>
   logout(): Promise<void>
   rooms(): Promise<RoomView[]>
+  /** Newest cached messages, for the first frame of a chat (empty without cache). */
+  cachedChat(token: string): Promise<ChatPage>
   openChat(token: string): Promise<ChatPage>
   closeChat(token: string): Promise<void>
   loadOlder(token: string, beforeId: number): Promise<ChatPage>

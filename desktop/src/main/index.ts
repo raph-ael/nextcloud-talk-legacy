@@ -17,6 +17,7 @@ interface NativeSession {
   logout(): Promise<void>
   rooms(): RoomView[]
   refreshRooms(): Promise<void>
+  cachedChat(token: string): unknown
   openChat(token: string): Promise<unknown>
   closeChat(token: string): void
   loadOlder(token: string, beforeId: number): Promise<unknown>
@@ -27,7 +28,13 @@ interface NativeSession {
 interface NativeCore {
   coreVersion(): string
   startLogin(server: string): Promise<NativeLoginFlow>
-  TalkSession: new (server: string, user: string, appPassword: string, onEvent: (e: CoreEvent) => void) => NativeSession
+  TalkSession: new (
+    server: string,
+    user: string,
+    appPassword: string,
+    onEvent: (e: CoreEvent) => void,
+    dataDir: string | null,
+  ) => NativeSession
 }
 
 const nativePath = app.isPackaged
@@ -47,7 +54,10 @@ interface StoredAccount {
 
 const dataDir = app.getPath('userData')
 const accountFile = join(dataDir, 'account.json')
-const roomsCacheFile = join(dataDir, 'rooms-cache.json')
+/** Core cache (conversations, messages, avatars) and outbox of the signed-in account. */
+const coreDir = join(dataDir, 'talk')
+/** Room list cache of earlier versions (now in the core cache). */
+const legacyRoomsCache = join(dataDir, 'rooms-cache.json')
 
 function loadAccount(): StoredAccount | null {
   try {
@@ -65,26 +75,12 @@ function saveAccount(server: string, loginName: string, appPassword: string): vo
 
 function clearAccount(): void {
   rmSync(accountFile, { force: true })
-  rmSync(roomsCacheFile, { force: true })
-}
-
-let roomsCacheTimer: NodeJS.Timeout | undefined
-function cacheRooms(rooms: RoomView[]): void {
-  clearTimeout(roomsCacheTimer)
-  roomsCacheTimer = setTimeout(() => {
-    try {
-      writeFileSync(roomsCacheFile, JSON.stringify(rooms))
-    } catch {
-      /* cache is best effort */
-    }
-  }, 1000)
-}
-
-function cachedRooms(): RoomView[] {
+  rmSync(legacyRoomsCache, { force: true })
   try {
-    return JSON.parse(readFileSync(roomsCacheFile, 'utf8')) as RoomView[]
-  } catch {
-    return []
+    // Cached messages belong to this account only.
+    rmSync(coreDir, { recursive: true, force: true })
+  } catch (err) {
+    console.warn('cache cleanup failed:', (err as Error).message)
   }
 }
 
@@ -105,7 +101,6 @@ function send(event: TalkEvent): void {
 function onCoreEvent(event: CoreEvent): void {
   if (event.type === 'roomsChanged') {
     notifyNewMessages(event.rooms)
-    cacheRooms(event.rooms)
   } else if (event.type === 'authFailed') {
     void signOut(false)
     return
@@ -115,7 +110,10 @@ function onCoreEvent(event: CoreEvent): void {
 
 function startSession(stored: StoredAccount, plainPassword?: string): void {
   const password = plainPassword ?? safeStorage.decryptString(Buffer.from(stored.secret, 'base64'))
-  session = new core.TalkSession(stored.server, stored.loginName, password, onCoreEvent)
+  rmSync(legacyRoomsCache, { force: true })
+  // Dev accounts (not stored) get their own cache: never mix two accounts' messages.
+  const dir = stored.secret ? coreDir : join(dataDir, 'talk-dev', stored.loginName)
+  session = new core.TalkSession(stored.server, stored.loginName, password, onCoreEvent, dir)
   firstRoomsEvent = true
   const s = session
   s.start()
@@ -285,11 +283,9 @@ function registerIpc(): void {
   })
   ipcMain.handle('talk:logout', () => signOut(true))
 
-  ipcMain.handle('talk:rooms', () => {
-    if (!session) return []
-    const live = session.rooms()
-    return live.length > 0 ? live : cachedRooms()
-  })
+  // From the core cache before the first request completes.
+  ipcMain.handle('talk:rooms', () => session?.rooms() ?? [])
+  ipcMain.handle('talk:cachedChat', (_e, token: string) => requireSession().cachedChat(token))
   ipcMain.handle('talk:openChat', (_e, token: string) => {
     activeToken = token
     return requireSession().openChat(token)

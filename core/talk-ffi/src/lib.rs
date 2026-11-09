@@ -371,6 +371,8 @@ pub struct ChatPage {
     pub has_more: bool,
     pub oldest_id: Option<i64>,
     pub last_common_read: Option<i64>,
+    /// Replace the shown messages instead of merging (the cached copy was outdated).
+    pub reset: bool,
 }
 
 impl From<core::ChatPage> for ChatPage {
@@ -380,6 +382,7 @@ impl From<core::ChatPage> for ChatPage {
             has_more: p.has_more,
             oldest_id: p.oldest_id,
             last_common_read: p.last_common_read,
+            reset: p.reset,
         }
     }
 }
@@ -505,7 +508,13 @@ impl TalkSession {
         Ok(self.engine.refresh_rooms(true).await?)
     }
 
-    /// Newest page of a chat; live updates follow as `MessagesAdded` events.
+    /// Newest cached messages (empty without cache), for the first frame of a chat.
+    pub fn cached_chat(&self, token: String) -> ChatPage {
+        self.engine.cached_chat(&token).into()
+    }
+
+    /// Brings a chat up to date and returns its newest page; live updates follow as
+    /// `MessagesAdded` events.
     pub async fn open_chat(&self, token: String) -> Result<ChatPage, CoreError> {
         Ok(self.engine.open_chat(&token).await?.into())
     }

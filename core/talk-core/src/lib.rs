@@ -6,8 +6,11 @@
 //! - [`models`]: wire types
 //! - [`engine`]: sync engine emitting UI-ready events (shared by all platforms)
 //!
-//! Upcoming: local database + sync engine, signaling client (HPB), call state machine, push.
+//! - `cache`: SQLite cache of rooms and messages, avatar/preview files
+//!
+//! Upcoming: signaling client (HPB), call state machine, push.
 
+pub(crate) mod cache;
 pub mod client;
 pub mod engine;
 pub mod error;

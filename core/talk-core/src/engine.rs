@@ -5,8 +5,11 @@
 //! all Talk-specific rules (hidden system messages, edits/deletions arriving as system
 //! messages, own-message detection, sorting) live here once.
 //!
-//! Next steps (see roadmap): SQLite cache so the UI starts from disk, and the HPB
-//! signaling connection replacing the room-list polling interval.
+//! With a data directory everything is cached in SQLite ([`crate::cache`]): the room
+//! list is available before the first request and chats open from disk, then only the
+//! delta is fetched.
+//!
+//! Next step (see roadmap): the HPB signaling connection replacing the room-list polling.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -17,6 +20,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
+use crate::cache::Cache;
 use crate::outbox::{Outbox, PendingMessage};
 
 use crate::client::TalkClient;
@@ -29,6 +33,11 @@ const ROOMS_INTERVAL: Duration = Duration::from_secs(10);
 const ROOMS_FULL_INTERVAL: Duration = Duration::from_secs(60);
 const POLL_TIMEOUT_S: u32 = 30;
 const PAGE_SIZE: u32 = 50;
+/// Messages per delta request (the server's limit for `lookIntoFuture`).
+const DELTA_PAGE: usize = 100;
+/// More new messages than this since the last sync: drop the cached chat instead of
+/// fetching them all (the newest page is enough to show the chat).
+const DELTA_MAX: usize = 500;
 
 /// System messages that only modify other messages or are pure noise in a chat view.
 const HIDDEN_SYSTEM: &[&str] = &[
@@ -46,7 +55,7 @@ const HIDDEN_SYSTEM: &[&str] = &[
 ];
 
 /// System messages whose `parent` is the updated version of an existing message.
-const UPDATING_SYSTEM: &[&str] = &[
+pub(crate) const UPDATING_SYSTEM: &[&str] = &[
     "reaction",
     "reaction_deleted",
     "reaction_revoked",
@@ -155,7 +164,7 @@ pub struct ReplyPreview {
     pub attachment: Option<FileAttachment>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatPage {
     /// Ascending by id.
@@ -166,6 +175,9 @@ pub struct ChatPage {
     /// (hidden system messages count too).
     pub oldest_id: Option<i64>,
     pub last_common_read: Option<i64>,
+    /// The chat changed too much since the cached copy: replace what is shown instead of
+    /// merging (only from `open_chat`).
+    pub reset: bool,
 }
 
 #[derive(Default)]
@@ -187,25 +199,35 @@ pub struct Engine {
     state: Mutex<State>,
     attachment_folder: RwLock<Option<String>>,
     pub(crate) outbox: Outbox,
+    pub(crate) cache: Cache,
     /// Runtime of `start`, for spawning from synchronous calls.
     pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
     weak: Weak<Self>,
 }
 
 impl Engine {
-    /// `data_dir`: where the outbox keeps unsent messages across restarts (an app-private
-    /// directory). Without one, unsent messages live in memory only.
+    /// `data_dir`: app-private directory for the cache (conversations, messages, avatars)
+    /// and the outbox (unsent messages). Without one, everything lives in memory only.
+    /// Loads the cached conversation list, so [`Self::rooms`] answers without network.
     pub fn new(client: TalkClient, sink: Arc<dyn EventSink>, data_dir: Option<PathBuf>) -> Arc<Self> {
-        let me = client.account().user.clone();
+        let cache = Cache::open(data_dir.as_deref());
+        let me = cache
+            .meta("user_id")
+            .unwrap_or_else(|| client.account().user.clone());
+        let state = State {
+            rooms: cache.rooms().into_iter().map(|r| (r.token.clone(), r)).collect(),
+            ..State::default()
+        };
         Arc::new_cyclic(|weak| Self {
             client,
             sink,
             me: RwLock::new(me),
             me_resolved: AtomicBool::new(false),
             online: AtomicBool::new(true),
-            state: Mutex::new(State::default()),
-            attachment_folder: RwLock::new(None),
+            state: Mutex::new(state),
+            attachment_folder: RwLock::new(cache.meta("attachment_folder")),
             outbox: Outbox::open(data_dir.as_deref()),
+            cache,
             runtime: OnceLock::new(),
             weak: weak.clone(),
         })
@@ -226,12 +248,17 @@ impl Engine {
     pub async fn start(self: &Arc<Self>) -> Result<()> {
         let _ = self.runtime.set(tokio::runtime::Handle::current());
         self.spawn_outbox();
+        let weak = Arc::downgrade(self);
+        tokio::task::spawn_blocking(move || {
+            if let Some(e) = weak.upgrade() {
+                e.cache.prune_media();
+            }
+        });
         // User id and room list in parallel: saves a full round trip on cold start.
         let (user, rooms) = tokio::join!(self.client.current_user(), self.client.rooms(None, false));
         let user = match self.guard(user) {
             Ok(u) => {
-                *self.me.write().unwrap() = u.id;
-                self.me_resolved.store(true, Ordering::Relaxed);
+                self.set_user(u.id);
                 Ok(())
             }
             Err(Error::Unauthorized) => return Err(Error::Unauthorized),
@@ -270,9 +297,16 @@ impl Engine {
             return Ok(());
         }
         let user = self.guard(self.client.current_user().await)?;
-        *self.me.write().unwrap() = user.id;
-        self.me_resolved.store(true, Ordering::Relaxed);
+        self.set_user(user.id);
         Ok(())
+    }
+
+    fn set_user(&self, id: String) {
+        if *self.me.read().unwrap() != id {
+            *self.me.write().unwrap() = id.clone();
+        }
+        self.cache.set_meta("user_id", id);
+        self.me_resolved.store(true, Ordering::Relaxed);
     }
 
     /// Stops all background work (unsent messages stay stored for the next start).
@@ -308,6 +342,9 @@ impl Engine {
     }
 
     fn apply_rooms(&self, batch: crate::client::RoomsBatch, full: bool) {
+        if full || !batch.rooms.is_empty() {
+            self.cache.put_rooms(batch.rooms.clone(), full);
+        }
         let views = {
             let mut st = self.state.lock().unwrap();
             if full {
@@ -332,20 +369,54 @@ impl Engine {
         self.sink.emit(Event::RoomsChanged { rooms: views });
     }
 
-    /// Loads the newest page of a chat and starts live updates for it.
-    pub async fn open_chat(self: &Arc<Self>, token: &str) -> Result<ChatPage> {
-        let batch = self.guard(self.client.history(token, None, PAGE_SIZE).await)?;
-        // `X-Chat-Last-Given` points at the *oldest* message for history requests.
-        let newest = batch.messages.iter().map(|m| m.id).max().unwrap_or(0);
-        let page = self.page(batch.messages, batch.last_common_read);
+    /// Newest messages from the cache (empty without one), for the first frame of a chat.
+    /// Call [`Self::open_chat`] afterwards for the server state.
+    pub fn cached_chat(&self, token: &str) -> ChatPage {
+        let Some(range) = self.cache.range(token) else {
+            return ChatPage::default();
+        };
+        let (messages, more) = self.cache.messages(token, None, PAGE_SIZE);
+        self.cached_page(messages, more || range.has_more, range.last_common_read)
+    }
 
+    /// Brings a chat up to date and starts live updates for it. Returns its newest page.
+    /// With a cache only the messages since the last sync are fetched (edits, deletions
+    /// and reactions arrive among them as system messages).
+    ///
+    /// Offline, the error is returned but live updates still start from the cached state,
+    /// so the chat catches up once the server is reachable.
+    pub async fn open_chat(self: &Arc<Self>, token: &str) -> Result<ChatPage> {
+        let synced = if self.cache.enabled() {
+            self.sync_chat(token).await
+        } else {
+            self.guard(self.client.history(token, None, PAGE_SIZE).await).map(|batch| {
+                // `X-Chat-Last-Given` points at the *oldest* message for history requests.
+                let newest = batch.messages.iter().map(|m| m.id).max().unwrap_or(0);
+                (self.page(batch.messages, batch.last_common_read), newest)
+            })
+        };
+        match synced {
+            Ok((page, newest)) => {
+                self.start_poll(token, newest);
+                Ok(page)
+            }
+            Err(Error::Unauthorized) => Err(Error::Unauthorized),
+            Err(e) => {
+                if let Some(r) = self.cache.range(token) {
+                    self.start_poll(token, r.newest_id);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn start_poll(self: &Arc<Self>, token: &str, newest: i64) {
         let weak = Arc::downgrade(self);
         let tok = token.to_string();
         let task = tokio::spawn(async move { poll_loop(weak, tok, newest).await });
         if let Some(old) = self.state.lock().unwrap().chats.insert(token.to_string(), task) {
             old.abort();
         }
-        Ok(page)
     }
 
     pub fn close_chat(&self, token: &str) {
@@ -359,9 +430,80 @@ impl Engine {
         self.state.lock().unwrap().chats.contains_key(token)
     }
 
-    /// Messages older than `before_id`.
+    /// Fetches the delta since the cached state (or the newest page) into the cache and
+    /// returns the newest page from it plus the newest message id.
+    async fn sync_chat(&self, token: &str) -> Result<(ChatPage, i64)> {
+        let cached = self.cache.range(token);
+        let delta = match cached {
+            Some(r) => self.fetch_delta(token, r.newest_id).await?,
+            None => None,
+        };
+        let fresh = match delta {
+            Some((messages, last_common_read)) => {
+                let updates = parent_updates(&messages);
+                self.cache.append(token, messages, updates, last_common_read);
+                None
+            }
+            None => {
+                let batch = self.guard(self.client.history(token, None, PAGE_SIZE).await)?;
+                let has_more = batch.messages.len() as u32 >= PAGE_SIZE;
+                self.cache
+                    .replace_chat(token, batch.messages.clone(), has_more, batch.last_common_read);
+                Some(batch)
+            }
+        };
+        self.cache.flush().await;
+        let range = self.cache.range(token);
+        let reset = cached.is_some() && fresh.is_some();
+        let mut page = match (range, fresh) {
+            (Some(r), _) => {
+                let (messages, more) = self.cache.messages(token, None, PAGE_SIZE);
+                self.cached_page(messages, more || r.has_more, r.last_common_read)
+            }
+            // Empty chat, or the cache could not store it.
+            (None, Some(batch)) => self.page(batch.messages, batch.last_common_read),
+            (None, None) => ChatPage::default(),
+        };
+        page.reset = reset;
+        let newest = range.map_or(0, |r| r.newest_id).max(page.messages.iter().map(|m| m.id).max().unwrap_or(0));
+        Ok((page, newest))
+    }
+
+    /// Messages after `last`, or `None` when the cached copy is not worth updating (too
+    /// many new messages, or the history was cleared).
+    async fn fetch_delta(&self, token: &str, mut last: i64) -> Result<Option<(Vec<ChatMessage>, Option<i64>)>> {
+        let mut out = Vec::new();
+        let mut last_common_read = None;
+        loop {
+            let batch = self.guard(self.client.poll_messages(token, last, 0).await)?;
+            last_common_read = batch.last_common_read.or(last_common_read);
+            let n = batch.messages.len();
+            let before = last;
+            if let Some(id) = batch.last_given.or(batch.messages.last().map(|m| m.id)) {
+                last = last.max(id);
+            }
+            out.extend(batch.messages);
+            if out.len() > DELTA_MAX || out.iter().any(|m| m.system_message == "history_cleared") {
+                return Ok(None);
+            }
+            if n < DELTA_PAGE || last == before {
+                return Ok(Some((out, last_common_read)));
+            }
+        }
+    }
+
+    /// Messages older than `before_id`: from the cache when it has them, else from the
+    /// server (then they extend the cached range).
     pub async fn load_older(&self, token: &str, before_id: i64) -> Result<ChatPage> {
+        if let Some(r) = self.cache.range(token).filter(|r| before_id > r.oldest_id) {
+            let (messages, more) = self.cache.messages(token, Some(before_id), PAGE_SIZE);
+            if !messages.is_empty() {
+                return Ok(self.cached_page(messages, more || r.has_more, None));
+            }
+        }
         let batch = self.guard(self.client.history(token, Some(before_id), PAGE_SIZE).await)?;
+        let has_more = batch.messages.len() as u32 >= PAGE_SIZE;
+        self.cache.prepend(token, before_id, batch.messages.clone(), has_more);
         Ok(self.page(batch.messages, batch.last_common_read))
     }
 
@@ -387,12 +529,13 @@ impl Engine {
     fn update_room_after_send(&self, token: &str, msg: ChatMessage) {
         let rooms = {
             let mut st = self.state.lock().unwrap();
-            st.rooms.get_mut(token).map(|room| {
+            if let Some(room) = st.rooms.get_mut(token) {
                 room.last_activity = room.last_activity.max(msg.timestamp);
                 room.last_message = Some(msg);
                 room.unread_messages = 0;
                 room.unread_mention = false;
-            });
+                self.cache.put_rooms(vec![room.clone()], false);
+            }
             self.sorted_views(&st.rooms)
         };
         self.sink.emit(Event::RoomsChanged { rooms });
@@ -415,6 +558,7 @@ impl Engine {
                     r.unread_messages = 0;
                     r.unread_mention = false;
                     r.last_read_message = r.last_read_message.max(message_id);
+                    self.cache.put_rooms(vec![r.clone()], false);
                     Some(self.sorted_views(&st.rooms))
                 }
                 _ => None,
@@ -429,11 +573,31 @@ impl Engine {
     pub async fn logout(&self) -> Result<()> {
         self.shutdown();
         self.outbox.clear();
+        self.cache.clear();
         self.client.revoke_app_password().await
     }
 
+    /// Conversation avatar (bytes, content type); cached on disk per avatar version.
     pub async fn avatar(&self, token: &str, dark: bool) -> Result<(Vec<u8>, String)> {
-        self.client.room_avatar(token, dark).await
+        let version = self
+            .state
+            .lock()
+            .unwrap()
+            .rooms
+            .get(token)
+            .map(|r| r.avatar_version.clone())
+            .unwrap_or_default();
+        let key = format!("avatar/{token}/{version}/{dark}");
+        if !version.is_empty() {
+            if let Some(hit) = self.cache.media_get(&key).await {
+                return Ok(hit);
+            }
+        }
+        let (data, mime) = self.client.room_avatar(token, dark).await?;
+        if !version.is_empty() {
+            self.cache.media_put(&key, &data, &mime).await;
+        }
+        Ok((data, mime))
     }
 
     /// Uploads a local file into the user's Talk attachment folder and posts it to the
@@ -465,8 +629,15 @@ impl Engine {
     }
 
     /// Image preview bytes (JPEG/PNG) of a shared file, fitting into `width`×`height`.
+    /// Cached on disk: shared files don't change.
     pub async fn file_preview(&self, file_id: &str, width: u32, height: u32) -> Result<Vec<u8>> {
-        self.client.file_preview(file_id, width, height).await
+        let key = format!("preview/{file_id}/{width}x{height}");
+        if let Some((data, _)) = self.cache.media_get(&key).await {
+            return Ok(data);
+        }
+        let data = self.client.file_preview(file_id, width, height).await?;
+        self.cache.media_put(&key, &data, "").await;
+        Ok(data)
     }
 
     pub(crate) async fn attachment_folder(&self) -> Result<String> {
@@ -475,6 +646,7 @@ impl Engine {
         }
         let f = self.guard(self.client.attachment_folder().await)?;
         *self.attachment_folder.write().unwrap() = Some(f.clone());
+        self.cache.set_meta("attachment_folder", f.clone());
         Ok(f)
     }
 
@@ -520,6 +692,25 @@ impl Engine {
                 .collect(),
             has_more,
             last_common_read,
+            reset: false,
+        }
+    }
+
+    /// A page of cached messages (already known to be in the cache's range).
+    fn cached_page(&self, messages: Vec<ChatMessage>, has_more: bool, last_common_read: Option<i64>) -> ChatPage {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        ChatPage {
+            oldest_id: messages.iter().map(|m| m.id).min(),
+            messages: messages
+                .iter()
+                .filter(|m| is_visible(m) && !(m.expiration_timestamp > 0 && m.expiration_timestamp < now))
+                .map(|m| self.view(m))
+                .collect(),
+            has_more,
+            last_common_read,
+            reset: false,
         }
     }
 
@@ -605,6 +796,12 @@ impl Engine {
 
     /// Applies a poll result: emits new and updated messages, refreshes the room preview.
     fn apply_live(&self, token: &str, messages: Vec<ChatMessage>) {
+        if messages.iter().any(|m| m.system_message == "history_cleared") {
+            // Forget the cached copy; the next open loads the remaining history.
+            self.cache.replace_chat(token, Vec::new(), false, None);
+        } else if !messages.is_empty() {
+            self.cache.append(token, messages.clone(), parent_updates(&messages), None);
+        }
         let mut added = Vec::new();
         let mut updated = Vec::new();
         let mut latest: Option<ChatMessage> = None;
@@ -638,10 +835,11 @@ impl Engine {
         if let Some(m) = latest {
             let rooms = {
                 let mut st = self.state.lock().unwrap();
-                st.rooms.get_mut(token).map(|room| {
+                if let Some(room) = st.rooms.get_mut(token) {
                     room.last_activity = room.last_activity.max(m.timestamp);
                     room.last_message = Some(m);
-                });
+                    self.cache.put_rooms(vec![room.clone()], false);
+                }
                 self.sorted_views(&st.rooms)
             };
             self.sink.emit(Event::RoomsChanged { rooms });
@@ -677,6 +875,15 @@ fn is_visible(m: &ChatMessage) -> bool {
     !HIDDEN_SYSTEM.contains(&m.system_message.as_str())
 }
 
+/// New versions of earlier messages carried by edit/deletion/reaction system messages.
+fn parent_updates(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    messages
+        .iter()
+        .filter(|m| UPDATING_SYSTEM.contains(&m.system_message.as_str()))
+        .filter_map(|m| m.parent.as_deref().cloned())
+        .collect()
+}
+
 async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64) {
     let mut backoff = Duration::from_secs(1);
     let mut last_read: Option<i64> = None;
@@ -695,6 +902,7 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
                 if let Some(r) = batch.last_common_read {
                     if last_read != Some(r) {
                         last_read = Some(r);
+                        e.cache.set_read_status(&token, r);
                         e.sink.emit(Event::ReadStatus {
                             token: token.clone(),
                             last_common_read: r,
