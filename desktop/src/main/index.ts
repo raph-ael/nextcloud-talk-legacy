@@ -5,12 +5,10 @@ import {
   Menu,
   nativeTheme,
   Notification,
-  powerMonitor,
   protocol,
   safeStorage,
   session as electronSession,
   shell,
-  systemPreferences,
   Tray,
 } from 'electron'
 import { randomBytes } from 'node:crypto'
@@ -18,6 +16,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFil
 import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
+import { callChanged, ensureMicrophone, installSystem } from './system'
 import {
   withAttachment,
   type AccountInfo,
@@ -451,6 +450,8 @@ function onCallChanged(next: CallView | null): void {
   const wasRinging = call?.state === 'incoming'
   const wasActive = callActive()
   call = next
+  // Keep awake, network, and on macOS dock, menu bar and the notification with buttons.
+  callChanged(next)
   const ringing = next?.state === 'incoming'
   if (callActive() !== wasActive) updateTrayMenu()
   if (ringing && !wasRinging) startRingAttention(next)
@@ -460,7 +461,8 @@ function onCallChanged(next: CallView | null): void {
 /** Incoming call: blink the taskbar entry and show a silent notification (the bar rings). */
 function startRingAttention(c: CallView): void {
   if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true)
-  if (!Notification.isSupported()) return
+  // macOS: system.ts shows the notification with Annehmen/Ablehnen buttons.
+  if (process.platform === 'darwin' || !Notification.isSupported()) return
   ringNotification?.close()
   const n = new Notification({
     title: c.isGroup ? `Gruppenanruf · ${c.roomName}` : c.roomName,
@@ -660,10 +662,16 @@ function createWindow(): void {
   win.on('focus', () => win?.flashFrame(false))
   win.on('close', (e) => {
     // Keeps running in the tray so calls can ring (and a running call keeps its media).
+    // macOS: always, like every Mac app – Cmd+Q quits, the dock icon brings it back.
     if (quitting) return
-    if (callActive() || (process.platform !== 'darwin' && settings.closeToTray && tray)) {
+    if (process.platform === 'darwin' || callActive() || (settings.closeToTray && tray)) {
       e.preventDefault()
-      win?.hide()
+      const w = win
+      // Leaving fullscreen first, otherwise macOS leaves a black space behind.
+      if (w?.isFullScreen()) {
+        w.once('leave-full-screen', () => w.hide())
+        w.setFullScreen(false)
+      } else w?.hide()
     }
   })
   win.on('closed', () => {
@@ -772,11 +780,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('talk:voiceStart', async (_e, token: string, sampleRate: number) => {
     finishRecording()
-    // Unpackaged test runs with Chromium's fake microphone need no macOS permission.
-    const fakeMic = !app.isPackaged && app.commandLine.hasSwitch('use-fake-device-for-media-stream')
-    if (process.platform === 'darwin' && !fakeMic && !(await systemPreferences.askForMediaAccess('microphone'))) {
-      throw new Error('Kein Zugriff auf das Mikrofon')
-    }
+    if (!(await ensureMicrophone('voice'))) throw new Error('Kein Zugriff auf das Mikrofon')
     recording = { token, rec: requireSession().startVoice(token, sampleRate) }
   })
   ipcMain.handle('talk:voicePush', (_e, pcm: Uint8Array) => {
@@ -804,8 +808,13 @@ function registerIpc(): void {
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
 
   // Calls (docs/calls.md).
-  ipcMain.handle('talk:startCall', (_e, token: string, silent: boolean) => requireSession().startCall(token, silent))
-  ipcMain.handle('talk:acceptCall', (_e, token: string) => requireSession().acceptCall(token))
+  // macOS asks for the microphone first (and explains a refusal) instead of a silent call.
+  ipcMain.handle('talk:startCall', async (_e, token: string, silent: boolean) => {
+    if (await ensureMicrophone('call')) await requireSession().startCall(token, silent)
+  })
+  ipcMain.handle('talk:acceptCall', async (_e, token: string) => {
+    if (await ensureMicrophone('call')) await requireSession().acceptCall(token)
+  })
   ipcMain.handle('talk:declineCall', (_e, token: string) => session?.declineCall(token))
   ipcMain.handle('talk:hangUp', () => session?.hangUp())
   ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => session?.setCallMuted(muted))
@@ -1037,16 +1046,26 @@ if (!app.requestSingleInstanceLock()) {
         callback(own && (permission === 'clipboard-sanitized-write' || permission === 'fullscreen'))
       }
     })
-    powerMonitor.on('resume', () => session?.networkChanged())
+    installSystem({
+      acceptCall: (token) => requireSession().acceptCall(token),
+      declineCall: (token) => session?.declineCall(token),
+      hangUp: () => session?.hangUp(),
+      setCallMuted: (muted) => session?.setCallMuted(muted),
+      networkChanged: () => session?.networkChanged(),
+      showWindow,
+      window: () => (win?.isVisible() ? win : null),
+    })
     const dev = devAccount()
     const stored = existsSync(accountFile) ? loadAccount() : null
     if (dev) startSession({ server: dev.server, loginName: dev.user, secret: '' }, dev.password)
     else if (stored) startSession(stored)
     createWindow()
     nativeTheme.on('updated', () => avatarCache.clear())
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
-    })
+    if (process.platform !== 'darwin') {
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      })
+    }
   })
 
   app.on('window-all-closed', () => {

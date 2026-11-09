@@ -87,9 +87,14 @@ export function startMediaEngine(): void {
   if (started) return
   started = true
   window.talk.onMediaCommand(handle)
+  // Bluetooth devices (AirPods) come and go in several steps: act once it is quiet.
+  let deviceTimer: ReturnType<typeof setTimeout> | null = null
   navigator.mediaDevices.addEventListener('devicechange', () => {
-    // A microphone was plugged in after none worked, or the chosen one came back.
-    if (audioCall && (!mic || mic.readyState === 'ended')) void acquireMic()
+    if (deviceTimer) clearTimeout(deviceTimer)
+    deviceTimer = setTimeout(() => {
+      deviceTimer = null
+      void devicesChanged()
+    }, 600)
   })
   window.talk.mediaReady()
 }
@@ -351,6 +356,50 @@ function releaseMic(): void {
 }
 
 // --- Devices ----------------------------------------------------------------------------
+
+/**
+ * Devices came or went (AirPods, headset, USB microphone) or the system default changed.
+ * Chromium keeps an open microphone on the device it started with, so follow the default
+ * (or fall back from a vanished pick) with a fresh capture and `replaceTrack`.
+ */
+async function devicesChanged(): Promise<void> {
+  if (!audioCall) return
+  // A microphone was plugged in after none worked, or the chosen one came back.
+  if (!mic || mic.readyState === 'ended') return acquireMic()
+  let all: MediaDeviceInfo[]
+  try {
+    all = await navigator.mediaDevices.enumerateDevices()
+  } catch {
+    return
+  }
+  const inputs = all.filter((d) => d.kind === 'audioinput')
+  const outputs = all.filter((d) => d.kind === 'audiooutput')
+  const live = mic.getSettings()
+  const picked = ms.microphoneId
+  if (picked && inputs.some((d) => d.deviceId === picked)) {
+    if (live.deviceId !== picked) {
+      console.info('[devices] chosen microphone is back')
+      void acquireMic()
+    }
+  } else if (picked && live.deviceId === picked) {
+    console.info('[devices] chosen microphone gone, using the default')
+    void acquireMic()
+  } else {
+    // Following the default (nothing chosen, or the choice is gone). macOS, Windows and
+    // PulseAudio list it as 'default' with the real device's groupId: another groupId than
+    // the live track means the default moved (AirPods connected, system setting changed).
+    const def = inputs.find((d) => d.deviceId === 'default')
+    if (def?.groupId && live.groupId && def.groupId !== live.groupId) {
+      console.info('[devices] default microphone changed')
+      void acquireMic()
+    }
+  }
+  // Speaker: a vanished pick plays on the default; it comes back when the device does.
+  if (ms.speakerId) {
+    const sink = outputs.some((d) => d.deviceId === ms.speakerId) ? ms.speakerId : ''
+    for (const p of peers.values()) if (p.audio) void applySink(p.audio, sink)
+  }
+}
 
 export interface AudioDevices {
   microphones: MediaDeviceInfo[]
