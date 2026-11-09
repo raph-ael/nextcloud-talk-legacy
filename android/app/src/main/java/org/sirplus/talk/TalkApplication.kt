@@ -9,6 +9,7 @@ class TalkApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Notifications.createChannels(this)
+        org.sirplus.talk.call.CallNotifications.createChannels(this)
         sessions = SessionManager(this)
     }
 }

@@ -27,6 +27,14 @@ import org.sirplus.talk.media.decodeSampled
 import org.sirplus.talk.media.prepareImage
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import uniffi.talk_ffi.CallIceCandidate
+import uniffi.talk_ffi.CallView
+import uniffi.talk_ffi.PeerState
+import uniffi.talk_ffi.SdpType
+import org.sirplus.talk.call.CallActions
+import org.sirplus.talk.call.CallController
+import org.sirplus.talk.call.MediaReports
+import org.sirplus.talk.call.WebRtcMediaEngine
 import uniffi.talk_ffi.ClientPlatform
 import uniffi.talk_ffi.CoreEvent
 import uniffi.talk_ffi.CoreException
@@ -90,6 +98,9 @@ class SessionManager(private val context: Context) : CoreListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
+    private val _call = MutableStateFlow<CallView?>(null)
+    /** The call in progress (also a ringing incoming one); `null`: none. */
+    val call: StateFlow<CallView?> = _call
 
     private var session: TalkSession? = null
     private var loginFlow: LoginFlow? = null
@@ -107,6 +118,15 @@ class SessionManager(private val context: Context) : CoreListener {
 
     /** Voice messages: recording, drafts, playback. */
     val voice = VoiceManager(context, scope, { session }, { _state.value })
+
+    /** Calls: everything around the media (tones, audio, notifications, call screen). */
+    val calls = CallController(context, scope, CallActionsImpl()) {
+        voice.interrupt()
+        voice.player.stop()
+    }
+
+    /** WebRTC for the core; one per process, handed to every session. */
+    private val media = WebRtcMediaEngine(context, MediaReportsImpl(), calls)
 
     init {
         val account = store.load()
@@ -147,6 +167,7 @@ class SessionManager(private val context: Context) : CoreListener {
         val dataDir = File(context.noBackupFilesDir, "talk").path
         val s = TalkSession(account.server, account.loginName, account.appPassword, ClientPlatform.ANDROID, this, dataDir)
         session = s
+        s.setMediaEngine(media)
         _state.update {
             // Cached conversation list: shown in the first frame, before any request.
             it.copy(session = SessionState.READY, server = account.server, user = account.loginName, rooms = s.rooms())
@@ -198,6 +219,7 @@ class SessionManager(private val context: Context) : CoreListener {
         val s = session ?: return
         voice.cancel()
         voice.player.stop()
+        s.hangUp()
         session = null
         if (revoke) runCatching { s.logout() } else s.shutdown()
         s.close()
@@ -211,6 +233,90 @@ class SessionManager(private val context: Context) : CoreListener {
         previews.evictAll()
         _state.value = UiState(session = SessionState.LOGGED_OUT)
     }
+
+    // --- calls ------------------------------------------------------------------------
+
+    /** Calls [token] (or joins its running call). `silent`: nobody is rung (tests only). */
+    fun startCall(token: String, silent: Boolean = false) {
+        val s = session ?: return
+        scope.launch {
+            try {
+                s.startCall(token, silent)
+            } catch (e: CoreException) {
+                Toast.makeText(context, callError(e), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // TODO: the FFI maps the core's `Call { code, message }` to `Server`; show its text once it has its own variant.
+    private fun callError(e: CoreException): String = when (e) {
+        is CoreException.Network -> "Anruf nicht möglich: keine Verbindung"
+        else -> "Anruf nicht möglich"
+    }
+
+    private inner class CallActionsImpl : CallActions {
+        override fun accept(token: String) {
+            val s = session ?: return
+            scope.launch {
+                try {
+                    s.acceptCall(token)
+                } catch (e: CoreException) {
+                    Toast.makeText(context, callError(e), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        override fun decline(token: String) {
+            session?.declineCall(token)
+        }
+
+        override fun hangUp() {
+            session?.hangUp()
+        }
+
+        override fun setMuted(muted: Boolean) {
+            session?.setCallMuted(muted)
+        }
+    }
+
+    private inner class MediaReportsImpl : MediaReports {
+        override fun localDescription(peerId: String, type: SdpType, sdp: String) {
+            session?.mediaLocalDescription(peerId, type, sdp)
+        }
+
+        override fun localCandidate(peerId: String, candidate: CallIceCandidate) {
+            session?.mediaLocalCandidate(peerId, candidate)
+        }
+
+        override fun peerState(peerId: String, state: PeerState) {
+            session?.mediaPeerState(peerId, state)
+        }
+
+        override fun peerError(peerId: String, message: String) {
+            session?.mediaPeerError(peerId, message)
+        }
+
+        override fun audioLevel(peerId: String, level: Float) {
+            session?.mediaAudioLevel(peerId, level)
+        }
+    }
+
+    /** Avatar of a call participant (group tiles). */
+    suspend fun userAvatar(userId: String, dark: Boolean): ImageBitmap? {
+        val key = "user|$userId|$dark"
+        avatars.get(key)?.let { return it }
+        val s = session ?: return null
+        val bytes = try {
+            s.userAvatar(userId, dark)
+        } catch (e: CoreException) {
+            return null
+        }
+        val bitmap = withContext(Dispatchers.Default) { decodeAvatar(bytes) } ?: return null
+        avatars.put(key, bitmap)
+        return bitmap
+    }
+
+    fun cachedUserAvatar(userId: String, dark: Boolean): ImageBitmap? = avatars.get("user|$userId|$dark")
 
     // --- core events (called on a Rust thread) ---------------------------------------
 
@@ -233,6 +339,10 @@ class SessionManager(private val context: Context) : CoreListener {
             is CoreEvent.OutboxChanged -> {
                 updateChat(event.token) { c -> c.copy(messages = withPending(c.messages, event.items)) }
                 announceFailures(event.token, event.items)
+            }
+            is CoreEvent.CallChanged -> scope.launch {
+                _call.value = event.call
+                calls.onCall(event.call)
             }
         }
     }

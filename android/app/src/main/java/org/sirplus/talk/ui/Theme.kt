@@ -58,8 +58,7 @@ object ListType {
 val LocalTalkColors = staticCompositionLocalOf { LightTalk }
 
 @Composable
-fun TalkTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun TalkTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     val talk = if (dark) DarkTalk else LightTalk
     val scheme = if (dark) {
         darkColorScheme(

@@ -3,3 +3,6 @@
 -keep class * implements com.sun.jna.** { *; }
 -keep class uniffi.** { *; }
 -dontwarn java.awt.**
+# libwebrtc: Java classes are created and called from native code (JNI).
+-keep class org.webrtc.** { *; }
+-dontwarn org.webrtc.**

@@ -135,6 +135,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück")
                     }
                 },
+                actions = { CallButton(sessions, room) },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Avatar(room.name, 36.dp, room.token, room.avatarVersion, sessions)
@@ -593,5 +594,41 @@ private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androi
             color = if (m.status == SendStatus.FAILED) danger else color,
         )
         if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 12.sp, color = color)
+    }
+}
+
+/**
+ * Call button in the chat header. Tap: call (or join the running call). Debug builds:
+ * long press starts a silent call (nobody is rung) for tests.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun CallButton(sessions: SessionManager, room: uniffi.talk_ffi.RoomView) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val withPermissions = rememberCallPermissions()
+    val debug = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    fun call(silent: Boolean) = withPermissions {
+        sessions.startCall(room.token, silent)
+        context.startActivity(
+            android.content.Intent(context, org.sirplus.talk.call.CallActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .combinedClickable(
+                onClick = { call(silent = false) },
+                onLongClick = if (debug) ({ call(silent = true) }) else null,
+                onClickLabel = if (room.hasCall) "Anruf beitreten" else "Anrufen",
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            TalkIcons.Call,
+            if (room.hasCall) "Anruf beitreten" else "Anrufen",
+            tint = if (room.hasCall) androidx.compose.ui.graphics.Color(0xFF2FB25B) else androidx.compose.material3.LocalContentColor.current,
+        )
     }
 }

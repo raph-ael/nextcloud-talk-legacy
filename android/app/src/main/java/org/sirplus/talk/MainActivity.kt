@@ -1,6 +1,8 @@
 package org.sirplus.talk
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import org.sirplus.talk.call.CallActivity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,5 +32,17 @@ class MainActivity : ComponentActivity() {
         val token = intent?.getStringExtra(Notifications.EXTRA_TOKEN) ?: return
         intent.removeExtra(Notifications.EXTRA_TOKEN)
         sessions.openRoom(token)
+        // Debug builds only (adb tests): `--ez org.sirplus.talk.CALL_SILENT true` starts a
+        // silent call in that conversation; nobody is rung.
+        val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debug && intent.getBooleanExtra(EXTRA_CALL_SILENT, false)) {
+            intent.removeExtra(EXTRA_CALL_SILENT)
+            sessions.startCall(token, silent = true)
+            startActivity(Intent(this, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
+    private companion object {
+        const val EXTRA_CALL_SILENT = "org.sirplus.talk.CALL_SILENT"
     }
 }

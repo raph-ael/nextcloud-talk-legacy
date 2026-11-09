@@ -6,7 +6,14 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import android.content.Intent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.ui.platform.LocalContext
+import org.sirplus.talk.call.CallActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -19,7 +26,11 @@ import org.sirplus.talk.SessionState
 @Composable
 fun TalkApp(sessions: SessionManager) {
     val state by sessions.state.collectAsStateWithLifecycle()
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    val call by sessions.calls.ui.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    call?.let { c -> CallBar(c) { context.startActivity(Intent(context, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+    Box(Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {
         when (state.session) {
             SessionState.LOADING -> Unit
             SessionState.LOGGED_OUT -> LoginScreen(sessions)
@@ -46,5 +57,6 @@ fun TalkApp(sessions: SessionManager) {
                 }
             }
         }
+    }
     }
 }
