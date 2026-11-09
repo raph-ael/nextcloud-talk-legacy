@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import type { AudioInfo, VoiceDraft } from '@shared/core'
 import type { UiMessage } from '../store'
-import { ProgressRing } from './ChatMedia'
 import {
   audioInfoFor,
   bars,
@@ -18,7 +17,7 @@ import {
   type Source,
 } from '../voice'
 
-/** Signal Desktop: 47 bars, 4..20 px high. */
+/** Signal Desktop: 47 bars of 2 px, 4..20 px high, a 6 px position dot. */
 const BAR_COUNT = 47
 const BAR_MIN = 4
 const BAR_MAX = 20
@@ -41,8 +40,47 @@ function useInfo(src: Source, size: number, auto: boolean): AudioInfo | null {
   return info
 }
 
-/** Play button, waveform (click/drag to seek), time and speed – a message or a draft. */
-function VoicePlayer({ src, size, auto, fallbackMs }: { src: Source; size: number; auto: boolean; fallbackMs?: number }) {
+/** Ring on the play button's edge: upload progress (0..1) or loading (-1). */
+function EdgeRing({ progress }: { progress: number }) {
+  const r = 17
+  const c = 2 * Math.PI * r
+  return (
+    <svg className={`voice-ring${progress < 0 ? ' spin' : ''}`} viewBox="0 0 36 36" width="36" height="36" aria-hidden>
+      <circle
+        cx="18"
+        cy="18"
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={progress < 0 ? c * 0.7 : c * (1 - Math.min(1, Math.max(0.03, progress)))}
+        transform="rotate(-90 18 18)"
+      />
+    </svg>
+  )
+}
+
+/**
+ * Play button and waveform (click/drag to seek), then a footer with time, speed and `meta`
+ * (message time and ticks) – for a message or a draft.
+ */
+function VoicePlayer({
+  src,
+  size,
+  auto,
+  fallbackMs,
+  upload,
+  meta,
+}: {
+  src: Source
+  size: number
+  auto: boolean
+  fallbackMs?: number
+  upload?: number
+  meta?: ReactNode
+}) {
   const player = usePlayer(src.key)
   const rate = useRate()
   const info = useInfo(src, size, auto)
@@ -61,16 +99,19 @@ function VoicePlayer({ src, size, auto, fallbackMs }: { src: Source; size: numbe
   }
 
   return (
-    <div className="voice" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+    <div
+      className={`voice${active ? ' active' : ''}`}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
       <button
         className="voice-play"
         aria-label={player?.playing ? 'Pause' : 'Abspielen'}
         title={player?.error ?? (player?.playing ? 'Pause' : 'Abspielen')}
         onClick={() => void togglePlay(src)}
       >
-        {player?.loading ? (
-          <ProgressRing progress={-1} size={36} />
-        ) : player?.playing ? (
+        {upload !== undefined ? <EdgeRing progress={upload} /> : player?.loading && <EdgeRing progress={-1} />}
+        {player?.playing ? (
           <svg viewBox="0 0 24 24" width="18" height="18">
             <path fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" />
           </svg>
@@ -111,6 +152,7 @@ function VoicePlayer({ src, size, auto, fallbackMs }: { src: Source; size: numbe
               style={{ height: BAR_MIN + v * (BAR_MAX - BAR_MIN) }}
             />
           ))}
+          <span className="voice-dot" style={{ left: `calc(${progress} * (100% - 6px))` }} />
         </div>
         <div className="voice-meta">
           <span className="voice-time">{clock(active ? duration - position : duration)}</span>
@@ -120,26 +162,28 @@ function VoicePlayer({ src, size, auto, fallbackMs }: { src: Source; size: numbe
             </button>
           )}
           {player?.error && <span className="voice-error">{player.error}</span>}
+          {meta && <span className="voice-meta-end">{meta}</span>}
         </div>
       </div>
     </div>
   )
 }
 
-/** Voice message (or any audio file) inside a bubble. */
-export function VoiceMessage({ msg }: { msg: UiMessage }) {
+/** Voice message (or any audio file) inside a bubble; `meta` goes to the end of its footer. */
+export function VoiceMessage({ msg, meta }: { msg: UiMessage; meta?: ReactNode }) {
   const a = msg.attachment!
   const src = messageSource(msg)
   const uploading = msg.status === 'sending' && (msg.progress ?? -1) >= 0 && (msg.progress ?? 0) < 1
   return (
     <div className="voice-msg">
-      <VoicePlayer src={src} size={a.size} auto={!!msg.status || a.voiceMessage} />
-      {uploading && (
-        <span className="voice-upload" title="Wird hochgeladen">
-          <ProgressRing progress={msg.progress!} size={18} />
-        </span>
-      )}
       {!a.voiceMessage && <div className="voice-name ellipsis">{a.name}</div>}
+      <VoicePlayer
+        src={src}
+        size={a.size}
+        auto={!!msg.status || a.voiceMessage}
+        upload={uploading ? msg.progress! : undefined}
+        meta={meta}
+      />
     </div>
   )
 }

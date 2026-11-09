@@ -14,7 +14,7 @@ import {
 } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import {
@@ -379,6 +379,33 @@ function mimeFor(name: string, given: string): string {
   return given || MIME_BY_EXT[extname(name).toLowerCase()] || 'application/octet-stream'
 }
 
+/**
+ * Audio type from the file's first bytes, `fallback` when unknown. The official Talk apps send
+ * AAC/MP4 named `.mp3`; files without a (known) extension would otherwise lose range requests.
+ */
+async function sniffAudio(path: string, fallback: string): Promise<string> {
+  const fh = await open(path, 'r').catch(() => null)
+  if (!fh) return fallback
+  try {
+    const b = Buffer.alloc(12)
+    const { bytesRead } = await fh.read(b, 0, 12, 0)
+    if (bytesRead < 12) return fallback
+    const ascii = (from: number, to: number): string => b.toString('latin1', from, to)
+    if (ascii(4, 8) === 'ftyp') return 'audio/mp4'
+    if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WAVE') return 'audio/wav'
+    if (ascii(0, 4) === 'OggS') return 'audio/ogg'
+    if (b.readUInt32BE(0) === 0x1a45dfa3) return 'audio/webm'
+    if (ascii(0, 3) === 'ID3') return 'audio/mpeg'
+    if (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) {
+      // Layer bits 00 mark AAC in ADTS, anything else is MPEG audio.
+      return (b[1] & 0x06) === 0 ? 'audio/aac' : 'audio/mpeg'
+    }
+    return fallback
+  } finally {
+    await fh.close()
+  }
+}
+
 async function stageData(name: string, mime: string, data: Uint8Array, width: number, height: number): Promise<StagedFile> {
   const path = stagedPath(name)
   await writeFile(path, data)
@@ -613,7 +640,8 @@ function registerMediaProtocol(): void {
         // Only files of the outbox/staging of this account, nothing else on disk.
         const path = url.searchParams.get('p') ?? ''
         if (!inside(sessionDir, path)) return new Response(null, { status: 403 })
-        const type = mimeFor(path, '')
+        let type = mimeFor(path, '')
+        if (type.startsWith('audio/') || type === 'application/octet-stream') type = await sniffAudio(path, type)
         if (type.startsWith('audio/') || type.startsWith('video/')) return rangeResponse(path, type, request)
         const data = await readFile(path)
         return new Response(new Uint8Array(data), {

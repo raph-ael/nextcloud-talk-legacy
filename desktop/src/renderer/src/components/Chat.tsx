@@ -260,6 +260,9 @@ const MessageRow = memo(function MessageRow({
     </span>
   )
 
+  // Signal: a voice message shows its time in the player's footer row.
+  const metaInVoice = !!attachment && !image && isAudioAttachment(msg) && !hasText && !deleted
+
   const replyable = canReply && msg.kind === 'text' && !msg.status
 
   return (
@@ -300,7 +303,13 @@ const MessageRow = memo(function MessageRow({
             )}
             {(!image || hasText) && (
               <div className="text">
-                {attachment && !image && (isAudioAttachment(msg) ? <VoiceMessage msg={msg} /> : <FileRow msg={msg} />)}
+                {attachment &&
+                  !image &&
+                  (isAudioAttachment(msg) ? (
+                    <VoiceMessage msg={msg} meta={metaInVoice ? meta : undefined} />
+                  ) : (
+                    <FileRow msg={msg} />
+                  ))}
                 {deleted ? (
                   <em>Diese Nachricht wurde gelöscht.</em>
                 ) : msg.markdown ? (
@@ -316,7 +325,7 @@ const MessageRow = memo(function MessageRow({
                     ),
                   )
                 )}
-                {!metaOnImage && meta}
+                {!metaOnImage && !metaInVoice && meta}
               </div>
             )}
           </div>

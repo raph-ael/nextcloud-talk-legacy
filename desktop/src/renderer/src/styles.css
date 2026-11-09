@@ -1212,19 +1212,35 @@ a.file-row:hover .file-name {
   background: rgb(255 255 255 / 0.18);
 }
 
-/* ---------- voice messages (Signal Desktop: 47 bars 4–20 px, speed pill, 36 px play) ---------- */
+/* ---------- voice messages ----------
+   Proportions after Signal Desktop: 36 px button, 12 px to a waveform of 47 bars (2 px, 4–20 px
+   high) with a 6 px position dot; below a footer with time, a 38×18 speed button and the
+   message time. Colors follow the mobile apps (button: white 16 % on own bubbles). */
 .voice-msg {
   position: relative;
-  min-width: 240px;
+  width: 212px;
   max-width: 100%;
-  margin-bottom: 2px;
+  margin-top: 2px;
 }
 .voice {
   display: flex;
   align-items: center;
   gap: 10px;
 }
+.voice-msg .voice {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 5px;
+}
+.voice-msg .voice-body {
+  display: contents;
+}
+.voice-msg .voice-meta {
+  grid-column: 1 / -1;
+}
 .voice-play {
+  position: relative;
   flex-shrink: 0;
   width: 36px;
   height: 36px;
@@ -1234,39 +1250,64 @@ a.file-row:hover .file-name {
   background: var(--bg);
   color: var(--text);
 }
-.msg.own .voice-play {
-  background: rgb(255 255 255 / 0.95);
-  color: var(--bubble-own);
+.voice-msg .voice-play {
+  background: #fff;
 }
-.voice-play .progress-ring circle {
-  stroke: currentColor;
+.msg.own .voice-msg .voice-play {
+  background: rgb(255 255 255 / 0.16);
+  color: #fff;
 }
-.voice-play .progress-ring circle:first-child {
-  opacity: 0.25;
+.voice-play svg:not(.voice-ring) {
+  position: relative;
+}
+.voice-ring {
+  position: absolute;
+  inset: 0;
+}
+.voice-ring.spin {
+  animation: spin 0.9s linear infinite;
 }
 .voice-body {
   flex: 1;
   min-width: 0;
 }
 .waveform {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  gap: 1px;
   height: 24px;
   cursor: pointer;
   touch-action: none;
   outline: none;
 }
 .waveform i {
-  flex: 1;
-  min-width: 2px;
-  max-width: 3px;
+  width: 2px;
+  flex-shrink: 0;
   border-radius: 2px;
   background: currentColor;
-  opacity: 0.35;
+  opacity: 0.22;
 }
-.waveform i.played {
+.msg.own .waveform i {
+  opacity: 0.2;
+}
+.voice.active .waveform i {
+  opacity: 0.4;
+}
+.waveform i.played,
+.voice.active .waveform i.played {
   opacity: 1;
+}
+.voice-dot {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: currentColor;
+  pointer-events: none;
 }
 .waveform:focus-visible {
   box-shadow: 0 0 0 2px var(--accent);
@@ -1275,42 +1316,51 @@ a.file-row:hover .file-name {
 .voice-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 2px;
   min-height: 18px;
 }
 .voice-time {
   font-size: 11px;
   line-height: 14px;
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
+  color: var(--text-muted);
+}
+.msg.own .voice-time {
+  color: rgb(255 255 255 / 0.8);
 }
 .voice-rate {
+  min-width: 38px;
+  height: 18px;
+  margin-left: 12px;
+  padding: 0 4px;
+  border-radius: 4px;
   font-size: 11px;
-  font-weight: 600;
-  line-height: 14px;
-  padding: 1px 6px;
-  border-radius: 9px;
-  background: rgb(125 125 125 / 0.2);
+  font-weight: 700;
+  line-height: 18px;
+  background: rgb(0 0 0 / 0.08);
   color: inherit;
 }
+.msg.own .voice-rate {
+  background: rgb(255 255 255 / 0.2);
+}
 .voice-error {
+  margin-left: 8px;
   font-size: 11px;
   color: var(--danger);
 }
 .msg.own .voice-error {
   color: #ffd1cc;
 }
-.voice-upload {
-  position: absolute;
-  left: 9px;
-  top: 9px;
-  pointer-events: none;
+.voice-meta-end {
+  margin-left: auto;
+  padding-left: 8px;
+}
+.voice-meta-end .meta {
+  float: none;
+  margin: 0;
 }
 .voice-name {
   font-size: 12px;
-  opacity: 0.8;
-  margin-top: 2px;
+  margin-bottom: 4px;
 }
 .voice-bar {
   display: flex;
