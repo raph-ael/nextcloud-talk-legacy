@@ -156,8 +156,8 @@ struct VoiceBubble: View {
         }
         .frame(width: 240)
         .task(id: "\(key)|\(auto)") {
-            guard shownInfo == nil, auto, let path = await voice.localFile(m) else { return }
-            info = await voice.info(key, path: path)
+            guard shownInfo == nil, auto else { return }
+            info = await voice.loadInfo(m)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Sprachnachricht \(Format.clock(duration))")

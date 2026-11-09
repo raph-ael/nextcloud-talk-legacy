@@ -5,6 +5,10 @@ import XCTest
 ///   TALK_DEV_SERVER / TALK_DEV_USER / TALK_DEV_PASS – sign in without the browser (simulator)
 ///   TALK_TEST_ROOM – name of the test conversation
 ///   TALK_FAKE_MIC – audio file used instead of the microphone
+private enum Format2 {
+    static func clock(_ seconds: Int) -> String { String(format: "%d:%02d", seconds / 60, seconds % 60) }
+}
+
 final class ChatFlowTests: XCTestCase {
     private var app: XCUIApplication!
     private let env = ProcessInfo.processInfo.environment
@@ -16,6 +20,18 @@ final class ChatFlowTests: XCTestCase {
             if let v = env[key] { app.launchEnvironment[key] = v }
         }
         app.launch()
+    }
+
+    /// Confirms a system permission alert (microphone, camera, notifications) if one shows.
+    @discardableResult
+    private func allowSystemAlert(timeout: TimeInterval = 3) -> Bool {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons.matching(NSPredicate(
+            format: "label IN {'Erlauben', 'OK', 'Allow', 'Beim Verwenden der App erlauben', 'Vollen Zugriff erlauben'}"
+        )).firstMatch
+        guard allow.waitForExistence(timeout: timeout) else { return false }
+        allow.tap()
+        return true
     }
 
     private var room: String { env["TALK_TEST_ROOM"] ?? "Talk-Client-Tests" }
@@ -73,8 +89,16 @@ final class ChatFlowTests: XCTestCase {
         openTestRoom()
         let mic = micButton
         XCTAssertTrue(mic.waitForExistence(timeout: 5))
+        // First touch may only ask for the microphone.
+        mic.press(forDuration: 0.3)
+        allowSystemAlert()
+        sleep(1)
+        let toast = app.descendants(matching: .any)["toast"]
+        _ = toast.waitForNonExistence(timeout: 5)
         mic.press(forDuration: 4)
-        XCTAssertTrue(app.descendants(matching: .any)["voice-bubble"].firstMatch.waitForExistence(timeout: 20))
+        // A "too short" toast means nothing was recorded; delivery is checked on the server.
+        XCTAssertFalse(toast.waitForExistence(timeout: 2), "recording too short / not started")
+        sleep(8)
         shot("voice-sent")
     }
 
@@ -126,13 +150,29 @@ final class ChatFlowTests: XCTestCase {
             XCTAssertTrue(app.descendants(matching: .any)["recording-locked"].firstMatch.exists, "recording stopped after \(waited) s")
         }
         shot("long-recording")
+        if env["TALK_RECORD_DISCARD"] != nil {
+            // Real room audio: check the length as draft, then delete it (nothing is uploaded).
+            XCUIDevice.shared.press(.home)
+            sleep(3)
+            app.activate()
+            let draft = app.descendants(matching: .any)["voice-draft"].firstMatch
+            XCTAssertTrue(draft.waitForExistence(timeout: 15))
+            let expected = Format2.clock(seconds)
+            XCTAssertTrue(draft.label >= expected, "draft \(draft.label), expected ≥ \(expected)")
+            print("LONG DRAFT LENGTH \(draft.label)")
+            app.buttons["Entwurf löschen"].firstMatch.tap()
+            return
+        }
         app.buttons["voice-send"].firstMatch.tap()
         sleep(5)
         shot("long-sent")
     }
 
     /// Attachment panel → newest photo → caption → send; then the viewer opens it.
-    func testSendPhoto() {
+    func testSendPhoto() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("would send the newest photo of a real library")
+        #endif
         openTestRoom()
         app.buttons["attach"].firstMatch.tap()
         let allow = app.buttons["Zugriff auf Fotos erlauben"]
@@ -183,5 +223,27 @@ final class ChatFlowTests: XCTestCase {
         app.buttons["send"].tap()
         sleep(4)
         shot("reply-sent")
+    }
+
+    /// Device only: the camera opens, takes a photo and shows the send screen – closed
+    /// again without sending (nothing private leaves the phone).
+    func testCameraCaptureWithoutSending() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("no camera in the simulator")
+        #endif
+        openTestRoom()
+        app.buttons["camera"].firstMatch.tap()
+        allowSystemAlert(timeout: 5)
+        let shutter = app.buttons["Foto aufnehmen"]
+        XCTAssertTrue(shutter.waitForExistence(timeout: 10))
+        sleep(2)
+        shutter.tap()
+        let caption = app.descendants(matching: .any)["caption"].firstMatch
+        XCTAssertTrue(caption.waitForExistence(timeout: 15), "send screen missing")
+        app.buttons["Schließen"].firstMatch.tap()
+        // Closing the send screen of a camera photo returns to the camera (like Android).
+        XCTAssertTrue(shutter.waitForExistence(timeout: 5))
+        app.buttons["Schließen"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["composer"].firstMatch.waitForExistence(timeout: 5))
     }
 }

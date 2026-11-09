@@ -40,7 +40,11 @@ final class VoiceManager {
     @ObservationIgnored private var core: VoiceRecording?
     @ObservationIgnored private var capture: VoiceCapture?
     @ObservationIgnored private let maxMs = Int64(voiceMaxDurationMs())
-    @ObservationIgnored private var infos: [String: AudioInfo] = [:]
+    /// Observed: a bubble shows the waveform as soon as it is known, even if it was re-created.
+    private var infos: [String: AudioInfo] = [:]
+    /// Running fetch + analysis per message: not tied to a view, so scrolling or a cell
+    /// reconfiguration does not cancel (and restart) the download.
+    @ObservationIgnored private var infoTasks: [String: Task<AudioInfo?, Never>] = [:]
 
     init(store: SessionStore) {
         self.store = store
@@ -225,6 +229,8 @@ final class VoiceManager {
         drafts.removeAll()
         loadedDrafts.removeAll()
         infos.removeAll()
+        infoTasks.values.forEach { $0.cancel() }
+        infoTasks.removeAll()
     }
 
     // MARK: Playback
@@ -261,6 +267,21 @@ final class VoiceManager {
     }
 
     func cachedInfo(_ key: String) -> AudioInfo? { infos[key] }
+
+    /// Downloads (if needed) and analyses a message's audio once.
+    func loadInfo(_ m: UiMessage) async -> AudioInfo? {
+        let key = messageKey(m)
+        if let hit = infos[key] { return hit }
+        if let running = infoTasks[key] { return await running.value }
+        let task = Task { [weak self] () -> AudioInfo? in
+            guard let self, let path = await self.localFile(m) else { return nil }
+            return await self.info(key, path: path)
+        }
+        infoTasks[key] = task
+        let result = await task.value
+        infoTasks[key] = nil
+        return result
+    }
 
     private func author(_ m: UiMessage) -> String { m.msg.author.isEmpty || m.msg.isOwn ? "Du" : m.msg.author }
 
