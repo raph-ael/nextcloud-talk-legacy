@@ -164,6 +164,8 @@ export type CoreEvent =
   | { type: 'authFailed' }
   | { type: 'outboxChanged'; token: string; items: PendingMessage[] }
   | { type: 'callChanged'; call: CallView | null }
+  /** A call was not answered here (also one that came in during another call). */
+  | { type: 'callMissed'; token: string; roomName: string; callerName: string; isGroup: boolean }
 
 // --- Calls (docs/calls.md, talk-core/src/call/mod.rs) ------------------------------
 

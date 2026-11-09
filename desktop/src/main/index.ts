@@ -84,7 +84,8 @@ interface NativeSession {
   audioInfo(localPath: string): Promise<AudioInfo>
   setMediaEngine(onCommand: (command: MediaCommand) => void): void
   currentCall(): CallView | null
-  startCall(token: string, silent: boolean): Promise<void>
+  startCall(token: string, silent: boolean, callId?: string | null): Promise<void>
+  hangUpAndWait(timeoutMs: number): Promise<void>
   acceptCall(token: string): Promise<void>
   declineCall(token: string): void
   hangUp(): void
@@ -207,6 +208,8 @@ function send(event: TalkEvent): void {
 function onCoreEvent(event: CoreEvent): void {
   if (event.type === 'callChanged') {
     onCallChanged(event.call)
+  } else if (event.type === 'callMissed') {
+    notifyMissedCall(event)
   } else if (event.type === 'roomsChanged') {
     notifyNewMessages(event.rooms)
   } else if (event.type === 'authFailed') {
@@ -268,7 +271,8 @@ async function signOut(revoke: boolean): Promise<void> {
   recording?.rec.cancel()
   recording = null
   const s = session
-  s?.hangUp()
+  // Leave a running call before the app password goes away.
+  if (s && callActive()) await s.hangUpAndWait(3000).catch(() => undefined)
   onCallChanged(null)
   session = null
   account = null
@@ -471,6 +475,19 @@ function startRingAttention(c: CallView): void {
   })
   n.show()
   ringNotification = n
+}
+
+function notifyMissedCall(m: { token: string; roomName: string; callerName: string; isGroup: boolean }): void {
+  if (!Notification.isSupported()) return
+  const n = new Notification({
+    title: 'Verpasster Anruf',
+    body: m.isGroup ? `${m.callerName || 'Gruppenanruf'} · ${m.roomName}` : `von ${m.roomName}`,
+  })
+  n.on('click', () => {
+    showWindow()
+    send({ type: 'openRoom', token: m.token })
+  })
+  n.show()
 }
 
 function stopRingAttention(): void {
@@ -922,15 +939,16 @@ async function quitAfterOutbox(): Promise<void> {
   const s = session
   if (s && callActive()) {
     // Leave the call properly instead of letting the server time us out.
-    s.hangUp()
-    await new Promise((r) => setTimeout(r, 1000))
+    await s.hangUpAndWait(3000).catch(() => undefined)
   }
   if (s && s.outboxUnsent() > 0) {
     await Promise.race([s.waitOutboxIdle(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined)
   }
   s?.shutdown()
   readyToQuit = true
-  app.quit()
+  // Never from inside the `before-quit` that started this (nothing was awaited above):
+  // Electron drops a nested quit and the app would stay alive without windows.
+  setImmediate(() => app.quit())
 }
 
 /** Standard macOS menu bar (app, edit, view, window); other platforms keep no menu. */
