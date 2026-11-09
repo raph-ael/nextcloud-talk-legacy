@@ -127,11 +127,9 @@ class CallController(
         CallNotifications.cancelIncoming(context)
         val reason = call.endReason
         val rangHere = prev?.state == CallState.INCOMING
-        when {
-            reason is EndReason.Missed || (rangHere && reason is EndReason.RemoteHangup) -> CallNotifications.showMissed(context, call)
-            reason is EndReason.AnsweredElsewhere || reason is EndReason.Declined -> Unit
-            !rangHere -> tones.playEnded()
-        }
+        // Missed calls are announced by the core's CallMissed event.
+        val silentEnd = reason is EndReason.AnsweredElsewhere || reason is EndReason.Declined || reason is EndReason.Missed
+        if (!rangHere && !silentEnd) tones.playEnded()
         _ui.value = call
         endHold?.cancel()
         endHold = scope.launch {

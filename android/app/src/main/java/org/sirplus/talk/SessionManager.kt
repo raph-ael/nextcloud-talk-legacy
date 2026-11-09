@@ -33,6 +33,7 @@ import uniffi.talk_ffi.PeerState
 import uniffi.talk_ffi.SdpType
 import org.sirplus.talk.call.CallActions
 import org.sirplus.talk.call.CallController
+import org.sirplus.talk.call.CallNotifications
 import org.sirplus.talk.call.MediaReports
 import org.sirplus.talk.call.WebRtcMediaEngine
 import uniffi.talk_ffi.ClientPlatform
@@ -219,7 +220,7 @@ class SessionManager(private val context: Context) : CoreListener {
         val s = session ?: return
         voice.cancel()
         voice.player.stop()
-        s.hangUp()
+        s.hangUpAndWait(2000u)
         session = null
         if (revoke) runCatching { s.logout() } else s.shutdown()
         s.close()
@@ -241,7 +242,7 @@ class SessionManager(private val context: Context) : CoreListener {
         val s = session ?: return
         scope.launch {
             try {
-                s.startCall(token, silent)
+                s.startCall(token, silent, null)
             } catch (e: CoreException) {
                 Toast.makeText(context, callError(e), Toast.LENGTH_LONG).show()
             }
@@ -344,6 +345,9 @@ class SessionManager(private val context: Context) : CoreListener {
                 _call.value = event.call
                 calls.onCall(event.call)
             }
+            is CoreEvent.CallMissed -> CallNotifications.showMissed(
+                context, event.token, if (event.isGroup) event.roomName else event.callerName.ifBlank { event.roomName },
+            )
         }
     }
 

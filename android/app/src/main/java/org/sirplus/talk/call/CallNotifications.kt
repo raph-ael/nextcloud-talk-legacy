@@ -146,23 +146,23 @@ object CallNotifications {
     }
 
     @SuppressLint("MissingPermission") // checked by allowed()
-    fun showMissed(context: Context, call: CallView) {
+    fun showMissed(context: Context, token: String, name: String) {
         if (!allowed(context)) return
         val open = PendingIntent.getActivity(
-            context, call.token.hashCode(),
+            context, token.hashCode(),
             Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(Notifications.EXTRA_TOKEN, call.token),
+                .putExtra(Notifications.EXTRA_TOKEN, token),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val n = NotificationCompat.Builder(context, CHANNEL_MISSED)
             .setSmallIcon(android.R.drawable.sym_call_missed)
             .setContentTitle("Verpasster Anruf")
-            .setContentText(person(call).name)
+            .setContentText(name)
             .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
             .setAutoCancel(true)
             .setContentIntent(open)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(ID_MISSED_BASE + (call.token.hashCode() and 0xffff), n) }
+        runCatching { NotificationManagerCompat.from(context).notify(ID_MISSED_BASE + (token.hashCode() and 0xffff), n) }
     }
 }
