@@ -1,20 +1,41 @@
-//! Owner of the single active call: state machine, signaling and media commands.
+//! Owner of the single active call: starts the call task and forwards commands to it.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
-use super::{CallView, MediaEngine, MediaReport};
+use tokio::sync::mpsc;
+
+use super::actor::{Actor, Cmd, Ctx, Shared};
+use super::{CallDirection, CallState, CallView, MediaEngine, MediaReport};
+use crate::client::TalkClient;
+use crate::engine::EventSink;
 use crate::error::{Error, Result};
+
+/// The same incoming call is not rung again within this time (it arrives from push,
+/// notify_push and the room list).
+const RING_DEDUP: Duration = Duration::from_secs(90);
+
+/// What the engine knows about a conversation when a call starts.
+pub(crate) struct RoomInfo {
+    pub token: String,
+    pub name: String,
+    pub is_group: bool,
+    pub has_call: bool,
+}
 
 #[derive(Default)]
 pub(crate) struct CallManager {
     media: RwLock<Option<Arc<dyn MediaEngine>>>,
-    current: Mutex<Option<CallView>>,
+    shared: Arc<Shared>,
+    /// token → when it last rang (or was declined) here.
+    rung: Mutex<HashMap<String, Instant>>,
 }
 
-fn not_yet() -> Error {
+fn call_error(code: &str, message: &str) -> Error {
     Error::Call {
-        code: "not-implemented".into(),
-        message: "calls are not implemented yet".into(),
+        code: code.into(),
+        message: message.into(),
     }
 }
 
@@ -24,22 +45,149 @@ impl CallManager {
     }
 
     pub(crate) fn current(&self) -> Option<CallView> {
-        self.current.lock().unwrap().clone()
+        self.shared.view.lock().unwrap().clone()
     }
 
-    pub(crate) async fn start(&self, _token: &str, _silent: bool) -> Result<()> {
-        Err(not_yet())
+    pub(crate) fn busy(&self) -> bool {
+        self.shared.tx.lock().unwrap().is_some()
     }
 
-    pub(crate) async fn accept(&self, _token: &str) -> Result<()> {
-        Err(not_yet())
+    fn send(&self, cmd: Cmd) -> bool {
+        match self.shared.tx.lock().unwrap().as_ref() {
+            Some(tx) => tx.send(cmd).is_ok(),
+            None => false,
+        }
     }
 
-    pub(crate) fn decline(&self, _token: &str) {}
+    fn launch(
+        &self,
+        client: TalkClient,
+        sink: Arc<dyn EventSink>,
+        me: String,
+        view: CallView,
+        silent: bool,
+        runtime: &tokio::runtime::Handle,
+    ) -> Result<()> {
+        let media = self
+            .media
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| call_error("no-media-engine", "setMediaEngine was not called"))?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        {
+            let mut slot = self.shared.tx.lock().unwrap();
+            if slot.is_some() {
+                return Err(call_error("busy", "Es läuft bereits ein Anruf"));
+            }
+            *slot = Some(tx.clone());
+        }
+        *self.shared.view.lock().unwrap() = Some(view.clone());
+        let ctx = Ctx {
+            client,
+            sink,
+            media,
+            shared: self.shared.clone(),
+            me,
+        };
+        let actor = Actor::new(ctx, view, silent, rx, tx);
+        runtime.spawn(actor.run());
+        Ok(())
+    }
 
-    pub(crate) fn hang_up(&self) {}
+    pub(crate) fn start(
+        &self,
+        client: TalkClient,
+        sink: Arc<dyn EventSink>,
+        me: String,
+        room: RoomInfo,
+        silent: bool,
+        runtime: &tokio::runtime::Handle,
+    ) -> Result<()> {
+        let view = CallView {
+            id: uuid::Uuid::new_v4().to_string(),
+            token: room.token,
+            room_name: room.name,
+            is_group: room.is_group,
+            direction: CallDirection::Outgoing,
+            // Joining a running call does not ring anybody.
+            state: if room.has_call { CallState::Connecting } else { CallState::Dialing },
+            caller_name: String::new(),
+            started_at: None,
+            muted: false,
+            participants: Vec::new(),
+            end_reason: None,
+        };
+        self.launch(client, sink, me, view, silent, runtime)
+    }
 
-    pub(crate) fn set_muted(&self, _muted: bool) {}
+    /// An incoming call was detected. Returns `false` when it does not ring (another
+    /// call in progress, or it rang/was declined here a moment ago).
+    pub(crate) fn ring(
+        &self,
+        client: TalkClient,
+        sink: Arc<dyn EventSink>,
+        me: String,
+        room: RoomInfo,
+        caller_name: String,
+        runtime: &tokio::runtime::Handle,
+    ) -> bool {
+        {
+            let mut rung = self.rung.lock().unwrap();
+            rung.retain(|_, t| t.elapsed() < RING_DEDUP);
+            if rung.contains_key(&room.token) {
+                return false;
+            }
+            if self.busy() {
+                return false;
+            }
+            rung.insert(room.token.clone(), Instant::now());
+        }
+        let view = CallView {
+            id: uuid::Uuid::new_v4().to_string(),
+            token: room.token,
+            room_name: room.name,
+            is_group: room.is_group,
+            direction: CallDirection::Incoming,
+            state: CallState::Incoming,
+            caller_name,
+            started_at: None,
+            muted: false,
+            participants: Vec::new(),
+            end_reason: None,
+        };
+        self.launch(client, sink, me, view, true, runtime).is_ok()
+    }
 
-    pub(crate) fn report(&self, _report: MediaReport) {}
+    pub(crate) fn accept(&self, token: &str) -> Result<()> {
+        let ok = self
+            .current()
+            .is_some_and(|v| v.token == token && v.state == CallState::Incoming);
+        if !ok || !self.send(Cmd::Accept) {
+            return Err(call_error("no-incoming-call", "Kein eingehender Anruf"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn decline(&self, token: &str) {
+        if self.current().is_some_and(|v| v.token == token) {
+            self.send(Cmd::Decline);
+        }
+    }
+
+    pub(crate) fn hang_up(&self) {
+        self.send(Cmd::HangUp);
+    }
+
+    pub(crate) fn set_muted(&self, muted: bool) {
+        self.send(Cmd::Mute(muted));
+    }
+
+    pub(crate) fn report(&self, report: MediaReport) {
+        self.send(Cmd::Media(report));
+    }
+
+    pub(crate) fn network_changed(&self) {
+        self.send(Cmd::NetworkChanged);
+    }
 }

@@ -1,0 +1,3 @@
+[env]
+# audiopus_sys (talk-cli call-bot) bundles an old libopus CMakeLists.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

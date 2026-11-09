@@ -437,6 +437,7 @@ impl Engine {
     /// The platform saw the network come back (or change): retry now.
     pub fn network_changed(&self) {
         self.outbox.wake();
+        self.calls.network_changed();
     }
 
     /// Resolves once nothing is actively being sent: the outbox is empty or every item is

@@ -178,5 +178,9 @@ pub enum MediaReport {
     AudioLevel { peer_id: String, level: f32 },
 }
 
+mod actor;
+mod incoming;
 mod manager;
-pub(crate) use manager::CallManager;
+mod proto;
+pub(crate) use manager::{CallManager, RoomInfo};
+pub(crate) mod ws;

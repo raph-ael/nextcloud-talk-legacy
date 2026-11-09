@@ -21,13 +21,13 @@ use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
 use crate::cache::Cache;
-use crate::call::{CallManager, CallView, MediaEngine, MediaReport};
+use crate::call::{CallManager, CallView, MediaEngine, MediaReport, RoomInfo};
 use crate::outbox::{Outbox, PendingMessage};
 use crate::voice::VoiceStore;
 
 use crate::client::TalkClient;
 use crate::error::{Error, Result};
-use crate::models::{ChatMessage, FileAttachment, Room};
+use crate::models::{ChatMessage, FileAttachment, Room, RoomType};
 
 /// Room list refresh while no signaling connection exists yet.
 const ROOMS_INTERVAL: Duration = Duration::from_secs(10);
@@ -192,6 +192,7 @@ struct State {
     last_full: Option<Instant>,
     chats: HashMap<String, JoinHandle<()>>,
     rooms_task: Option<JoinHandle<()>>,
+    notify_task: Option<JoinHandle<()>>,
 }
 
 pub struct Engine {
@@ -298,6 +299,10 @@ impl Engine {
         if let Some(old) = self.state.lock().unwrap().rooms_task.replace(task) {
             old.abort();
         }
+        let notify = tokio::spawn(Engine::notify_push_loop(Arc::downgrade(self)));
+        if let Some(old) = self.state.lock().unwrap().notify_task.replace(notify) {
+            old.abort();
+        }
         user.and(first)
     }
 
@@ -334,12 +339,38 @@ impl Engine {
     /// Calls the conversation (or joins its running call). `silent`: nobody is rung
     /// (automated tests in shared rooms). Fails if another call is in progress.
     pub async fn start_call(&self, token: &str, silent: bool) -> Result<()> {
-        self.calls.start(token, silent).await
+        if self.calls.busy() {
+            return Err(Error::Call {
+                code: "busy".into(),
+                message: "Es läuft bereits ein Anruf".into(),
+            });
+        }
+        let room = self.room_info(token).await?;
+        let rt = self.runtime.get().cloned().unwrap_or_else(tokio::runtime::Handle::current);
+        self.calls
+            .start(self.client.clone(), self.sink.clone(), self.user_id(), room, silent, &rt)
     }
 
     /// Answers the ringing incoming call of `token`.
     pub async fn accept_call(&self, token: &str) -> Result<()> {
-        self.calls.accept(token).await
+        self.calls.accept(token)
+    }
+
+    /// Fresh room data for a call (`hasCall` must be current); falls back to the cache.
+    async fn room_info(&self, token: &str) -> Result<RoomInfo> {
+        let room = match self.client.room(token).await {
+            Ok(r) => r,
+            Err(e) => match self.state.lock().unwrap().rooms.get(token) {
+                Some(r) => r.clone(),
+                None => return Err(e),
+            },
+        };
+        Ok(RoomInfo {
+            token: room.token.clone(),
+            name: room.display_name.clone(),
+            is_group: !matches!(room.room_type, RoomType::OneToOne | RoomType::FormerOneToOne),
+            has_call: room.has_call,
+        })
     }
 
     /// Stops ringing for the incoming call of `token` on this device.
@@ -366,6 +397,9 @@ impl Engine {
         self.outbox.abort_all();
         let mut st = self.state.lock().unwrap();
         if let Some(t) = st.rooms_task.take() {
+            t.abort();
+        }
+        if let Some(t) = st.notify_task.take() {
             t.abort();
         }
         for (_, t) in st.chats.drain() {
@@ -397,8 +431,13 @@ impl Engine {
         if full || !batch.rooms.is_empty() {
             self.cache.put_rooms(batch.rooms.clone(), full);
         }
-        let views = {
+        let (views, call_started) = {
             let mut st = self.state.lock().unwrap();
+            // A call starting in a conversation may ring for us (safety net for notify_push).
+            let call_started = batch
+                .rooms
+                .iter()
+                .any(|r| r.has_call && !st.rooms.get(&r.token).is_some_and(|old| old.has_call));
             if full {
                 st.rooms = batch
                     .rooms
@@ -416,8 +455,11 @@ impl Engine {
             if batch.modified_before.is_some() {
                 st.modified_before = batch.modified_before;
             }
-            self.sorted_views(&st.rooms)
+            (self.sorted_views(&st.rooms), call_started)
         };
+        if call_started {
+            self.spawn_incoming_check();
+        }
         self.sink.emit(Event::RoomsChanged { rooms: views });
     }
 

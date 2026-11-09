@@ -115,14 +115,18 @@ pub struct CurrentUser {
 #[derive(Clone)]
 pub struct TalkClient {
     http: reqwest::Client,
+    /// HTTP/1.1 only, for websocket upgrades.
+    ws_http: reqwest::Client,
     account: Account,
 }
 
 impl TalkClient {
     pub fn new(account: Account, platform: Platform) -> Result<Self> {
         let http = base_http_builder(platform).cookie_store(true).build()?;
+        let ws_http = ws_http_builder(platform).build()?;
         Ok(Self {
             http,
+            ws_http,
             account: Account {
                 server: account.server.trim_end_matches('/').to_string(),
                 ..account
@@ -674,6 +678,82 @@ impl TalkClient {
     }
 }
 
+// --- calls ---------------------------------------------------------------------------
+
+/// `GET call/{token}/notification-state` result (capability `call-notification-state-api`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RingState {
+    /// Keep ringing.
+    Ringing,
+    /// The caller gave up: missed call.
+    Missed,
+    /// Stop: answered (here or on another device), call over or room gone.
+    Dismiss,
+}
+
+impl TalkClient {
+    /// Joins the call of a conversation (requires `join_room` with the same cookie jar).
+    /// `flags`: 1 in call | 2 audio | 4 video. `silent`: nobody is notified.
+    pub async fn join_call(&self, token: &str, flags: u32, silent: bool) -> Result<()> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v4/call/{token}"))
+            .form(&[("flags", flags.to_string()), ("silent", silent.to_string())]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Leaves the call; `all` ends it for everybody (moderators only).
+    pub async fn leave_call(&self, token: &str, all: bool) -> Result<()> {
+        let mut rb = self.request(Method::DELETE, &format!("{SPREED}/v4/call/{token}"));
+        if all {
+            rb = rb.form(&[("all", "true")]);
+        }
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Who is in the call: `[{actorType, actorId, displayName, sessionId, …}]`.
+    pub async fn call_peers(&self, token: &str) -> Result<Vec<serde_json::Value>> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v4/call/{token}"));
+        Ok(self.ocs::<Vec<serde_json::Value>>(rb).await?.0)
+    }
+
+    pub async fn ring_state(&self, token: &str) -> Result<RingState> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v4/call/{token}/notification-state"));
+        let resp = rb.send().await?;
+        match resp.status().as_u16() {
+            200 => Ok(RingState::Ringing),
+            201 => Ok(RingState::Missed),
+            404 => Ok(RingState::Dismiss),
+            401 => Err(Error::Unauthorized),
+            _ => Err(check(resp).await.err().unwrap_or(Error::Decode("ring state".into()))),
+        }
+    }
+
+    /// One conversation (fresh, e.g. `hasCall`, `type`, `displayName`).
+    pub async fn room(&self, token: &str) -> Result<Room> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v4/room/{token}"));
+        Ok(self.ocs::<Room>(rb).await?.0)
+    }
+
+    /// Participants of a conversation (`[{actorId, displayName, sessionIds, inCall, …}]`).
+    pub async fn participants(&self, token: &str) -> Result<Vec<serde_json::Value>> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v4/room/{token}/participants"));
+        Ok(self.ocs::<Vec<serde_json::Value>>(rb).await?.0)
+    }
+
+    /// Notifications of the user (notifications app v2), newest first.
+    pub async fn notifications(&self) -> Result<Vec<serde_json::Value>> {
+        let rb = self.request(Method::GET, "/ocs/v2.php/apps/notifications/api/v2/notifications");
+        Ok(self.ocs::<Vec<serde_json::Value>>(rb).await?.0)
+    }
+
+    /// Opens a websocket (signaling, notify_push) with the same TLS setup as the API.
+    pub async fn websocket(&self, url: &str) -> Result<crate::call::ws::WebSocket> {
+        crate::call::ws::connect(&self.ws_http, url).await
+    }
+}
+
 /// Random reference id for optimistic sends (sha256 hex, as the official clients do).
 pub fn new_reference_id() -> String {
     let digest = Sha256::digest(uuid::Uuid::new_v4().as_bytes());
@@ -892,6 +972,20 @@ pub(crate) fn base_http_builder(platform: Platform) -> reqwest::ClientBuilder {
         .timeout(Duration::from_secs(30))
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30))
+}
+
+/// Client for websocket upgrades: HTTP/1.1, no total timeout (it would cut the upgraded
+/// stream); the handshake is bounded by the caller.
+fn ws_http_builder(platform: Platform) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder();
+    #[cfg(target_os = "android")]
+    let builder = builder.tls_certs_only(android_roots::system_roots());
+    builder
+        .user_agent(platform.user_agent())
+        .http1_only()
+        .connect_timeout(Duration::from_secs(5))
+        .tcp_keepalive(Duration::from_secs(15))
+        .tcp_nodelay(true)
 }
 
 async fn check(resp: Response) -> Result<Response> {

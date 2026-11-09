@@ -9,10 +9,22 @@ license.workspace = true
 name = "talk-cli"
 path = "src/main.rs"
 
+[features]
+# Call test peer (`talk-cli call`): WebRTC in Rust plus a bundled libopus. Dev tool only.
+call-bot = ["dep:webrtc", "dep:opus", "dep:audiopus_sys", "dep:bytes", "dep:rustls"]
+
 [dependencies]
 talk-core = { workspace = true, features = ["faults"] }
 tokio.workspace = true
 serde_json.workspace = true
 clap = { version = "4.6", features = ["derive", "env"] }
 anyhow = "1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
+webrtc = { version = "0.14", optional = true }
+opus = { version = "0.3", optional = true }
+# Build libopus from source (no system dev package needed).
+audiopus_sys = { version = "0.2", features = ["static"], optional = true }
+bytes = { version = "1", optional = true }
+# webrtc-rs pulls in a second rustls crypto provider: pick one explicitly.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"], optional = true }

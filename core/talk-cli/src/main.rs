@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+
+#[cfg(feature = "call-bot")]
+mod callbot;
 use talk_core::{
     Account, ChatMessage, Engine, Event, EventSink, LoginFlow, Platform, TalkClient,
     new_reference_id,
@@ -102,6 +105,38 @@ enum Cmd {
     AudioInfo { path: PathBuf },
     /// Download a shared file like the apps do (resumable), print the local path
     Fetch { path: String, size: i64 },
+    /// Call test peer: call (or answer with --answer), send a tone, check received audio,
+    /// hang up and verify the server shows us out of the call. Build with --features call-bot
+    Call {
+        token: String,
+        /// Wait for an incoming call in `token` and answer it
+        #[arg(long)]
+        answer: bool,
+        /// Do not ring anybody (shared test rooms)
+        #[arg(long)]
+        silent: bool,
+        /// How long to stay connected
+        #[arg(long, default_value_t = 10)]
+        seconds: u64,
+        /// Fail unless audio from the other side arrived
+        #[arg(long)]
+        expect_audio: bool,
+        /// Mute after this many seconds
+        #[arg(long)]
+        mute_after: Option<u64>,
+        /// Tone frequency in Hz
+        #[arg(long, default_value_t = 440.0)]
+        tone: f32,
+        /// With --answer: how long to wait for the call
+        #[arg(long, default_value_t = 120)]
+        ring_wait: u64,
+        /// Hang up when not connected after this many seconds
+        #[arg(long, default_value_t = 90)]
+        connect_timeout: u64,
+        /// Print every call change as JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Cache check: shows the cached state (timed), then syncs a chat and shows the delta
     Cache {
         token: Option<String>,
@@ -150,12 +185,15 @@ async fn main() -> Result<()> {
     {
         return run_outbox(&cli, client).await;
     }
+    if let Cmd::Call { .. } = &cli.cmd {
+        return call_cmd(&cli).await;
+    }
     if let Cmd::Cache { token, lines } = &cli.cmd {
         return run_cache(&cli, client, token.as_deref(), *lines).await;
     }
 
     match cli.cmd {
-        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. }
+        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } | Cmd::Call { .. }
         | Cmd::Voice { .. }
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
@@ -263,6 +301,44 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "call-bot")]
+async fn call_cmd(cli: &Cli) -> Result<()> {
+    let Cmd::Call { token, answer, silent, seconds, expect_audio, mute_after, tone, ring_wait, connect_timeout, json } = &cli.cmd else {
+        unreachable!()
+    };
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let account = load_account(cli)?;
+    let client = TalkClient::new(account, Platform::Cli)?;
+    let sink = Arc::new(callbot::CallSink {
+        latest: Mutex::new(None),
+        changed: tokio::sync::Notify::new(),
+        json: *json,
+    });
+    let media = callbot::BotMedia::new(*tone)?;
+    let engine = Engine::new(client, sink.clone(), None);
+    media.attach(&engine);
+    engine.set_media_engine(media.clone());
+    engine.start().await?;
+    let opts = callbot::CallOpts {
+        token: token.clone(),
+        answer: *answer,
+        silent: *silent,
+        seconds: *seconds,
+        expect_audio: *expect_audio,
+        mute_after: *mute_after,
+        ring_wait: *ring_wait,
+        connect_timeout: *connect_timeout,
+    };
+    let r = callbot::run(engine.clone(), sink, media, opts).await;
+    engine.shutdown();
+    r
+}
+
+#[cfg(not(feature = "call-bot"))]
+async fn call_cmd(_cli: &Cli) -> Result<()> {
+    bail!("talk-cli ohne Anruf-Bot gebaut: cargo run -p talk-cli --features call-bot -- call …")
 }
 
 /// Prints outbox state changes (deduplicated per message).

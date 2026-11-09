@@ -21,6 +21,7 @@ sha2.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
 rusqlite.workspace = true
+tokio-tungstenite.workspace = true
 mp3lame-encoder.workspace = true
 symphonia.workspace = true
 
