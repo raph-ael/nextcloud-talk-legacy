@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
-import type { TalkApi, TalkEvent } from '@shared/core'
+import type { MediaCommand, TalkApi, TalkEvent } from '@shared/core'
 
 const api: TalkApi = {
   account: () => ipcRenderer.invoke('talk:account'),
@@ -39,6 +39,22 @@ const api: TalkApi = {
   audioInfo: (localPath) => ipcRenderer.invoke('talk:audioInfo', localPath),
   markRead: (token, messageId) => ipcRenderer.invoke('talk:markRead', token, messageId),
   setBadge: (count) => ipcRenderer.send('talk:setBadge', count),
+  startCall: (token, silent) => ipcRenderer.invoke('talk:startCall', token, silent),
+  acceptCall: (token) => ipcRenderer.invoke('talk:acceptCall', token),
+  declineCall: (token) => ipcRenderer.invoke('talk:declineCall', token),
+  hangUp: () => ipcRenderer.invoke('talk:hangUp'),
+  setCallMuted: (muted) => ipcRenderer.invoke('talk:setCallMuted', muted),
+  currentCall: () => ipcRenderer.invoke('talk:currentCall'),
+  userAvatarUrl: (userId) => `talk-avatar://user/${encodeURIComponent(userId)}`,
+  onMediaCommand: (cb) => {
+    const listener = (_e: IpcRendererEvent, cmd: MediaCommand) => cb(cmd)
+    ipcRenderer.on('talk:media', listener)
+    return () => ipcRenderer.removeListener('talk:media', listener)
+  },
+  mediaReady: () => ipcRenderer.send('talk:mediaReady'),
+  // One channel, `send` (not invoke): reports reach the core in the order they were made.
+  mediaReport: (report) => ipcRenderer.send('talk:mediaReport', report),
+  ringAttention: (call) => ipcRenderer.send('talk:ringAttention', call),
   onEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, event: TalkEvent) => cb(event)
     ipcRenderer.on('talk:event', listener)

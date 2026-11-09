@@ -21,7 +21,8 @@
     "appId": "org.sirplus.talk",
     "productName": "Sirplus Talk",
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "resources/tray.png"
     ],
     "extraResources": [
       {
