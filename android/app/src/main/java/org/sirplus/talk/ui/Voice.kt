@@ -39,6 +39,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -65,8 +72,18 @@ import uniffi.talk_ffi.AudioInfo
 import uniffi.talk_ffi.VoiceDraft
 import kotlin.math.roundToInt
 
-/** Bars drawn for a voice message (Signal Android draws a similar count). */
-private const val BARS = 36
+/*
+ * Voice message bubble. Layout and proportions follow Signal Android (measured on device):
+ * content 212 dp wide; a 48 dp button cell (44 dp circle) next to a 32 dp waveform of 2 dp
+ * bars with a 2 × 28 dp position line; below, a footer with duration, speed chip and the
+ * message time. Own code and icons, only the measurements are Signal's.
+ */
+private val VoiceWidth = 212.dp
+private val ButtonCell = 48.dp
+private val BarWidth = 2.dp
+private val BarMinGap = 1.2.dp
+private val BarMaxHeight = 24.dp
+private val ThumbHeight = 28.dp
 
 /** 75 000 → "1:15", 3 723 000 → "1:02:03". */
 fun clock(ms: Long): String {
@@ -89,82 +106,155 @@ private fun bars(levels: ByteArray?, n: Int): FloatArray {
     }
 }
 
-/** Bars with the played part highlighted; tap or drag to seek. */
+/** Colors of one voice message, derived from its bubble. */
+private data class VoicePalette(
+    val circle: Color,
+    val icon: Color,
+    val played: Color,
+    val unplayed: Color,
+    val chip: Color,
+)
+
 @Composable
-private fun Waveform(levels: ByteArray?, progress: Float, color: Color, modifier: Modifier, onSeek: (Float) -> Unit) {
-    val values = remember(levels) { bars(levels, BARS) }
+private fun voicePalette(own: Boolean, textColor: Color, active: Boolean): VoicePalette {
+    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    return if (own) {
+        VoicePalette(
+            circle = Color.White.copy(alpha = 0.16f),
+            icon = Color.White,
+            played = Color.White,
+            unplayed = Color.White.copy(alpha = if (active) 0.4f else 0.2f),
+            chip = Color.White.copy(alpha = 0.2f),
+        )
+    } else {
+        VoicePalette(
+            circle = if (dark) Color.White.copy(alpha = 0.12f) else Color.White,
+            icon = textColor,
+            played = textColor,
+            unplayed = textColor.copy(alpha = if (dark) 0.3f else 0.22f),
+            chip = textColor.copy(alpha = 0.08f),
+        )
+    }
+}
+
+/** Bars with the played part highlighted and a position line; tap or drag to seek. */
+@Composable
+private fun Waveform(
+    levels: ByteArray?,
+    progress: Float,
+    played: Color,
+    unplayed: Color,
+    modifier: Modifier,
+    onSeek: (Float) -> Unit,
+) {
     val seek by rememberUpdatedState(onSeek)
     Canvas(
         modifier
-            .height(28.dp)
+            .height(ThumbHeight + 4.dp)
             .pointerInput(Unit) { detectTapGestures { seek(it.x / size.width) } }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures { change, _ -> seek(change.position.x / size.width) }
             },
     ) {
-        val gap = 2.dp.toPx()
-        val w = ((size.width - gap * (BARS - 1)) / BARS).coerceAtLeast(1f)
-        val min = 4.dp.toPx()
-        val max = size.height
+        val bar = BarWidth.toPx()
+        val n = ((size.width + BarMinGap.toPx()) / (bar + BarMinGap.toPx())).toInt().coerceAtLeast(2)
+        val step = (size.width - bar) / (n - 1)
+        val values = bars(levels, n)
+        val mid = size.height / 2
+        val span = BarMaxHeight.toPx() - bar
+        val thumbX = bar / 2 + progress.coerceIn(0f, 1f) * (size.width - bar)
         values.forEachIndexed { i, v ->
-            val h = min + v * (max - min)
-            val x = i * (w + gap)
-            val played = (i + 0.5f) / BARS <= progress
-            drawRoundRect(
-                color = if (played) color else color.copy(alpha = 0.35f),
-                topLeft = Offset(x, (size.height - h) / 2),
-                size = Size(w, h),
-                cornerRadius = CornerRadius(w / 2, w / 2),
+            val x = bar / 2 + i * step
+            val half = v * span / 2
+            drawLine(
+                color = if (x <= thumbX) played else unplayed,
+                start = Offset(x, mid - half),
+                end = Offset(x, mid + half),
+                strokeWidth = bar,
+                cap = StrokeCap.Round,
             )
         }
+        val t = ThumbHeight.toPx() / 2 - bar / 2
+        drawLine(played, Offset(thumbX, mid - t), Offset(thumbX, mid + t), strokeWidth = bar, cap = StrokeCap.Round)
     }
 }
 
+/**
+ * Round play/pause button in a [ButtonCell] (circle inset by 2 dp). A ring on the circle's edge
+ * shows upload progress or loading; [download] marks a file that is not fetched yet.
+ */
 @Composable
-private fun PlayButton(player: PlayerUi?, background: Color, tint: Color, upload: Float?, onClick: () -> Unit) {
-    Box(
-        Modifier.size(40.dp).clip(CircleShape).background(background).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
+private fun PlayButton(
+    player: PlayerUi?,
+    circle: Color,
+    tint: Color,
+    upload: Float?,
+    download: Boolean = false,
+    cell: Dp = ButtonCell,
+    onClick: () -> Unit,
+) {
+    Box(Modifier.size(cell).padding(2.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.fillMaxSize().clip(CircleShape).background(circle).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            val playing = player?.playing == true
+            Icon(
+                when {
+                    playing -> TalkIcons.Pause
+                    download && player == null -> TalkIcons.ArrowDown
+                    else -> TalkIcons.Play
+                },
+                if (playing) "Pause" else "Abspielen",
+                tint = tint,
+                modifier = Modifier.size(22.dp),
+            )
+        }
         when {
             upload != null -> CircularProgressIndicator(
                 progress = { upload.coerceAtLeast(0.03f) },
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.fillMaxSize(),
                 color = tint,
-                trackColor = tint.copy(alpha = 0.2f),
-                strokeWidth = 2.5.dp,
+                trackColor = Color.Transparent,
+                strokeWidth = 2.dp,
             )
-            player?.loading == true -> CircularProgressIndicator(Modifier.size(30.dp), color = tint, strokeWidth = 2.5.dp)
+            player?.loading == true -> CircularProgressIndicator(Modifier.fillMaxSize(), color = tint, strokeWidth = 2.dp)
         }
-        Icon(
-            if (player?.playing == true) TalkIcons.Pause else TalkIcons.Play,
-            if (player?.playing == true) "Pause" else "Abspielen",
-            tint = tint,
-            modifier = Modifier.size(22.dp),
-        )
     }
 }
 
 /** Speed chip: 1× → 1,5× → 2× → 0,5×. */
 @Composable
-private fun SpeedChip(speed: Float, color: Color, onClick: () -> Unit) {
+private fun SpeedChip(speed: Float, color: Color, background: Color, onClick: () -> Unit) {
     val label = (if (speed % 1f == 0f) speed.toInt().toString() else speed.toString().replace('.', ',')) + "×"
-    Text(
-        label,
-        color = color,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(color.copy(alpha = 0.15f))
+    Box(
+        Modifier
+            .heightIn(min = 20.dp)
+            .widthIn(min = 30.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(background)
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 1.dp),
-    )
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = color, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, lineHeight = 16.sp)
+    }
 }
 
-/** A voice message (or any audio file) inside a bubble. */
+/**
+ * A voice message (or any audio file) inside a bubble: button + waveform, then a footer with
+ * duration (remaining while playing), speed chip and [meta] (time, ticks) at the end.
+ */
 @Composable
-fun VoiceBubble(voice: VoiceManager, m: UiMessage, textColor: Color, own: Boolean, modifier: Modifier = Modifier) {
+fun VoiceBubble(
+    voice: VoiceManager,
+    m: UiMessage,
+    textColor: Color,
+    metaColor: Color,
+    own: Boolean,
+    modifier: Modifier = Modifier,
+    meta: (@Composable () -> Unit)? = null,
+) {
     val a = m.msg.attachment ?: return
     val key = voice.messageKey(m)
     val playerState by voice.player.state.collectAsStateWithLifecycle()
@@ -182,37 +272,53 @@ fun VoiceBubble(voice: VoiceManager, m: UiMessage, textColor: Color, own: Boolea
     val active = player != null && (player.playing || position > 0)
     val progress = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val uploading = m.status == SendStatus.SENDING && m.progress in 0f..0.999f
-    Column(modifier.width(240.dp).semantics { contentDescription = "Sprachnachricht ${clock(duration)}" }) {
+    val p = voicePalette(own, textColor, active)
+    Column(modifier.width(VoiceWidth).semantics { contentDescription = "Sprachnachricht ${clock(duration)}" }) {
+        if (!a.voiceMessage) {
+            Text(
+                a.name,
+                color = textColor,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             PlayButton(
                 player,
-                background = if (own) Color.White else MaterialTheme.colorScheme.surface,
-                tint = if (own) LocalTalkColors.current.bubbleOwn else textColor,
+                circle = p.circle,
+                tint = p.icon,
                 upload = if (uploading) m.progress else null,
+                download = info == null && !auto,
                 onClick = { voice.toggle(m) },
             )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Waveform(info?.waveform, progress, textColor, Modifier.fillMaxWidth()) { voice.seek(m, it) }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 18.dp)) {
-                    Text(
-                        clock(if (active) duration - position else duration),
-                        color = textColor.copy(alpha = 0.8f),
-                        fontSize = 12.sp,
-                    )
-                    if (active) {
-                        Spacer(Modifier.width(6.dp))
-                        SpeedChip(playerState.speed, textColor) { voice.player.cycleSpeed() }
-                    }
-                    player?.error?.let {
-                        Spacer(Modifier.width(6.dp))
-                        Text(it, color = textColor.copy(alpha = 0.8f), fontSize = 12.sp)
-                    }
-                }
-            }
+            Waveform(
+                info?.waveform,
+                progress,
+                p.played,
+                p.unplayed,
+                Modifier.weight(1f).padding(start = 11.dp, end = 8.dp),
+            ) { voice.seek(m, it) }
         }
-        if (!a.voiceMessage) {
-            Text(a.name, color = textColor.copy(alpha = 0.8f), fontSize = 12.sp, maxLines = 1)
+        // Compact line height: the theme's body style would make the footer 28 dp tall.
+        ProvideTextStyle(TextStyle(lineHeight = 16.sp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 8.dp, top = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(clock(if (active) duration - position else duration), color = metaColor, fontSize = 12.sp)
+            if (active) {
+                Spacer(Modifier.width(16.dp))
+                SpeedChip(playerState.speed, p.played, p.chip) { voice.player.cycleSpeed() }
+            }
+            player?.error?.let {
+                Spacer(Modifier.width(8.dp))
+                Text(it, color = metaColor, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.weight(1f).widthIn(min = 8.dp))
+            meta?.invoke()
+        }
         }
     }
 }
@@ -372,9 +478,9 @@ fun VoiceDraftBar(voice: VoiceManager, draft: VoiceDraft, onDelete: () -> Unit, 
     val progress = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val text = MaterialTheme.colorScheme.onSurface
     VoiceBarFrame(onDelete = onDelete, deleteLabel = "Entwurf löschen", onSend = onSend, startPadding = 2.dp) {
-        PlayButton(player, MaterialTheme.colorScheme.surface, text, null) { voice.toggleDraft(draft) }
+        PlayButton(player, MaterialTheme.colorScheme.surface, text, null, cell = 44.dp) { voice.toggleDraft(draft) }
         Spacer(Modifier.width(10.dp))
-        Waveform(draft.waveform, progress, text, Modifier.weight(1f)) { voice.seekDraft(draft, it) }
+        Waveform(draft.waveform, progress, text, text.copy(alpha = 0.3f), Modifier.weight(1f)) { voice.seekDraft(draft, it) }
         Spacer(Modifier.width(10.dp))
         Text(clock(if (player != null && position > 0) duration - position else duration), fontSize = 13.sp, color = text)
     }

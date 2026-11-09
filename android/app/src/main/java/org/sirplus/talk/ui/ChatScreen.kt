@@ -338,6 +338,11 @@ private fun MessageRow(
         val attachment = msg.attachment.takeIf { msg.kind != MessageKind.DELETED }
         val image = attachment?.isImage() == true
         val jumbo = msg.kind == MessageKind.TEXT && attachment == null && msg.replyTo == null && isJumboEmoji(msg.text)
+        val audio = attachment != null && !image && (attachment.voiceMessage || attachment.mimetype.startsWith("audio/"))
+        // Signal: an audio bubble carries its time in the player's footer row.
+        val metaInVoice = audio && msg.text.isEmpty() && msg.reactions.isEmpty()
+        // ... and has more room above the player when nothing (name, quote) precedes it.
+        val audioOnTop = audio && !(isGroup && !own && first) && msg.replyTo == null
         // Photos sit edge to edge in the bubble (3dp frame); everything else keeps the text inset.
         val inset = if (image) Modifier.padding(horizontal = 9.dp) else Modifier
 
@@ -416,7 +421,10 @@ private fun MessageRow(
                             .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
                             .padding(
                                 horizontal = if (jumbo) 0.dp else if (image) 3.dp else 12.dp,
-                                vertical = if (image) 3.dp else 7.dp,
+                            )
+                            .padding(
+                                top = if (image) 3.dp else if (audioOnTop) 12.dp else 7.dp,
+                                bottom = if (image) 3.dp else 7.dp,
                             ),
                     ) {
                         val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
@@ -477,8 +485,21 @@ private fun MessageRow(
                                     }
                                 }
                             }
-                        } else if (attachment != null && (attachment.voiceMessage || attachment.mimetype.startsWith("audio/"))) {
-                            VoiceBubble(sessions.voice, m, textColor, own, Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp))
+                        } else if (audio) {
+                            val metaColor = textColor.copy(alpha = 0.75f)
+                            VoiceBubble(
+                                sessions.voice,
+                                m,
+                                textColor,
+                                metaColor,
+                                own,
+                                Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
+                                meta = if (metaInVoice && showMeta) {
+                                    { MessageMeta(m, own, read, metaColor, colors.danger) }
+                                } else {
+                                    null
+                                },
+                            )
                         } else if (attachment != null) {
                             FileRow(attachment, textColor, Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp))
                         }
@@ -507,7 +528,7 @@ private fun MessageRow(
                                 }
                             }
                         }
-                        if (showMeta && !metaOnImage) {
+                        if (showMeta && !metaOnImage && !metaInVoice) {
                             Box(
                                 Modifier
                                     .align(Alignment.End)
@@ -560,7 +581,7 @@ private fun failureText(e: SendError?): String = when (e) {
 @Composable
 private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androidx.compose.ui.graphics.Color, danger: androidx.compose.ui.graphics.Color) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-        if (m.msg.edited) Text("bearbeitet ·", fontSize = 11.sp, color = color)
+        if (m.msg.edited) Text("bearbeitet ·", fontSize = 12.sp, color = color)
         Text(
             when (m.status) {
                 SendStatus.SENDING -> "Wird gesendet …"
@@ -568,9 +589,9 @@ private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androi
                 SendStatus.FAILED -> "Nicht gesendet · " + failureText(m.error)
                 null -> messageTime(m.msg.timestamp)
             },
-            fontSize = 11.sp,
+            fontSize = 12.sp,
             color = if (m.status == SendStatus.FAILED) danger else color,
         )
-        if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 11.sp, color = color)
+        if (own && m.status == null) Text(if (read) "✓✓" else "✓", fontSize = 12.sp, color = color)
     }
 }
