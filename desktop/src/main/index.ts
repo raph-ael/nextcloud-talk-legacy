@@ -635,6 +635,8 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
       spellcheck: true,
+      // Calls live in this renderer: ringing, tones and media must not be throttled when hidden.
+      backgroundThrottling: false,
     },
   })
   win.once('ready-to-show', () => win?.show())
