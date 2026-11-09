@@ -13,15 +13,26 @@ function daysAgo(unix: number): number {
   return Math.round((startOfDay(new Date()) - startOfDay(new Date(unix * 1000))) / 86_400_000)
 }
 
-/** Conversation list: 14:03 · Gestern · Mo. · 03.11.26 */
-export function listTime(unix: number): string {
+const monthDay = new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short' })
+
+/** Conversation list, like Signal: Jetzt · 5 Min. · 3 Std. · Fr. · 12. Okt. · 12.10.25 */
+export function listTime(unix: number, nowMs: number = Date.now()): string {
   if (!unix) return ''
-  const d = daysAgo(unix)
+  const secs = Math.floor(nowMs / 1000) - unix
   const date = new Date(unix * 1000)
-  if (d === 0) return time.format(date)
-  if (d === 1) return 'Gestern'
-  if (d < 7) return weekday.format(date)
+  if (secs < 60) return 'Jetzt'
+  if (secs < 3600) return `${Math.floor(secs / 60)} Min.`
+  if (secs < 24 * 3600) return `${Math.floor(secs / 3600)} Std.`
+  if (daysAgo(unix) < 7) return weekday.format(date)
+  if (date.getFullYear() === new Date(nowMs).getFullYear()) return monthDay.format(date)
   return shortDate.format(date)
+}
+
+/** 1,2 MB style file size. */
+export function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.floor(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`
 }
 
 export function messageTime(unix: number): string {

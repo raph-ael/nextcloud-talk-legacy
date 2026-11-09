@@ -1,7 +1,19 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, Notification, protocol, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor, protocol, safeStorage, shell } from 'electron'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { withAttachment, type AccountInfo, type AppEvent, type CoreEvent, type RoomView, type TalkEvent } from '@shared/core'
+import { copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, extname, join, relative, resolve, sep } from 'node:path'
+import {
+  withAttachment,
+  type AccountInfo,
+  type AppEvent,
+  type CoreEvent,
+  type PendingMessage,
+  type ReplyPreview,
+  type RoomView,
+  type StagedFile,
+  type TalkEvent,
+} from '@shared/core'
 
 // --- Native core -------------------------------------------------------------------
 
@@ -21,12 +33,31 @@ interface NativeSession {
   openChat(token: string): Promise<unknown>
   closeChat(token: string): void
   loadOlder(token: string, beforeId: number): Promise<unknown>
-  send(token: string, text: string, referenceId: string, replyTo: number | null): Promise<unknown>
   markRead(token: string, messageId: number): Promise<void>
   avatar(token: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
+  enqueueText(token: string, text: string, replyTo: ReplyPreview | null, referenceId: string): PendingMessage
+  enqueueFile(
+    token: string,
+    localPath: string,
+    name: string,
+    mime: string,
+    width: number,
+    height: number,
+    caption: string,
+    replyTo: ReplyPreview | null,
+    referenceId: string,
+  ): PendingMessage
+  pending(token: string): PendingMessage[]
+  retrySend(referenceId: string): void
+  discard(referenceId: string): void
+  networkChanged(): void
+  outboxUnsent(): number
+  waitOutboxIdle(): Promise<{ waiting: number; failed: number }>
+  filePreview(fileId: string, width: number, height: number): Promise<Buffer>
 }
 interface NativeCore {
   coreVersion(): string
+  newReferenceId(): string
   startLogin(server: string): Promise<NativeLoginFlow>
   TalkSession: new (
     server: string,
@@ -93,6 +124,10 @@ let loginFlow: NativeLoginFlow | null = null
 let activeToken: string | null = null
 let lastRooms = new Map<string, RoomView>()
 let firstRoomsEvent = true
+/** Core data folder of the running session (cache, outbox, staging). */
+let sessionDir: string | null = null
+/** Failed messages already announced by a notification. */
+const notifiedFailures = new Set<string>()
 
 function send(event: TalkEvent): void {
   win?.webContents.send('talk:event', event)
@@ -104,6 +139,8 @@ function onCoreEvent(event: CoreEvent): void {
   } else if (event.type === 'authFailed') {
     void signOut(false)
     return
+  } else if (event.type === 'outboxChanged') {
+    announceFailures(event.token, event.items)
   }
   send(event)
 }
@@ -114,6 +151,9 @@ function startSession(stored: StoredAccount, plainPassword?: string): void {
   // Dev accounts (not stored) get their own cache: never mix two accounts' messages.
   const dir = stored.secret ? coreDir : join(dataDir, 'talk-dev', stored.loginName)
   session = new core.TalkSession(stored.server, stored.loginName, password, onCoreEvent, dir)
+  sessionDir = dir
+  // Leftovers of attachments that were picked but never sent.
+  rmSync(join(dir, 'staging'), { recursive: true, force: true })
   firstRoomsEvent = true
   const s = session
   s.start()
@@ -136,6 +176,8 @@ async function signOut(revoke: boolean): Promise<void> {
   account = null
   activeToken = null
   lastRooms = new Map()
+  sessionDir = null
+  notifiedFailures.clear()
   if (s) {
     if (revoke) await s.logout().catch(() => s.shutdown())
     else s.shutdown()
@@ -210,6 +252,85 @@ function notifyNewMessages(rooms: RoomView[]): void {
     })
     n.show()
   }
+}
+
+/** A message finally failed while the user was not looking at its chat. */
+function announceFailures(token: string, items: PendingMessage[]): void {
+  const fresh = items.filter((i) => i.state === 'failed' && !notifiedFailures.has(i.message.referenceId))
+  if (fresh.length === 0) return
+  fresh.forEach((i) => notifiedFailures.add(i.message.referenceId))
+  const visible = (win?.isFocused() ?? false) && activeToken === token
+  if (visible || !Notification.isSupported()) return
+  const n = new Notification({
+    title: 'Nachricht nicht gesendet',
+    body: lastRooms.get(token)?.name ?? 'Unterhaltung',
+  })
+  n.on('click', () => {
+    showWindow()
+    send({ type: 'openRoom', token })
+  })
+  n.show()
+}
+
+// --- Attachments: staging ----------------------------------------------------------
+
+function stagingDir(): string {
+  if (!sessionDir) throw new Error('not signed in')
+  const dir = join(sessionDir, 'staging')
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** File name without path parts or characters that confuse file systems. */
+function safeName(name: string): string {
+  const clean = basename(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim()
+  return clean || 'Datei'
+}
+
+function stagedPath(name: string): string {
+  return join(stagingDir(), `${randomBytes(8).toString('hex')}${extname(safeName(name)).toLowerCase()}`)
+}
+
+/** `true` when `path` lies inside `dir` (no `..` escapes). */
+function inside(dir: string, path: string): boolean {
+  const rel = relative(resolve(dir), resolve(path))
+  return rel !== '' && !rel.startsWith('..') && !rel.startsWith(sep) && !/^[a-zA-Z]:/.test(rel)
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.txt': 'text/plain',
+  '.zip': 'application/zip',
+}
+
+function mimeFor(name: string, given: string): string {
+  return given || MIME_BY_EXT[extname(name).toLowerCase()] || 'application/octet-stream'
+}
+
+async function stageData(name: string, mime: string, data: Uint8Array, width: number, height: number): Promise<StagedFile> {
+  const path = stagedPath(name)
+  await writeFile(path, data)
+  return { path, name: safeName(name), mime: mimeFor(name, mime), size: data.byteLength, width, height }
+}
+
+async function stagePath(source: string, name: string, mime: string): Promise<StagedFile> {
+  const info = await stat(source)
+  if (!info.isFile()) throw new Error('Ordner können nicht gesendet werden')
+  const path = stagedPath(name || source)
+  // A copy: the outbox moves its file, the user's original must stay.
+  await copyFile(source, path)
+  const fileName = safeName(name || basename(source))
+  return { path, name: fileName, mime: mimeFor(fileName, mime), size: info.size, width: 0, height: 0 }
 }
 
 // --- Window ------------------------------------------------------------------------
@@ -295,9 +416,41 @@ function registerIpc(): void {
     session?.closeChat(token)
   })
   ipcMain.handle('talk:loadOlder', (_e, token: string, beforeId: number) => requireSession().loadOlder(token, beforeId))
-  ipcMain.handle('talk:send', (_e, token: string, text: string, referenceId: string, replyTo: number | null) =>
-    requireSession().send(token, text, referenceId, replyTo),
+  ipcMain.handle('talk:refreshRooms', () => session?.refreshRooms().catch(() => undefined))
+  ipcMain.handle('talk:enqueueText', (_e, token: string, text: string, replyTo: ReplyPreview | null) =>
+    requireSession().enqueueText(token, text, replyTo, core.newReferenceId()),
   )
+  ipcMain.handle(
+    'talk:enqueueFile',
+    (_e, token: string, file: StagedFile, caption: string, replyTo: ReplyPreview | null) => {
+      if (!sessionDir || !inside(join(sessionDir, 'staging'), file.path)) throw new Error('not a staged file')
+      return requireSession().enqueueFile(
+        token,
+        file.path,
+        file.name,
+        file.mime,
+        file.width,
+        file.height,
+        caption,
+        replyTo,
+        core.newReferenceId(),
+      )
+    },
+  )
+  ipcMain.handle('talk:pending', (_e, token: string) => session?.pending(token) ?? [])
+  ipcMain.handle('talk:retrySend', (_e, referenceId: string) => {
+    notifiedFailures.delete(referenceId)
+    session?.retrySend(referenceId)
+  })
+  ipcMain.handle('talk:discard', (_e, referenceId: string) => session?.discard(referenceId))
+  ipcMain.on('talk:networkChanged', () => session?.networkChanged())
+  ipcMain.handle('talk:stageData', (_e, name: string, mime: string, data: Uint8Array, width: number, height: number) =>
+    stageData(name, mime, data, width, height),
+  )
+  ipcMain.handle('talk:stagePath', (_e, path: string, name: string, mime: string) => stagePath(path, name, mime))
+  ipcMain.handle('talk:unstage', async (_e, path: string) => {
+    if (sessionDir && inside(join(sessionDir, 'staging'), path)) await rm(path, { force: true })
+  })
   ipcMain.handle('talk:markRead', (_e, token: string, messageId: number) => session?.markRead(token, messageId))
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
 }
@@ -306,6 +459,7 @@ function registerIpc(): void {
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'talk-avatar', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: 'talk-media', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ])
 
 const avatarCache = new Map<string, { data: Buffer; contentType: string }>()
@@ -332,6 +486,55 @@ function registerAvatarProtocol(): void {
   })
 }
 
+// --- Media: talk-media://preview/<fileId>?w=&h=, talk-media://local/file?p=<path> ---
+
+function imageType(data: Uint8Array, fallback: string): string {
+  if (data[0] === 0xff && data[1] === 0xd8) return 'image/jpeg'
+  if (data[0] === 0x89 && data[1] === 0x50) return 'image/png'
+  if (data[0] === 0x47 && data[1] === 0x49) return 'image/gif'
+  if (data[8] === 0x57 && data[9] === 0x45) return 'image/webp'
+  return fallback
+}
+
+function registerMediaProtocol(): void {
+  protocol.handle('talk-media', async (request) => {
+    const url = new URL(request.url)
+    try {
+      if (url.hostname === 'preview' && session) {
+        const fileId = decodeURIComponent(url.pathname.replace(/^\//, ''))
+        const w = Math.min(Number(url.searchParams.get('w')) || 512, 4096)
+        const h = Math.min(Number(url.searchParams.get('h')) || 512, 4096)
+        const data = await session.filePreview(fileId, w, h)
+        return new Response(new Uint8Array(data), {
+          headers: { 'content-type': imageType(data, 'image/jpeg'), 'cache-control': 'max-age=604800' },
+        })
+      }
+      if (url.hostname === 'local' && sessionDir) {
+        // Only files of the outbox/staging of this account, nothing else on disk.
+        const path = url.searchParams.get('p') ?? ''
+        if (!inside(sessionDir, path)) return new Response(null, { status: 403 })
+        const data = await readFile(path)
+        return new Response(new Uint8Array(data), {
+          headers: { 'content-type': imageType(data, mimeFor(path, '')) },
+        })
+      }
+    } catch {
+      return new Response(null, { status: 404 })
+    }
+    return new Response(null, { status: 404 })
+  })
+}
+
+/** Gives the outbox a moment to deliver what is in flight before the process ends. */
+async function quitAfterOutbox(): Promise<void> {
+  const s = session
+  if (s && s.outboxUnsent() > 0) {
+    await Promise.race([s.waitOutboxIdle(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined)
+  }
+  s?.shutdown()
+  app.quit()
+}
+
 // --- App lifecycle -----------------------------------------------------------------
 
 if (!app.requestSingleInstanceLock()) {
@@ -343,6 +546,8 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     registerIpc()
     registerAvatarProtocol()
+    registerMediaProtocol()
+    powerMonitor.on('resume', () => session?.networkChanged())
     const dev = devAccount()
     const stored = existsSync(accountFile) ? loadAccount() : null
     if (dev) startSession({ server: dev.server, loginName: dev.user, secret: '' }, dev.password)
@@ -355,9 +560,6 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      session?.shutdown()
-      app.quit()
-    }
+    if (process.platform !== 'darwin') void quitAfterOutbox()
   })
 }

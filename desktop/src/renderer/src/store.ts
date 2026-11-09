@@ -2,10 +2,29 @@
 // A tiny external store (no framework) consumed via useSyncExternalStore.
 
 import { useSyncExternalStore } from 'react'
-import type { AccountInfo, ChatPage, MessageView, RoomView, TalkEvent } from '@shared/core'
+import type {
+  AccountInfo,
+  ChatPage,
+  MessageView,
+  PendingMessage,
+  PendingState,
+  ReplyPreview,
+  RoomView,
+  SendError,
+  StagedFile,
+  TalkEvent,
+} from '@shared/core'
 
-export type SendStatus = 'sending' | 'failed'
-export type UiMessage = MessageView & { status?: SendStatus }
+export type SendStatus = PendingState
+/** A message as shown; `status` is set for messages still in the outbox. */
+export type UiMessage = MessageView & {
+  status?: SendStatus
+  error?: SendError | null
+  /** Upload progress 0..1, negative when not uploading. */
+  progress?: number
+  /** Local copy of a pending attachment. */
+  localPath?: string | null
+}
 
 export interface ChatState {
   messages: UiMessage[]
@@ -79,6 +98,17 @@ function merge(existing: UiMessage[], incoming: MessageView[]): UiMessage[] {
   return [...[...byId.values()].sort((a, b) => a.id - b.id), ...pending]
 }
 
+function toUi(p: PendingMessage): UiMessage {
+  return { ...p.message, status: p.state, error: p.error, progress: p.progress, localPath: p.localPath }
+}
+
+/** Replaces the pending bubbles of a chat by the outbox state. */
+function withPending(messages: UiMessage[], pending: PendingMessage[]): UiMessage[] {
+  const delivered = new Set(messages.filter((m) => !m.status && m.referenceId).map((m) => m.referenceId))
+  // A delivered message can still be listed for a moment (until its echo is confirmed).
+  return [...messages.filter((m) => !m.status), ...pending.filter((p) => !delivered.has(p.message.referenceId)).map(toUi)]
+}
+
 function updateOnly(existing: UiMessage[], incoming: MessageView[]): UiMessage[] {
   const updates = new Map(incoming.map((m) => [m.id, m]))
   return existing.map((m) => updates.get(m.id) ?? m)
@@ -112,6 +142,9 @@ export function handleEvent(e: TalkEvent): void {
     case 'openRoom':
       void openRoom(e.token)
       break
+    case 'outboxChanged':
+      if (state.chats[e.token]) setChat(e.token, (c) => ({ ...c, messages: withPending(c.messages, e.items) }))
+      break
     case 'authFailed':
       break
   }
@@ -126,6 +159,10 @@ function updateBadge(): void {
 
 export async function boot(): Promise<void> {
   window.talk.onEvent(handleEvent)
+  // Waiting messages go out as soon as the network is back.
+  window.addEventListener('online', () => window.talk.networkChanged())
+  window.addEventListener('offline', () => window.talk.networkChanged())
+  window.addEventListener('focus', refreshRoomsThrottled)
   const account = await window.talk.account()
   if (!account) {
     set({ session: 'loggedOut' })
@@ -140,8 +177,11 @@ export async function openRoom(token: string): Promise<void> {
   if (previous === token) return
   if (previous) void window.talk.closeChat(previous)
   set({ activeToken: token })
-  setChat(token, (c) => ({ ...c, loading: c.messages.length === 0 }))
+  setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status) }))
   try {
+    // Unsent messages survive restarts: show them from the first frame.
+    const pending = await window.talk.pending(token)
+    setChat(token, (c) => ({ ...c, messages: withPending(c.messages, pending) }))
     // Cached messages first, then the server state.
     const cached: ChatPage = await window.talk.cachedChat(token)
     if (state.activeToken === token && cached.messages.length > 0) {
@@ -196,59 +236,55 @@ export async function loadOlder(token: string): Promise<void> {
   }
 }
 
-function referenceId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+let lastRefresh = 0
+
+/** Desktop counterpart of pull-to-refresh: re-sync the list when the window gets focus. */
+function refreshRoomsThrottled(): void {
+  if (state.session !== 'ready' || Date.now() - lastRefresh < 30_000) return
+  lastRefresh = Date.now()
+  void window.talk.refreshRooms()
 }
 
+function toReply(m: UiMessage | null): ReplyPreview | null {
+  return m ? { id: m.id, author: m.author, text: m.text, isOwn: m.isOwn, attachment: m.attachment ?? null } : null
+}
+
+/** Shows a queued message at once (the outbox event may arrive a moment later). */
+function showQueued(token: string, p: PendingMessage): void {
+  setChat(token, (c) =>
+    c.messages.some((m) => m.status && m.referenceId === p.message.referenceId)
+      ? c
+      : { ...c, messages: [...c.messages, toUi(p)] },
+  )
+}
+
+/** Queues the message in the outbox: it is delivered reliably, also after a restart. */
 export async function sendMessage(token: string, text: string, replyTo: UiMessage | null): Promise<void> {
-  const ref = referenceId()
-  const account = state.account
-  const optimistic: UiMessage = {
-    id: -Date.now(),
-    token,
-    actorType: 'users',
-    actorId: account?.userId ?? '',
-    author: '',
-    timestamp: Math.floor(Date.now() / 1000),
-    text,
-    kind: 'text',
-    systemMessage: '',
-    referenceId: ref,
-    isOwn: true,
-    edited: false,
-    markdown: true,
-    replyTo: replyTo ? { id: replyTo.id, author: replyTo.author, text: replyTo.text, isOwn: replyTo.isOwn } : null,
-    reactions: {},
-    reactionsSelf: [],
-    status: 'sending',
-  }
-  setChat(token, (c) => ({ ...c, messages: [...c.messages, optimistic] }))
-  await deliver(token, optimistic)
+  showQueued(token, await window.talk.enqueueText(token, text, toReply(replyTo)))
 }
 
-async function deliver(token: string, msg: UiMessage): Promise<void> {
-  try {
-    const sent = await window.talk.send(token, msg.text, msg.referenceId, msg.replyTo?.id ?? null)
-    setChat(token, (c) => ({ ...c, messages: merge(c.messages, [sent]) }))
-  } catch {
-    setChat(token, (c) => ({
-      ...c,
-      messages: c.messages.map((m) => (m.referenceId === msg.referenceId && m.status ? { ...m, status: 'failed' } : m)),
-    }))
+/** Queues staged files; the caption goes with the last one (shown below the pictures). */
+export async function sendFiles(
+  token: string,
+  files: StagedFile[],
+  caption: string,
+  replyTo: UiMessage | null,
+): Promise<void> {
+  for (const [i, f] of files.entries()) {
+    const last = i === files.length - 1
+    const p = await window.talk.enqueueFile(token, f, last ? caption : '', i === 0 ? toReply(replyTo) : null)
+    showQueued(token, p)
   }
 }
 
-export function retry(token: string, msg: UiMessage): void {
-  setChat(token, (c) => ({
-    ...c,
-    messages: c.messages.map((m) => (m.referenceId === msg.referenceId ? { ...m, status: 'sending' } : m)),
-  }))
-  void deliver(token, msg)
+/** Sends a failed message again (or a waiting one right now). */
+export function retry(msg: UiMessage): void {
+  void window.talk.retrySend(msg.referenceId)
 }
 
-export function discard(token: string, msg: UiMessage): void {
-  setChat(token, (c) => ({ ...c, messages: c.messages.filter((m) => m.referenceId !== msg.referenceId || !m.status) }))
+/** Drops a pending or failed message. */
+export function discard(msg: UiMessage): void {
+  void window.talk.discard(msg.referenceId)
 }
 
 /** Marks the newest message as read when the chat is actually visible. */

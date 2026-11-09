@@ -97,6 +97,32 @@ export interface ChatPage {
   reset: boolean
 }
 
+/** Outbox state of a message that is not delivered yet. */
+export type PendingState = 'sending' | 'waiting' | 'failed'
+
+/** Why a message finally failed (talk-core `SendError`). */
+export type SendError = 'expired' | 'forbidden' | 'notFound' | 'tooLarge' | 'quotaExceeded' | 'fileMissing' | 'rejected'
+
+export interface PendingMessage {
+  message: MessageView
+  state: PendingState
+  /** Upload progress 0..1, negative when not uploading. */
+  progress: number
+  error: SendError | null
+  /** Local copy of the attachment, shown until the server has it. */
+  localPath: string | null
+}
+
+/** A file copied into the app's staging folder, ready for `enqueueFile`. */
+export interface StagedFile {
+  path: string
+  name: string
+  mime: string
+  size: number
+  width: number
+  height: number
+}
+
 export type CoreEvent =
   | { type: 'roomsChanged'; rooms: RoomView[] }
   | { type: 'messagesAdded'; token: string; messages: MessageView[] }
@@ -104,6 +130,7 @@ export type CoreEvent =
   | { type: 'readStatus'; token: string; lastCommonRead: number }
   | { type: 'connection'; online: boolean }
   | { type: 'authFailed' }
+  | { type: 'outboxChanged'; token: string; items: PendingMessage[] }
 
 /** Events produced by the Electron main process itself. */
 export type AppEvent =
@@ -132,9 +159,28 @@ export interface TalkApi {
   openChat(token: string): Promise<ChatPage>
   closeChat(token: string): Promise<void>
   loadOlder(token: string, beforeId: number): Promise<ChatPage>
-  send(token: string, text: string, referenceId: string, replyTo: number | null): Promise<MessageView>
+  refreshRooms(): Promise<void>
+  /** Queues a text message in the persistent outbox (delivered in the background). */
+  enqueueText(token: string, text: string, replyTo: ReplyPreview | null): Promise<PendingMessage>
+  /** Queues a staged file; the outbox takes it over. */
+  enqueueFile(token: string, file: StagedFile, caption: string, replyTo: ReplyPreview | null): Promise<PendingMessage>
+  pending(token: string): Promise<PendingMessage[]>
+  retrySend(referenceId: string): Promise<void>
+  discard(referenceId: string): Promise<void>
+  networkChanged(): void
+  /** Writes bytes (a prepared image, pasted data) into the staging folder. */
+  stageData(name: string, mime: string, data: Uint8Array, width: number, height: number): Promise<StagedFile>
+  /** Copies a local file into the staging folder (the original stays untouched). */
+  stagePath(path: string, name: string, mime: string): Promise<StagedFile>
+  unstage(path: string): Promise<void>
+  /** Local path of a dropped/pasted/picked file (empty for in-memory data). */
+  pathForFile(file: File): string
   markRead(token: string, messageId: number): Promise<void>
   setBadge(count: number): void
   onEvent(cb: (event: TalkEvent) => void): () => void
   avatarUrl(token: string, version: string): string
+  /** Server preview of a shared file, fitting into width×height (CSS px ×2 for HiDPI). */
+  previewUrl(fileId: string, width: number, height: number): string
+  /** A local file of the outbox (pending attachment). */
+  localFileUrl(path: string): string
 }

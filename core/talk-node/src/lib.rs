@@ -25,6 +25,15 @@ fn json<T: serde::Serialize>(v: &T) -> Result<Value> {
     serde_json::to_value(v).map_err(|e| Error::from_reason(e.to_string()))
 }
 
+fn reply_preview(v: Option<Value>) -> Result<Option<core::ReplyPreview>> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => serde_json::from_value(v)
+            .map(Some)
+            .map_err(|e| Error::from_reason(format!("replyTo: {e}"))),
+    }
+}
+
 #[napi]
 pub fn core_version() -> String {
     core::VERSION.to_string()
@@ -216,6 +225,99 @@ impl TalkSession {
     #[napi]
     pub async fn logout(&self) -> Result<()> {
         self.engine.logout().await.map_err(to_napi)
+    }
+
+    // --- outbox: reliable sending ---------------------------------------------------
+
+    /// Queues a text message; delivered in the background (retried, survives restarts).
+    /// `replyTo` is a `ReplyPreview` (`{ id, author, text, isOwn, attachment }`).
+    #[napi(ts_return_type = "any")]
+    pub fn enqueue_text(
+        &self,
+        token: String,
+        text: String,
+        #[napi(ts_arg_type = "any")] reply_to: Option<Value>,
+        reference_id: String,
+    ) -> Result<Value> {
+        let reply = reply_preview(reply_to)?;
+        json(&self.engine.enqueue_text(&token, &text, reply, &reference_id))
+    }
+
+    /// Queues a file. `localPath` is moved into the outbox; don't use it afterwards.
+    #[allow(clippy::too_many_arguments)]
+    #[napi(ts_return_type = "any")]
+    pub fn enqueue_file(
+        &self,
+        token: String,
+        local_path: String,
+        name: String,
+        mime: String,
+        width: i64,
+        height: i64,
+        caption: String,
+        #[napi(ts_arg_type = "any")] reply_to: Option<Value>,
+        reference_id: String,
+    ) -> Result<Value> {
+        let reply = reply_preview(reply_to)?;
+        let p = self
+            .engine
+            .enqueue_file(
+                &token,
+                &local_path,
+                &name,
+                &mime,
+                width,
+                height,
+                &caption,
+                reply,
+                &reference_id,
+            )
+            .map_err(to_napi)?;
+        json(&p)
+    }
+
+    /// Pending and failed messages of a conversation, in send order.
+    #[napi(ts_return_type = "any[]")]
+    pub fn pending(&self, token: String) -> Result<Value> {
+        json(&self.engine.pending(&token))
+    }
+
+    #[napi]
+    pub fn retry_send(&self, reference_id: String) {
+        self.engine.retry_send(&reference_id);
+    }
+
+    #[napi]
+    pub fn discard(&self, reference_id: String) {
+        self.engine.discard(&reference_id);
+    }
+
+    /// Call when connectivity changes: waiting items are retried at once.
+    #[napi]
+    pub fn network_changed(&self) {
+        self.engine.network_changed();
+    }
+
+    #[napi]
+    pub fn outbox_unsent(&self) -> u32 {
+        self.engine.outbox_unsent()
+    }
+
+    /// Resolves once nothing is sending anymore (`{ waiting, failed }`).
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn wait_outbox_idle(&self) -> Result<Value> {
+        json(&self.engine.wait_outbox_idle().await)
+    }
+
+    /// Preview image (JPEG/PNG bytes) of a shared file, fitting into `width`×`height`.
+    #[napi]
+    pub async fn file_preview(&self, file_id: String, width: u32, height: u32) -> Result<Buffer> {
+        let data = self
+            .engine
+            .file_preview(&file_id, width, height)
+            .await
+            .map_err(to_napi)?;
+        Ok(data.into())
     }
 
     #[napi]

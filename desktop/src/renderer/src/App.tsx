@@ -1,8 +1,70 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { closeRoom, useStore } from './store'
 import { Login } from './components/Login'
 import { cycleRoom, Sidebar } from './components/Sidebar'
 import { Chat } from './components/Chat'
+
+/** Conversation list width like Signal Desktop: 320 px by default, at least 280 px. */
+const SIDEBAR_DEFAULT = 320
+const SIDEBAR_MIN = 280
+const WIDTH_KEY = 'sidebarWidth'
+
+function clampWidth(w: number): number {
+  return Math.round(Math.max(SIDEBAR_MIN, Math.min(w, Math.max(SIDEBAR_MIN, window.innerWidth * 0.5))))
+}
+
+function storedWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(WIDTH_KEY))
+    return v > 0 ? v : SIDEBAR_DEFAULT
+  } catch {
+    return SIDEBAR_DEFAULT
+  }
+}
+
+function useSidebarWidth() {
+  const [width, setWidth] = useState(storedWidth)
+  const current = useRef(width)
+  current.current = width
+  const drag = useRef<{ x: number; w: number } | null>(null)
+  const [, relayout] = useState(0)
+  useEffect(() => {
+    // The maximum depends on the window width.
+    const onResize = () => relayout((n) => n + 1)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const handle = {
+    onPointerDown(e: PointerEvent<HTMLDivElement>) {
+      e.currentTarget.setPointerCapture(e.pointerId)
+      drag.current = { x: e.clientX, w: clampWidth(width) }
+      document.body.classList.add('resizing')
+    },
+    onPointerMove(e: PointerEvent<HTMLDivElement>) {
+      if (!drag.current) return
+      current.current = clampWidth(drag.current.w + e.clientX - drag.current.x)
+      setWidth(current.current)
+    },
+    onPointerUp() {
+      drag.current = null
+      document.body.classList.remove('resizing')
+      try {
+        localStorage.setItem(WIDTH_KEY, String(current.current))
+      } catch {
+        // Not persisted; the default applies next time.
+      }
+    },
+    onDoubleClick() {
+      setWidth(SIDEBAR_DEFAULT)
+      try {
+        localStorage.removeItem(WIDTH_KEY)
+      } catch {
+        // ignore
+      }
+    },
+  }
+  return { width: clampWidth(width), handle }
+}
 
 export function App() {
   const session = useStore((s) => s.session)
@@ -10,6 +72,7 @@ export function App() {
   const room = useStore((s) => s.rooms.find((r) => r.token === s.activeToken) ?? null)
   const search = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
+  const { width, handle } = useSidebarWidth()
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -43,8 +106,16 @@ export function App() {
   if (session === 'loggedOut') return <Login />
 
   return (
-    <div className={`app${activeToken ? ' has-chat' : ''}`}>
+    <div className={`app${activeToken ? ' has-chat' : ''}`} style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
       <Sidebar ref={search} />
+      <div
+        className="sidebar-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Breite der Chatliste"
+        title="Ziehen zum Ändern der Breite, Doppelklick setzt zurück"
+        {...handle}
+      />
       {room ? (
         <Chat key={room.token} room={room} ref={composer} />
       ) : (
