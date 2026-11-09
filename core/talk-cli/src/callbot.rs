@@ -493,6 +493,8 @@ pub struct CallOpts {
     pub ring_wait: u64,
     /// Hang up if not connected after this many seconds.
     pub connect_timeout: u64,
+    /// With `answer`: do not poll for calls, wait for the core's own detection.
+    pub passive: bool,
 }
 
 fn own_sessions(peers: &[serde_json::Value], me: &str) -> Vec<String> {
@@ -526,13 +528,16 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Arc<BotMedia>,
             if Instant::now() > deadline {
                 bail!("kein eingehender Anruf");
             }
-            engine.check_incoming_calls().await;
+            // Passive: rely on notify_push / room list like the apps do.
+            if !o.passive {
+                engine.check_incoming_calls().await;
+            }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         tokio::time::sleep(Duration::from_millis(800)).await;
         engine.accept_call(&o.token).await?;
     } else {
-        engine.start_call(&o.token, o.silent).await?;
+        engine.start_call(&o.token, o.silent, None).await?;
     }
 
     // Wait for the call to connect (or end).

@@ -21,7 +21,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 anyhow = "1"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
-webrtc = { version = "0.14", optional = true }
+webrtc = { version = "0.17", optional = true }
 opus = { version = "0.3", optional = true }
 # Build libopus from source (no system dev package needed).
 audiopus_sys = { version = "0.2", features = ["static"], optional = true }

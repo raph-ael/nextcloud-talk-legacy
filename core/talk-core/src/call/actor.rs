@@ -87,7 +87,7 @@ pub(crate) struct Shared {
 pub(crate) struct Ctx {
     pub client: TalkClient,
     pub sink: Arc<dyn EventSink>,
-    pub media: Arc<dyn MediaEngine>,
+    pub media: Arc<std::sync::RwLock<Option<Arc<dyn MediaEngine>>>>,
     pub shared: Arc<Shared>,
     pub me: String,
 }
@@ -165,6 +165,7 @@ pub(crate) struct Actor {
     client: TalkClient,
     sink: Arc<dyn EventSink>,
     media: Arc<dyn MediaEngine>,
+    media_slot: Arc<std::sync::RwLock<Option<Arc<dyn MediaEngine>>>>,
     shared: Arc<Shared>,
     rx: mpsc::UnboundedReceiver<Cmd>,
     tx: mpsc::UnboundedSender<Cmd>,
@@ -262,10 +263,12 @@ impl Actor {
         tx: mpsc::UnboundedSender<Cmd>,
     ) -> Self {
         let now = Instant::now();
+        let media = ctx.media.read().unwrap().clone().unwrap_or_else(|| Arc::new(NoMedia));
         Self {
             client: ctx.client,
             sink: ctx.sink,
-            media: ctx.media,
+            media,
+            media_slot: ctx.media,
             shared: ctx.shared,
             rx,
             tx,
@@ -323,6 +326,11 @@ impl Actor {
     async fn run_inner(&mut self) -> Result<EndReason, EndReason> {
         if self.view.state == CallState::Incoming {
             self.ring().await?;
+        }
+        // Ringing may have started before the platform registered its media engine.
+        match self.media_slot.read().unwrap().clone() {
+            Some(m) => self.media = m,
+            None => return Err(failed("no-media-engine", "Anrufe sind in dieser App noch nicht eingerichtet")),
         }
         self.media.start_audio(self.view.id.clone());
         self.audio_started = true;
@@ -1115,6 +1123,7 @@ impl Actor {
             }
             "answer" => {
                 let Some(sdp) = payload["sdp"].as_str() else { return };
+                tracing::trace!(call = %self.view.id, "remote answer sdp: {}", sdp.replace("\r\n", " | "));
                 if own || self.mcu {
                     if let Some(p) = self.publisher.as_mut().filter(|p| p.sid == sid || sid.is_empty()) {
                         p.answered = true;
@@ -1573,6 +1582,14 @@ impl Actor {
 
     async fn teardown(&mut self, reason: EndReason) {
         tracing::info!(call = %self.view.id, ?reason, "call ended");
+        if reason == EndReason::Missed && self.view.direction == CallDirection::Incoming {
+            self.sink.emit(Event::CallMissed {
+                token: self.view.token.clone(),
+                room_name: self.view.room_name.clone(),
+                caller_name: self.view.caller_name.clone(),
+                is_group: self.view.is_group,
+            });
+        }
         self.view.state = CallState::Ended;
         self.view.end_reason = Some(reason);
         self.emit();
@@ -1617,6 +1634,22 @@ async fn dismiss_reason(client: &TalkClient, token: &str, me: &str) -> EndReason
         }
         _ => EndReason::Missed,
     }
+}
+
+/// Placeholder while ringing without a registered media engine (never receives commands:
+/// audio starts only after `accept`, when the real engine is required).
+struct NoMedia;
+
+impl MediaEngine for NoMedia {
+    fn create_peer(&self, _: String, _: PeerKind, _: Vec<IceServer>) {}
+    fn create_offer(&self, _: String, _: bool) {}
+    fn create_answer(&self, _: String) {}
+    fn set_remote_description(&self, _: String, _: SdpType, _: String) {}
+    fn add_remote_candidate(&self, _: String, _: super::IceCandidate) {}
+    fn close_peer(&self, _: String) {}
+    fn set_microphone_enabled(&self, _: bool) {}
+    fn start_audio(&self, _: String) {}
+    fn stop_audio(&self, _: String) {}
 }
 
 fn signaling_err(message: &str) -> Error {

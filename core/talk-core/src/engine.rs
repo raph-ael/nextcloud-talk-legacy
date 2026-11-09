@@ -98,6 +98,14 @@ pub enum Event {
     /// The call changed (state, participants, mute, speaking). `None`: no call any more
     /// (always preceded by one event with state `Ended`).
     CallChanged { call: Option<CallView> },
+    /// An incoming call was missed: not answered in time, or it came in while another
+    /// call was in progress. For a "missed call" notification.
+    CallMissed {
+        token: String,
+        room_name: String,
+        caller_name: String,
+        is_group: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -338,7 +346,8 @@ impl Engine {
 
     /// Calls the conversation (or joins its running call). `silent`: nobody is rung
     /// (automated tests in shared rooms). Fails if another call is in progress.
-    pub async fn start_call(&self, token: &str, silent: bool) -> Result<()> {
+    /// `call_id`: optional id for the new call (iOS: the CallKit UUID); generated if `None`.
+    pub async fn start_call(&self, token: &str, silent: bool, call_id: Option<String>) -> Result<()> {
         if self.calls.busy() {
             return Err(Error::Call {
                 code: "busy".into(),
@@ -348,7 +357,7 @@ impl Engine {
         let room = self.room_info(token).await?;
         let rt = self.runtime.get().cloned().unwrap_or_else(tokio::runtime::Handle::current);
         self.calls
-            .start(self.client.clone(), self.sink.clone(), self.user_id(), room, silent, &rt)
+            .start(self.client.clone(), self.sink.clone(), self.user_id(), room, silent, call_id, &rt)
     }
 
     /// Answers the ringing incoming call of `token`.
@@ -383,6 +392,12 @@ impl Engine {
         self.calls.hang_up();
     }
 
+    /// Hangs up and waits (at most `timeout`) until the server knows we left: call this
+    /// before quitting the app.
+    pub async fn hang_up_and_wait(&self, timeout: Duration) {
+        self.calls.hang_up_and_wait(timeout).await;
+    }
+
     pub fn set_call_muted(&self, muted: bool) {
         self.calls.set_muted(muted);
     }
@@ -393,7 +408,10 @@ impl Engine {
     }
 
     /// Stops all background work (unsent messages stay stored for the next start).
+    /// A running call is hung up (best effort: use [`Self::hang_up_and_wait`] first to make
+    /// sure the server knows).
     pub fn shutdown(&self) {
+        self.calls.hang_up();
         self.outbox.abort_all();
         let mut st = self.state.lock().unwrap();
         if let Some(t) = st.rooms_task.take() {

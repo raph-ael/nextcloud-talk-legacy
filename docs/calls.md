@@ -72,15 +72,31 @@ Anrufer sieht nach 60 s „Keine Antwort“.
 Stumm, Sprechen (gedrosselt auf höchstens ca. 4/s). `currentCall()` liefert den aktuellen
 Stand, z. B. nach einem Neustart der Activity bzw. des Fensters.
 
+`CallMissed { token, roomName, callerName, isGroup }` kommt, wenn ein eingehender Anruf
+verpasst wurde: nicht angenommen (Ende mit `missed`) oder während eines anderen Anrufs
+eingegangen (der klingelt dann nicht). Dafür eine Benachrichtigung „Verpasster Anruf“ zeigen.
+
+Klingeln funktioniert auch ohne `setMediaEngine`. Annehmen ohne MediaEngine endet mit
+`failed{no-media-engine}`. `createPeer` kommt nie vor `acceptCall` bzw. `startCall`, und
+`stopAudio` kommt bei jedem Ende nach `startAudio`, immer vor `CallChanged { None }`.
+
+**Logs:**
+- Android/iOS: `initLogging(sink, filter)` mit einer eigenen `LogSink`-Implementierung
+  (Android → `android.util.Log`, iOS → `os.Logger`).
+- Desktop: `initLogging(filter)` bzw. die Umgebungsvariable `TALK_LOG`. Die Logs gehen auf
+  stderr.
+- Filter wie `RUST_LOG`, z. B. `talk_core=info,talk_core::call=debug`.
+
 ## Methoden der Session
 
 | Methode | Wirkung |
 |---|---|
 | `setMediaEngine(engine)` | einmal nach dem Erzeugen der Session |
-| `startCall(token, silent)` | anrufen bzw. laufendem Anruf beitreten; `silent=true`: niemand wird angeklingelt (nur Tests) |
+| `startCall(token, silent, callId?)` | anrufen bzw. laufendem Anruf beitreten; `silent=true`: niemand wird angeklingelt (nur Tests) |
 | `acceptCall(token)` | eingehenden Anruf annehmen |
 | `declineCall(token)` | Klingeln hier beenden |
 | `hangUp()` | auflegen / Wählen abbrechen |
+| `hangUpAndWait(timeoutMs)` | auflegen und warten, bis der Server es weiß (vor dem Beenden der App; `shutdown` legt nur best effort auf) |
 | `setCallMuted(bool)` | stumm |
 | `currentCall()` | aktueller `CallView` oder nichts |
 | `userAvatar(userId, dark)` | Avatar für Gruppen-Kacheln |

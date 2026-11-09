@@ -10,7 +10,9 @@ use talk_core as core;
 uniffi::setup_scaffolding!();
 
 mod call;
+mod log;
 pub use call::*;
+pub use log::*;
 
 #[uniffi::export]
 pub fn core_version() -> String {
@@ -406,6 +408,8 @@ pub enum CoreEvent {
     OutboxChanged { token: String, items: Vec<PendingMessage> },
     /// The call changed; `None`: no call any more (preceded by one `Ended` state).
     CallChanged { call: Option<CallView> },
+    /// An incoming call was missed (not answered, or came in during another call).
+    CallMissed { token: String, room_name: String, caller_name: String, is_group: bool },
 }
 
 impl From<core::Event> for CoreEvent {
@@ -437,6 +441,17 @@ impl From<core::Event> for CoreEvent {
             },
             core::Event::CallChanged { call } => Self::CallChanged {
                 call: call.map(Into::into),
+            },
+            core::Event::CallMissed {
+                token,
+                room_name,
+                caller_name,
+                is_group,
+            } => Self::CallMissed {
+                token,
+                room_name,
+                caller_name,
+                is_group,
             },
         }
     }

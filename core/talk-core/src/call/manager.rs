@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use super::actor::{Actor, Cmd, Ctx, Shared};
 use super::{CallDirection, CallState, CallView, MediaEngine, MediaReport};
 use crate::client::TalkClient;
-use crate::engine::EventSink;
+use crate::engine::{Event, EventSink};
 use crate::error::{Error, Result};
 
 /// The same incoming call is not rung again within this time (it arrives from push,
@@ -26,7 +26,7 @@ pub(crate) struct RoomInfo {
 
 #[derive(Default)]
 pub(crate) struct CallManager {
-    media: RwLock<Option<Arc<dyn MediaEngine>>>,
+    media: Arc<RwLock<Option<Arc<dyn MediaEngine>>>>,
     shared: Arc<Shared>,
     /// token → when it last rang (or was declined) here.
     rung: Mutex<HashMap<String, Instant>>,
@@ -68,12 +68,10 @@ impl CallManager {
         silent: bool,
         runtime: &tokio::runtime::Handle,
     ) -> Result<()> {
-        let media = self
-            .media
-            .read()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| call_error("no-media-engine", "setMediaEngine was not called"))?;
+        // Ringing works without a media engine (it is only needed once audio starts).
+        if view.state != CallState::Incoming && self.media.read().unwrap().is_none() {
+            return Err(call_error("no-media-engine", "setMediaEngine was not called"));
+        }
         let (tx, rx) = mpsc::unbounded_channel();
         {
             let mut slot = self.shared.tx.lock().unwrap();
@@ -86,7 +84,7 @@ impl CallManager {
         let ctx = Ctx {
             client,
             sink,
-            media,
+            media: self.media.clone(),
             shared: self.shared.clone(),
             me,
         };
@@ -102,10 +100,11 @@ impl CallManager {
         me: String,
         room: RoomInfo,
         silent: bool,
+        call_id: Option<String>,
         runtime: &tokio::runtime::Handle,
     ) -> Result<()> {
         let view = CallView {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: call_id.filter(|c| !c.is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             token: room.token,
             room_name: room.name,
             is_group: room.is_group,
@@ -138,10 +137,19 @@ impl CallManager {
             if rung.contains_key(&room.token) {
                 return false;
             }
+            rung.insert(room.token.clone(), Instant::now());
             if self.busy() {
+                // In a call already: no second ring, but tell the user (like Signal's
+                // "missed call" while busy).
+                tracing::info!(token = %room.token, "incoming call while busy: missed");
+                sink.emit(Event::CallMissed {
+                    token: room.token,
+                    room_name: room.name,
+                    caller_name,
+                    is_group: room.is_group,
+                });
                 return false;
             }
-            rung.insert(room.token.clone(), Instant::now());
         }
         let view = CallView {
             id: uuid::Uuid::new_v4().to_string(),
@@ -177,6 +185,17 @@ impl CallManager {
 
     pub(crate) fn hang_up(&self) {
         self.send(Cmd::HangUp);
+    }
+
+    /// Hangs up and waits until the server knows we left (or `timeout` passed).
+    pub(crate) async fn hang_up_and_wait(&self, timeout: Duration) {
+        if !self.send(Cmd::HangUp) {
+            return;
+        }
+        let deadline = Instant::now() + timeout;
+        while self.busy() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {

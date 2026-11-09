@@ -130,6 +130,9 @@ enum Cmd {
         /// With --answer: how long to wait for the call
         #[arg(long, default_value_t = 120)]
         ring_wait: u64,
+        /// With --answer: no polling, only the core's own detection (notify_push, room list)
+        #[arg(long)]
+        passive: bool,
         /// Hang up when not connected after this many seconds
         #[arg(long, default_value_t = 90)]
         connect_timeout: u64,
@@ -305,7 +308,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "call-bot")]
 async fn call_cmd(cli: &Cli) -> Result<()> {
-    let Cmd::Call { token, answer, silent, seconds, expect_audio, mute_after, tone, ring_wait, connect_timeout, json } = &cli.cmd else {
+    let Cmd::Call { token, answer, silent, seconds, expect_audio, mute_after, tone, ring_wait, connect_timeout, passive, json } = &cli.cmd else {
         unreachable!()
     };
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -330,6 +333,7 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
         mute_after: *mute_after,
         ring_wait: *ring_wait,
         connect_timeout: *connect_timeout,
+        passive: *passive,
     };
     let r = callbot::run(engine.clone(), sink, media, opts).await;
     engine.shutdown();

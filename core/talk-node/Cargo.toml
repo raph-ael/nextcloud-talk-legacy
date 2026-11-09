@@ -9,6 +9,7 @@ license.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
 talk-core.workspace = true
 napi = { version = "3", features = ["async", "serde-json"] }
 napi-derive = "3"

@@ -101,6 +101,22 @@ impl LoginFlow {
     }
 }
 
+// --- logging ---------------------------------------------------------------------
+
+/// Core logs to stderr. `filter` like `RUST_LOG` (e.g. "talk_core=debug"); without one
+/// `TALK_LOG` is used, else "talk_core=info". Safe to call more than once.
+#[napi]
+pub fn init_logging(filter: Option<String>) {
+    let filter = filter
+        .or_else(|| std::env::var("TALK_LOG").ok())
+        .unwrap_or_else(|| "talk_core=info".into());
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .try_init();
+}
+
 // --- Session ---------------------------------------------------------------------
 
 type EventCallback = ThreadsafeFunction<Value, Unknown<'static>, Value, Status, false>;
@@ -186,6 +202,9 @@ impl TalkSession {
             user,
             app_password,
         };
+        if std::env::var("TALK_LOG").is_ok() {
+            init_logging(None);
+        }
         let client = core::TalkClient::new(account, core::Platform::Desktop).map_err(to_napi)?;
         let engine = core::Engine::new(client, Arc::new(JsSink(on_event)), data_dir.map(Into::into));
         Ok(Self { engine })
@@ -353,8 +372,17 @@ impl TalkSession {
 
     /// Calls the conversation or joins its running call. `silent`: nobody is rung.
     #[napi]
-    pub async fn start_call(&self, token: String, silent: bool) -> Result<()> {
-        self.engine.start_call(&token, silent).await.map_err(to_napi)
+    pub async fn start_call(&self, token: String, silent: bool, call_id: Option<String>) -> Result<()> {
+        self.engine.start_call(&token, silent, call_id).await.map_err(to_napi)
+    }
+
+    /// Hangs up and waits (at most `timeoutMs`) until the server knows we left: await it
+    /// before quitting.
+    #[napi]
+    pub async fn hang_up_and_wait(&self, timeout_ms: u32) {
+        self.engine
+            .hang_up_and_wait(std::time::Duration::from_millis(timeout_ms.into()))
+            .await;
     }
 
     #[napi]

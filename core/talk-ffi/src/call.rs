@@ -272,8 +272,9 @@ impl TalkSession {
 
     /// Calls the conversation or joins its running call. `silent`: nobody is rung
     /// (automated tests). Fails if another call is in progress.
-    pub async fn start_call(&self, token: String, silent: bool) -> Result<(), CoreError> {
-        Ok(self.engine.start_call(&token, silent).await?)
+    /// `call_id`: optional id for the call (iOS: the CallKit UUID), generated otherwise.
+    pub async fn start_call(&self, token: String, silent: bool, call_id: Option<String>) -> Result<(), CoreError> {
+        Ok(self.engine.start_call(&token, silent, call_id).await?)
     }
 
     pub async fn accept_call(&self, token: String) -> Result<(), CoreError> {
@@ -292,6 +293,14 @@ impl TalkSession {
 
     pub fn hang_up(&self) {
         self.engine.hang_up();
+    }
+
+    /// Hangs up and waits (at most `timeout_ms`) until the server knows we left.
+    /// Call before the app quits; `shutdown` alone hangs up only best effort.
+    pub async fn hang_up_and_wait(&self, timeout_ms: u32) {
+        self.engine
+            .hang_up_and_wait(std::time::Duration::from_millis(timeout_ms.into()))
+            .await;
     }
 
     pub fn set_call_muted(&self, muted: bool) {
