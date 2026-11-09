@@ -31,3 +31,4 @@ DerivedData/
 /core/bindings/
 /ios/Generated/
 /ios/*.xcodeproj/
+/ios/TalkApp/Info.plist

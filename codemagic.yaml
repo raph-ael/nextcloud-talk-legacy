@@ -45,12 +45,13 @@ workflows:
 
       - name: Build Rust core (xcframework + Swift bindings)
         script: |
-          ios/scripts/build-core.sh
+          SLICES=device ios/scripts/build-core.sh
 
       - name: Generate Xcode project
         script: |
           command -v xcodegen >/dev/null || brew install xcodegen
-          cd ios && xcodegen generate
+          # Signing settings come from use-profiles below; an empty team keeps the spec valid.
+          cd ios && DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" xcodegen generate
 
       - name: Set up code signing
         script: |

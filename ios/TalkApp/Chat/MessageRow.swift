@@ -192,7 +192,7 @@ private struct Bubble: View {
             if !own { Spacer(minLength: 48) }
         }
         .padding(.top, first ? 8 : 2)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -318,6 +318,8 @@ struct ChatImage: View {
                 : await media.preview(a.id)
         }
         .accessibilityLabel("Foto")
+        .accessibilityIdentifier("chat-photo")
+        .accessibilityAddTraits(.isButton)
     }
 }
 

@@ -244,8 +244,13 @@ async function signOut(revoke: boolean): Promise<void> {
  * `<PREFIX>_USER`/`<PREFIX>_PASS` and `NC_URL` from that file, without storing anything.
  */
 function devAccount(): { server: string; user: string; password: string } | null {
+  if (app.isPackaged) return null
+  // Unpackaged runs only: TALK_DEV_SERVER/USER/PASS directly (like the iOS debug build) …
+  const { TALK_DEV_SERVER: server, TALK_DEV_USER: devUser, TALK_DEV_PASS: devPass } = process.env
+  if (server && devUser && devPass) return { server, user: devUser, password: devPass }
+  // … or a .env file with a prefix.
   const file = process.env.TALK_DEV_ENV
-  if (app.isPackaged || !file) return null
+  if (!file) return null
   const prefix = process.env.TALK_DEV_PREFIX ?? 'NC'
   const env = Object.fromEntries(
     readFileSync(file, 'utf8')
@@ -517,7 +522,9 @@ function registerIpc(): void {
   })
   ipcMain.handle('talk:voiceStart', async (_e, token: string, sampleRate: number) => {
     finishRecording()
-    if (process.platform === 'darwin' && !(await systemPreferences.askForMediaAccess('microphone'))) {
+    // Unpackaged test runs with Chromium's fake microphone need no macOS permission.
+    const fakeMic = !app.isPackaged && app.commandLine.hasSwitch('use-fake-device-for-media-stream')
+    if (process.platform === 'darwin' && !fakeMic && !(await systemPreferences.askForMediaAccess('microphone'))) {
       throw new Error('Kein Zugriff auf das Mikrofon')
     }
     recording = { token, rec: requireSession().startVoice(token, sampleRate) }

@@ -52,6 +52,8 @@ struct AttachPanel: View {
                 LazyHStack(spacing: 6) {
                     ForEach(assets, id: \.localIdentifier) { asset in
                         Thumbnail(asset: asset)
+                            .accessibilityIdentifier("recent-photo")
+                            .accessibilityAddTraits(.isButton)
                             .onTapGesture { Task { await prepare { await Self.data(of: asset) } } }
                     }
                     if status == .limited {

@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "electron-vite preview",
     "dist:linux": "npm run core:release && electron-vite build && electron-builder --linux",
-    "dist:mac": "PROFILE=release UNIVERSAL=1 scripts/build-core.sh && electron-vite build && electron-builder --mac --universal"
+    "dist:mac": "scripts/mac-icon.sh && PROFILE=release UNIVERSAL=1 scripts/build-core.sh && electron-vite build && electron-builder --mac --universal"
   },
   "build": {
     "appId": "org.sirplus.talk",

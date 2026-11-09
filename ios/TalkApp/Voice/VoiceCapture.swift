@@ -185,7 +185,12 @@ private final class FakeMic: @unchecked Sendable {
         self.sampleRate = file.processingFormat.sampleRate
     }
 
+    /// Wall-clock based: late timer ticks catch up, so the file is as long as the recording.
+    private var started: UInt64 = 0
+    private var delivered: Int64 = 0
+
     func start() {
+        started = DispatchTime.now().uptimeNanoseconds
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: .milliseconds(100))
         t.setEventHandler { [weak self] in self?.tick() }
@@ -199,19 +204,23 @@ private final class FakeMic: @unchecked Sendable {
     }
 
     private func tick() {
-        let frames = AVAudioFrameCount(sampleRate / 10)
-        let outFrames = AVAudioFrameCount(outFormat.sampleRate / 10) + 64
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+        let due = Int64(elapsed * sampleRate) - delivered
+        guard due > 0 else { return }
+        let frames = AVAudioFrameCount(min(due, Int64(sampleRate)))
+        let outFrames = AVAudioFrameCount(Double(frames) * outFormat.sampleRate / sampleRate) + 64
         guard let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames),
               let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: outFrames) else { return }
         do {
             try file.read(into: input, frameCount: frames)
-            if input.frameLength < frames {
-                file.framePosition = 0
-            }
+            // End of file: loop; what is missing follows on the next tick.
+            if input.frameLength < frames { file.framePosition = 0 }
         } catch {
             file.framePosition = 0
             return
         }
+        guard input.frameLength > 0 else { return }
+        delivered += Int64(input.frameLength)
         var fed = false
         var error: NSError?
         converter.convert(to: out, error: &error) { _, status in

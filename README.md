@@ -4,8 +4,9 @@ Schnelle, Signal-artige Clients für [Nextcloud Talk](https://nextcloud.com/talk
 Android, iOS, Windows, macOS und Linux. Offline-first, einfache Bedienung,
 Chat und Anrufe über das Talk High-Performance-Backend.
 
-> **Status:** frühe Entwicklung. Der Desktop-Client chattet bereits (Gesprächsliste,
-> Live-Chat, Antworten, Lesebestätigungen, Benachrichtigungen); Android und iOS folgen.
+> **Status:** frühe Entwicklung. Desktop (Linux, macOS, Windows), Android und iOS chatten:
+> Gesprächsliste, Live-Chat, Antworten, Lesebestätigungen, Offline-Cache, zuverlässiger
+> Versand über eine Outbox, Fotos und Sprachnachrichten. Anrufe und Push folgen.
 
 **Ziel-MVP:** Login, Gesprächsliste, Text-Chats (1:1 und Gruppe), Audio-/Videoanrufe,
 eingehende Anrufe klingeln auch bei geschlossener App.
@@ -22,7 +23,7 @@ core/            Rust-Workspace
   talk-node/       napi-rs → Electron (Desktop)
   talk-cli/        Test-CLI gegen einen echten Server
 android/         Kotlin + Jetpack Compose
-ios/             Swift (UIKit/SwiftUI), CallKit, PushKit – gebaut über Codemagic
+ios/             Swift (SwiftUI + UIKit) – lokal auf einem Mac oder über Codemagic
 desktop/         Electron + React + TypeScript
 push-proxy/      Push-Proxy (FCM/APNs) für das Nextcloud-Push-v2-Protokoll
 design/          Design-Tokens → Kotlin/Swift/CSS
@@ -73,7 +74,10 @@ npm run dev                  # App mit Hot-Reload
 # Entwicklung ohne Login, mit Test-Account aus ../.env:
 TALK_DEV_ENV=../.env TALK_DEV_PREFIX=BOT_A npm run dev
 npm run dist:linux           # AppImage + .deb
+npm run dist:mac             # auf macOS: Universal-dmg/zip (x64 + arm64), ad-hoc signiert
 ```
+
+Das macOS-Paket ist nicht notarisiert: beim ersten Start per Rechtsklick → Öffnen.
 
 Unter Ubuntu ≥ 24.04 verweigert Electron im Dev-Modus ggf. den Start
 (SUID-Sandbox/AppArmor): dann `npm run dev -- -- --no-sandbox`.
@@ -91,6 +95,25 @@ vorerst mit Debug-Schlüssel signiert). Debug-Builds laufen interpretiert und ru
 deutlich (gemessen: ~20 % verpasste Frames statt < 1 %).
 
 Benötigt `cargo install cargo-ndk` und `rustup target add aarch64-linux-android x86_64-linux-android`.
+
+### iOS
+
+Auf einem Mac mit Xcode ≥ 16, Rust (rustup) und [XcodeGen](https://github.com/yonaskolb/XcodeGen):
+
+```sh
+cd ios
+PROFILE=dev scripts/build-core.sh       # Rust-Kern → Generated/ (Gerät + Simulator, auch Intel)
+DEVELOPMENT_TEAM=XXXXXXXXXX xcodegen generate
+open TalkLegacy.xcodeproj               # oder:
+xcodebuild -scheme TalkLegacy -destination "platform=iOS Simulator,name=iPhone 17" build
+```
+
+Debug-Builds kennen zwei Umgebungsvariablen für Tests: `TALK_DEV_SERVER`/`TALK_DEV_USER`/
+`TALK_DEV_PASS` melden ohne Browser an, `TALK_FAKE_MIC=<Audiodatei>` ersetzt das Mikrofon.
+Die UI-Tests in `ios/UITests` nutzen sie (an `xcodebuild test` als `TEST_RUNNER_<Name>`).
+Wer unter Linux entwickelt und auf einem Mac baut: `MAC_HOST=user@mac scripts/mac-sync.sh '<Befehl>'`.
+
+TestFlight-Builds entstehen über Codemagic (`codemagic.yaml`, Tag `ios-v*`).
 
 ## Server-Eigenheiten, die man kennen sollte
 

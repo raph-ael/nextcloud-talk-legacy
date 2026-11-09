@@ -49,6 +49,7 @@ struct RoomListView: View {
                 }
             }
             .listStyle(.plain)
+            .listSectionSpacing(.compact)
             .scrollContentBackground(.hidden)
             .background(Talk.background)
         }

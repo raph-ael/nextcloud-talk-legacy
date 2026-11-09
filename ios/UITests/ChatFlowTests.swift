@@ -130,4 +130,58 @@ final class ChatFlowTests: XCTestCase {
         sleep(5)
         shot("long-sent")
     }
+
+    /// Attachment panel → newest photo → caption → send; then the viewer opens it.
+    func testSendPhoto() {
+        openTestRoom()
+        app.buttons["attach"].firstMatch.tap()
+        let allow = app.buttons["Zugriff auf Fotos erlauben"]
+        if allow.waitForExistence(timeout: 3) {
+            allow.tap()
+            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            let full = springboard.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Vollen Zugriff' OR label CONTAINS[c] 'Full Access'")).firstMatch
+            if full.waitForExistence(timeout: 5) { full.tap() }
+        }
+        let photo = app.descendants(matching: .any).matching(identifier: "recent-photo").firstMatch
+        let found = photo.waitForExistence(timeout: 10)
+        shot("attach-panel")
+        XCTAssertTrue(found, "no recent photos")
+        photo.tap()
+        let caption = app.descendants(matching: .any)["caption"].firstMatch
+        XCTAssertTrue(caption.waitForExistence(timeout: 15))
+        caption.tap()
+        let text = "iOS-Foto \(Int(Date().timeIntervalSince1970))"
+        caption.typeText(text)
+        shot("media-send")
+        app.buttons["send-media"].tap()
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 30))
+        sleep(4)
+        shot("photo-sent")
+        let image = app.descendants(matching: .any).matching(identifier: "chat-photo").firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 10))
+        image.tap()
+        sleep(3)
+        shot("viewer")
+    }
+
+    /// Swipe right on a text bubble shows the reply bar; sending quotes it.
+    func testSwipeToReply() {
+        openTestRoom()
+        let text = "iOS-Antwortziel \(Int(Date().timeIntervalSince1970))"
+        app.descendants(matching: .any)["composer"].firstMatch.tap()
+        app.descendants(matching: .any)["composer"].firstMatch.typeText(text)
+        app.buttons["send"].tap()
+        let bubble = app.staticTexts[text].firstMatch
+        XCTAssertTrue(bubble.waitForExistence(timeout: 20))
+        sleep(2)
+        let start = bubble.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 140, dy: 0)))
+        XCTAssertTrue(app.buttons["Antwort abbrechen"].waitForExistence(timeout: 5), "reply bar missing")
+        shot("reply-bar")
+        app.descendants(matching: .any)["composer"].firstMatch.tap()
+        app.descendants(matching: .any)["composer"].firstMatch.typeText("Antwort aus iOS")
+        app.buttons["send"].tap()
+        sleep(4)
+        shot("reply-sent")
+    }
 }

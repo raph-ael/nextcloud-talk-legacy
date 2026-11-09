@@ -15,8 +15,8 @@ rsync -az --delete \
   --exclude '.git/' --exclude '.env' --exclude '.env.*' --exclude '*.p8' \
   --exclude '/core/target/' --exclude '/push-proxy/target/' \
   --exclude 'node_modules/' --exclude '/desktop/out/' --exclude '/desktop/dist/' \
-  --exclude '/desktop/native/' --exclude '/ios/Generated/' --exclude '/ios/*.xcodeproj/' \
-  --exclude '/ios/build/' --exclude '/android/' \
+  --exclude '/desktop/native/' --exclude '/desktop/resources/icon.icns' --exclude '/ios/Generated/' --exclude '/ios/*.xcodeproj/' \
+  --exclude '/ios/build/' --exclude '/ios/TalkApp/Info.plist' --exclude '/android/' \
   "$ROOT/" "$MAC_HOST:$MAC_DIR/"
 
 if [[ $# -gt 0 ]]; then
