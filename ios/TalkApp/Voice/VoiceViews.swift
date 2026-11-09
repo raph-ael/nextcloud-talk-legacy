@@ -1,8 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Bars drawn for a voice message (Signal draws a similar count).
-private let barCount = 36
+// Voice message bubble. Layout follows Signal iOS (40 pt button, 32 pt waveform of 2 pt bars
+// with ≥ 2 pt spacing and a position line, footer with duration, speed and message time).
+// Own code; only the proportions are Signal's.
+private let voiceWidth: CGFloat = 212
+private let barWidth: CGFloat = 2
+private let barMinGap: CGFloat = 1.5
+private let barMaxHeight: CGFloat = 24
+private let thumbHeight: CGFloat = 28
 
 /// `n` bars 0…1 from the core's 100 levels (mean per bar).
 private func bars(_ levels: Data?, _ n: Int) -> [CGFloat] {
@@ -16,32 +22,53 @@ private func bars(_ levels: Data?, _ n: Int) -> [CGFloat] {
     }
 }
 
-/// Bars with the played part highlighted; tap or drag to seek.
+/// Colors of one voice message, derived from its bubble.
+struct VoicePalette {
+    let circle: Color
+    let icon: Color
+    let played: Color
+    let unplayed: Color
+    let chip: Color
+
+    static func make(own: Bool, text: Color, active: Bool, dark: Bool) -> VoicePalette {
+        own
+            ? VoicePalette(circle: .white.opacity(0.16), icon: .white, played: .white,
+                           unplayed: .white.opacity(active ? 0.4 : 0.2), chip: .white.opacity(0.2))
+            : VoicePalette(circle: dark ? .white.opacity(0.12) : .white, icon: text, played: text,
+                           unplayed: text.opacity(dark ? 0.3 : 0.22), chip: text.opacity(0.08))
+    }
+}
+
+/// Bars with the played part highlighted and a position line; tap or drag to seek.
 struct Waveform: View {
     let levels: Data?
     let progress: Double
-    let color: Color
+    let played: Color
+    let unplayed: Color
     let onSeek: (Double) -> Void
 
     var body: some View {
-        let values = bars(levels, barCount)
         GeometryReader { geo in
-            let gap: CGFloat = 2
-            let w = max(1, (geo.size.width - gap * CGFloat(barCount - 1)) / CGFloat(barCount))
             Canvas { ctx, size in
-                for (i, v) in values.enumerated() {
-                    let h = 4 + v * (size.height - 4)
-                    let rect = CGRect(x: CGFloat(i) * (w + gap), y: (size.height - h) / 2, width: w, height: h)
-                    let played = (Double(i) + 0.5) / Double(barCount) <= progress
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: w / 2), with: .color(played ? color : color.opacity(0.35)))
+                let n = max(2, Int((size.width + barMinGap) / (barWidth + barMinGap)))
+                let step = (size.width - barWidth) / CGFloat(n - 1)
+                let mid = size.height / 2
+                let thumbX = barWidth / 2 + CGFloat(min(1, max(0, progress))) * (size.width - barWidth)
+                for (i, v) in bars(levels, n).enumerated() {
+                    let x = barWidth / 2 + CGFloat(i) * step
+                    let h = barWidth + v * (barMaxHeight - barWidth)
+                    let rect = CGRect(x: x - barWidth / 2, y: mid - h / 2, width: barWidth, height: h)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: barWidth / 2), with: .color(x <= thumbX ? played : unplayed))
                 }
+                let thumb = CGRect(x: thumbX - barWidth / 2, y: mid - thumbHeight / 2, width: barWidth, height: thumbHeight)
+                ctx.fill(Path(roundedRect: thumb, cornerRadius: barWidth / 2), with: .color(played))
             }
             .contentShape(Rectangle())
             // A tap fails as soon as the finger moves, so a scroll starting here stays a scroll.
             .onTapGesture(coordinateSpace: .local) { p in onSeek(Double(p.x / max(1, geo.size.width))) }
             .modifier(HorizontalScrub { x in onSeek(Double(x / max(1, geo.size.width))) })
         }
-        .frame(height: 28)
+        .frame(height: 32)
         .accessibilityHidden(true)
     }
 }
@@ -89,12 +116,15 @@ private struct ScrubRecognizer: UIGestureRecognizerRepresentable {
     }
 }
 
+/// Round play/pause button. A ring on the circle's edge shows upload progress or loading;
+/// `download` marks a file that is not fetched yet.
 struct PlayButton: View {
     let playing: Bool
     let loading: Bool
     let background: Color
     let tint: Color
     let upload: Float?
+    var download = false
     let action: () -> Void
 
     var body: some View {
@@ -102,18 +132,18 @@ struct PlayButton: View {
             ZStack {
                 Circle().fill(background)
                 if let upload {
-                    Circle().stroke(tint.opacity(0.2), lineWidth: 2.5).frame(width: 34, height: 34)
                     Circle().trim(from: 0, to: CGFloat(max(0.03, upload)))
-                        .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .frame(width: 34, height: 34)
+                        .padding(1)
                 } else if loading {
-                    ProgressView().tint(tint)
+                    LoadingRing(color: tint).padding(1)
                 }
-                Image(systemName: playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 17))
+                Image(systemName: playing ? "pause.fill" : download ? "arrow.down" : "play.fill")
+                    .font(.system(size: 17, weight: download && !playing ? .semibold : .regular))
                     .foregroundStyle(tint)
-                    .opacity(loading && upload == nil ? 0 : 1)
+                    // play.fill sits left-heavy in its box; Signal centres the triangle optically.
+                    .offset(x: playing || download ? 0 : 1.5)
             }
             .frame(width: 40, height: 40)
         }
@@ -122,34 +152,53 @@ struct PlayButton: View {
     }
 }
 
+/// Indeterminate ring on the button's edge while a file loads.
+private struct LoadingRing: View {
+    let color: Color
+    @State private var turn = false
+
+    var body: some View {
+        Circle().trim(from: 0, to: 0.3)
+            .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(turn ? 360 : 0))
+            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: turn)
+            .onAppear { turn = true }
+    }
+}
+
 /// Speed chip: 1× → 1,5× → 2× → 0,5×.
 struct SpeedChip: View {
     let speed: Float
     let color: Color
+    let background: Color
     let action: () -> Void
 
     var body: some View {
         let label = (speed == speed.rounded() ? "\(Int(speed))" : "\(speed)".replacingOccurrences(of: ".", with: ",")) + "×"
         Button(action: action) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 12.5, weight: .bold))
                 .foregroundStyle(color)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 9))
+                .padding(.horizontal, 4)
+                .frame(minWidth: 30, minHeight: 20)
+                .background(background, in: RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Tempo \(label)")
     }
 }
 
-/// A voice message (or any audio file) inside a bubble.
+/// A voice message (or any audio file) inside a bubble: button + waveform, then a footer with
+/// duration (remaining while playing), speed chip and `meta` (time, ticks) at the end.
 struct VoiceBubble: View {
     let m: UiMessage
     let textColor: Color
+    let metaColor: Color
     let own: Bool
+    var meta: MessageMeta?
 
     @State private var info: AudioInfo?
+    @Environment(\.colorScheme) private var scheme
     private var voice: VoiceManager { SessionStore.shared.voice }
 
     var body: some View {
@@ -164,36 +213,47 @@ struct VoiceBubble: View {
         let progress = duration > 0 ? min(1, max(0, Double(position) / Double(duration))) : 0
         let uploading = m.status == .sending && (0..<0.999).contains(m.progress)
         let auto = m.status != nil || a.size <= VoiceManager.autoFetchBytes || current
+        let p = VoicePalette.make(own: own, text: textColor, active: active, dark: scheme == .dark)
 
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
+            if !a.voiceMessage {
+                Text(a.name).font(.system(size: 12)).foregroundStyle(textColor).lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.bottom, 4)
+            }
+            HStack(spacing: 0) {
                 PlayButton(
                     playing: current && player.playing, loading: current && player.loading,
-                    background: own ? .white : Talk.surface,
-                    tint: own ? Talk.bubbleOwn : textColor,
-                    upload: uploading ? m.progress : nil
+                    background: p.circle, tint: p.icon,
+                    upload: uploading ? m.progress : nil,
+                    download: shownInfo == nil && !auto
                 ) { voice.toggle(m) }
-                VStack(alignment: .leading, spacing: 0) {
-                    Waveform(levels: shownInfo?.waveform, progress: progress, color: textColor) { voice.seek(m, fraction: $0) }
-                    HStack(spacing: 6) {
-                        Text(Format.clock(active ? duration - position : duration))
-                            .font(.system(size: 12).monospacedDigit())
-                            .foregroundStyle(textColor.opacity(0.8))
-                        if active {
-                            SpeedChip(speed: player.speed, color: textColor) { player.cycleSpeed() }
-                        }
-                        if current, let error = player.error {
-                            Text(error).font(.system(size: 12)).foregroundStyle(textColor.opacity(0.8)).lineLimit(1)
-                        }
-                    }
-                    .frame(minHeight: 18)
+                Waveform(levels: shownInfo?.waveform, progress: progress, played: p.played, unplayed: p.unplayed) {
+                    voice.seek(m, fraction: $0)
                 }
+                .padding(.leading, 12)
+                .padding(.trailing, 8)
             }
-            if !a.voiceMessage {
-                Text(a.name).font(.system(size: 12)).foregroundStyle(textColor.opacity(0.8)).lineLimit(1)
+            HStack(spacing: 0) {
+                Text(Format.clock(active ? duration - position : duration))
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(metaColor)
+                if active {
+                    SpeedChip(speed: player.speed, color: p.played, background: p.chip) { player.cycleSpeed() }
+                        .padding(.leading, 16)
+                }
+                if current, let error = player.error {
+                    Text(error).font(.system(size: 12)).foregroundStyle(metaColor).lineLimit(1)
+                        .padding(.leading, 8)
+                }
+                Spacer(minLength: 8)
+                if let meta { meta }
             }
+            .frame(minHeight: 20)
+            .padding(.leading, 4)
+            .padding(.top, 4)
         }
-        .frame(width: 240)
+        .frame(width: voiceWidth)
         .task(id: "\(key)|\(auto)") {
             guard shownInfo == nil, auto else { return }
             info = await voice.loadInfo(m)
@@ -384,7 +444,8 @@ struct VoiceDraftBar: View {
         VoiceBarFrame(onDelete: onDelete, deleteLabel: "Entwurf löschen", onSend: onSend, leading: 2) {
             PlayButton(playing: current && player.playing, loading: current && player.loading,
                        background: Talk.surface, tint: Talk.onSurface, upload: nil) { voice.toggleDraft(draft) }
-            Waveform(levels: draft.waveform, progress: progress, color: Talk.onSurface) { voice.seekDraft(draft, fraction: $0) }
+            Waveform(levels: draft.waveform, progress: progress, played: Talk.onSurface,
+                     unplayed: Talk.onSurface.opacity(0.3)) { voice.seekDraft(draft, fraction: $0) }
                 .padding(.horizontal, 10)
             Text(Format.clock(current && position > 0 ? duration - position : duration))
                 .font(.system(size: 13).monospacedDigit())

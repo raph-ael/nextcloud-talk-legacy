@@ -82,6 +82,12 @@ private struct Bubble: View {
         let inset: CGFloat = image ? 9 : 0
         let metaOnImage = image && msg.text.isEmpty && msg.reactions.isEmpty
         let showMeta = last || m.status != nil
+        let audio = !image && attachment?.isAudio == true
+        // Signal: an audio bubble carries its time in the player's footer row …
+        let metaInVoice = audio && msg.text.isEmpty && msg.reactions.isEmpty
+        // … and has more room above the player when nothing (name, quote) precedes it.
+        let audioOnTop = audio && !(isGroup && !own && first) && msg.replyTo == nil
+        let metaColor = jumbo ? Talk.muted : textColor.opacity(0.75)
 
         HStack(alignment: .bottom, spacing: 0) {
             if own { Spacer(minLength: 48) }
@@ -137,9 +143,12 @@ private struct Bubble: View {
                                     .padding(6)
                             }
                         }
-                } else if let a = attachment, a.isAudio {
-                    VoiceBubble(m: m, textColor: textColor, own: own)
-                        .padding(.bottom, msg.text.isEmpty ? 0 : 4)
+                } else if audio {
+                    VoiceBubble(
+                        m: m, textColor: textColor, metaColor: metaColor, own: own,
+                        meta: metaInVoice && showMeta ? MessageMeta(m: m, own: own, read: read, color: metaColor) : nil
+                    )
+                    .padding(.bottom, msg.text.isEmpty ? 0 : 4)
                 } else if let a = attachment {
                     FileRow(attachment: a, textColor: textColor)
                         .padding(.bottom, msg.text.isEmpty ? 0 : 4)
@@ -172,8 +181,8 @@ private struct Bubble: View {
                     .padding(.horizontal, inset)
                     .padding(.top, 4)
                 }
-                if showMeta && !metaOnImage {
-                    MessageMeta(m: m, own: own, read: read, color: jumbo ? Talk.muted : textColor.opacity(0.75))
+                if showMeta && !metaOnImage && !metaInVoice {
+                    MessageMeta(m: m, own: own, read: read, color: metaColor)
                         .padding(.horizontal, inset)
                         .padding(.top, 2)
                         .padding(.bottom, image ? 4 : 0)
@@ -181,7 +190,8 @@ private struct Bubble: View {
                 }
             }
             .padding(.horizontal, jumbo ? 0 : image ? 3 : 12)
-            .padding(.vertical, image ? 3 : 7)
+            .padding(.top, image ? 3 : audioOnTop ? 12 : 7)
+            .padding(.bottom, image ? 3 : 7)
             .background(jumbo ? Color.clear : own ? Talk.bubbleOwn : Talk.bubbleOther, in: shape)
             .opacity(m.status == .failed ? 0.6 : 1)
             .scaleEffect(highlighted ? 0.97 : 1)
@@ -262,7 +272,7 @@ struct MessageMeta: View {
             }
             if own && m.status == nil { Text(read ? "✓✓" : "✓") }
         }
-        .font(.system(size: 11))
+        .font(.system(size: 12))
         .foregroundStyle(color)
         .lineLimit(1)
     }
