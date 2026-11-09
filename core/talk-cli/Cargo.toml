@@ -11,11 +11,11 @@ path = "src/main.rs"
 
 [features]
 # Call test peer (`talk-cli call`): WebRTC in Rust plus a bundled libopus. Dev tool only.
-call-bot = ["dep:webrtc", "dep:opus", "dep:audiopus_sys", "dep:bytes", "dep:rustls"]
+call-bot = ["dep:webrtc", "dep:opus", "dep:audiopus_sys", "dep:bytes", "dep:rustls", "dep:tokio-tungstenite", "dep:futures-util", "dep:reqwest"]
 
 [dependencies]
 talk-core = { workspace = true, features = ["faults"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
 serde_json.workspace = true
 clap = { version = "4.6", features = ["derive", "env"] }
 anyhow = "1"
@@ -28,3 +28,7 @@ audiopus_sys = { version = "0.2", features = ["static"], optional = true }
 bytes = { version = "1", optional = true }
 # webrtc-rs pulls in a second rustls crypto provider: pick one explicitly.
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"], optional = true }
+# Chrome media engine (DevTools protocol over a local websocket).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"], optional = true }
+futures-util = { workspace = true, features = ["sink"], optional = true }
+reqwest = { workspace = true, optional = true }

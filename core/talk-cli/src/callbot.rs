@@ -505,7 +505,22 @@ fn own_sessions(peers: &[serde_json::Value], me: &str) -> Vec<String> {
         .collect()
 }
 
-pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Arc<BotMedia>, o: CallOpts) -> Result<()> {
+/// The bot's WebRTC: headless Chrome (libwebrtc, default) or webrtc-rs.
+pub enum Media {
+    Chrome(Arc<crate::chromebot::ChromeMedia>),
+    Rust(Arc<BotMedia>),
+}
+
+impl Media {
+    async fn stats(&self) -> HashMap<String, RxStats> {
+        match self {
+            Media::Chrome(c) => c.stats().await,
+            Media::Rust(r) => r.stats.lock().unwrap().clone(),
+        }
+    }
+}
+
+pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: CallOpts) -> Result<()> {
     let me = engine.user_id();
     // Stale sessions of an earlier (killed) run are not ours to check afterwards.
     let before = own_sessions(&engine.client().call_peers(&o.token).await.unwrap_or_default(), &me);
@@ -578,7 +593,7 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Arc<BotMedia>,
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let rx: HashMap<String, RxStats> = media.stats.lock().unwrap().clone();
+    let rx: HashMap<String, RxStats> = media.stats().await;
     let mut ok = false;
     for (peer, s) in &rx {
         eprintln!("empfangen {peer}: {} Pakete, Pegel max {:.3}", s.packets, s.max_level);

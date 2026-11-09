@@ -13,6 +13,8 @@ use clap::{Parser, Subcommand};
 
 #[cfg(feature = "call-bot")]
 mod callbot;
+#[cfg(feature = "call-bot")]
+mod chromebot;
 use talk_core::{
     Account, ChatMessage, Engine, Event, EventSink, LoginFlow, Platform, TalkClient,
     new_reference_id,
@@ -319,10 +321,18 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
         changed: tokio::sync::Notify::new(),
         json: *json,
     });
-    let media = callbot::BotMedia::new(*tone)?;
     let engine = Engine::new(client, sink.clone(), None);
-    media.attach(&engine);
-    engine.set_media_engine(media.clone());
+    let media = if std::env::var("BOT_MEDIA").as_deref() == Ok("rust") {
+        let m = callbot::BotMedia::new(*tone)?;
+        m.attach(&engine);
+        engine.set_media_engine(m.clone());
+        callbot::Media::Rust(m)
+    } else {
+        let m = chromebot::ChromeMedia::launch(*tone).await?;
+        m.attach(&engine);
+        engine.set_media_engine(m.clone());
+        callbot::Media::Chrome(m)
+    };
     engine.start().await?;
     let opts = callbot::CallOpts {
         token: token.clone(),
