@@ -207,6 +207,8 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                     },
                     onOpenCamera = openCamera,
                     onImagePicked = { uri -> overlay = Overlay.Send(uri, fromCamera = false) },
+                    voice = sessions.voice,
+                    onVoiceSent = { scope.launch { listState.animateScrollToItem(0) } },
                 )
             }
         }
@@ -475,6 +477,8 @@ private fun MessageRow(
                                     }
                                 }
                             }
+                        } else if (attachment != null && (attachment.voiceMessage || attachment.mimetype.startsWith("audio/"))) {
+                            VoiceBubble(sessions.voice, m, textColor, own, Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp))
                         } else if (attachment != null) {
                             FileRow(attachment, textColor, Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp))
                         }

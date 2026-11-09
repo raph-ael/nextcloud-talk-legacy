@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -82,6 +83,20 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.emoji2.emojipicker.EmojiPickerView
 import kotlinx.coroutines.flow.distinctUntilChanged
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.sirplus.talk.VoiceManager
 import uniffi.talk_ffi.MessageView
 
 /** What replaces the keyboard below the input row. */
@@ -104,6 +119,8 @@ fun Composer(
     onSend: (String) -> Unit,
     onOpenCamera: () -> Unit,
     onImagePicked: (Uri) -> Unit,
+    voice: VoiceManager,
+    onVoiceSent: () -> Unit,
 ) {
     val colors = LocalTalkColors.current
     val context = LocalContext.current
@@ -167,6 +184,41 @@ fun Composer(
     }
 
     val hasText = value.text.isNotBlank()
+
+    // --- voice messages ---------------------------------------------------------------
+    val voiceUi by voice.state.collectAsStateWithLifecycle()
+    val rec = voiceUi.recording?.takeIf { it.token == token }
+    val draft = voiceUi.drafts[token]
+    val haptics = LocalHapticFeedback.current
+    var drag by remember { mutableStateOf(Offset.Zero) }
+    val cancelDistance = with(density) { (LocalConfiguration.current.screenWidthDp * 0.4f).dp.toPx() }
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Toast.makeText(
+            context,
+            if (granted) "Zum Aufnehmen das Mikrofon gedrückt halten" else "Für Sprachnachrichten braucht die App Zugriff auf das Mikrofon.",
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+    LaunchedEffect(token) { voice.loadDraft(token) }
+    // Leaving the chat or the app keeps what was recorded as draft (like Signal).
+    DisposableEffect(token) { onDispose { voice.interrupt() } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_PAUSE) voice.interrupt() }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    // Long recordings: the screen must not turn off (that would end the recording).
+    val view = LocalView.current
+    DisposableEffect(rec != null) {
+        view.keepScreenOn = rec != null
+        onDispose { view.keepScreenOn = false }
+    }
+    fun voiceSent() {
+        onCancelReply()
+        onVoiceSent()
+    }
+
     Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
         replyTo?.let { r ->
             Row(
@@ -192,6 +244,23 @@ fun Composer(
             }
         }
 
+        if (rec?.locked == true) {
+            LockedRecordingBar(
+                rec,
+                onCancel = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    voice.cancel()
+                },
+                onSend = { voice.sendRecording(replyTo, ::voiceSent) },
+            )
+        } else if (rec == null && draft != null) {
+            VoiceDraftBar(
+                voice,
+                draft,
+                onDelete = { voice.discardDraft(token) },
+                onSend = { voice.sendDraft(token, replyTo, ::voiceSent) },
+            )
+        } else {
         // Metrics from Signal's conversation_input_panel.xml.
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
@@ -205,6 +274,9 @@ fun Composer(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 verticalAlignment = Alignment.Bottom,
             ) {
+                if (rec != null) {
+                    HeldRecording(rec, drag.x, Modifier.weight(1f))
+                } else {
                 PillIcon(
                     if (panel == InputPanel.EMOJI) TalkIcons.Keyboard else TalkIcons.Mood,
                     if (panel == InputPanel.EMOJI) "Tastatur" else "Emoji",
@@ -231,19 +303,47 @@ fun Composer(
                     },
                 )
                 AnimatedVisibility(visible = !hasText, enter = fadeIn(), exit = fadeOut()) {
-                    Row {
-                        PillIcon(TalkIcons.Camera, "Kamera", width = 40.dp, endPadding = 16.dp, onClick = {
-                            panel = InputPanel.NONE
-                            onOpenCamera()
-                        })
-                        PillIcon(TalkIcons.Mic, "Sprachnachricht", width = 36.dp, endPadding = 12.dp, onClick = {
-                            Toast.makeText(context, "Sprachnachrichten kommen bald", Toast.LENGTH_SHORT).show()
-                        })
-                    }
+                    PillIcon(TalkIcons.Camera, "Kamera", width = 40.dp, endPadding = 16.dp, onClick = {
+                        panel = InputPanel.NONE
+                        onOpenCamera()
+                    })
+                }
+                }
+                // Same call site while holding, so the press gesture survives the swap above.
+                AnimatedVisibility(visible = !hasText, enter = fadeIn(), exit = fadeOut()) {
+                    MicButton(
+                        onPress = {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                askMic.launch(Manifest.permission.RECORD_AUDIO)
+                                false
+                            } else {
+                                keyboard?.hide()
+                                panel = InputPanel.NONE
+                                voice.start(token).also {
+                                    if (it) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
+                            }
+                        },
+                        onDrag = { dx, dy -> drag = Offset(dx, dy) },
+                        onCancel = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            voice.cancel()
+                        },
+                        onLock = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            voice.lock()
+                        },
+                        onRelease = { voice.sendRecording(replyTo, ::voiceSent) },
+                        cancelDistancePx = cancelDistance,
+                    )
                 }
             }
             Spacer(Modifier.width(12.dp))
             val rotation by animateFloatAsState(if (panel == InputPanel.ATTACH && !hasText) 45f else 0f, label = "plus")
+            Box {
+            if (rec != null) LockHint(Modifier.align(Alignment.BottomCenter).offset(y = (-56).dp), drag.y)
             Box(
                 Modifier
                     .padding(bottom = 2.dp)
@@ -273,6 +373,8 @@ fun Composer(
                     }
                 }
             }
+            }
+        }
         }
 
         val shown = panel != InputPanel.NONE || reserve

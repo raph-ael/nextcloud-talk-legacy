@@ -13,6 +13,18 @@ import {
 import { withAttachment } from '@shared/core'
 import { sendFiles, sendMessage, type UiMessage } from '../store'
 import { dropDraft, releaseDraft, stage, type Draft } from '../media'
+import {
+  cancelRecording,
+  clearNotice,
+  discardDraft,
+  loadDraft,
+  sendDraft,
+  sendRecording,
+  startRecording,
+  stopToDraft,
+  useVoice,
+} from '../voice'
+import { DraftBar, MicIcon, RecordingBar } from './Voice'
 
 // Emoji data is large: loaded on first use, not at startup.
 const EmojiPicker = lazy(() => import('./EmojiPicker').then((m) => ({ default: m.EmojiPicker })))
@@ -47,13 +59,38 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   const input = useRef<HTMLTextAreaElement | null>(null)
   const picker = useRef<HTMLInputElement>(null)
   const emojiButton = useRef<HTMLButtonElement>(null)
+  const recording = useVoice((s) => (s.recording?.token === token ? s.recording : null))
+  const voiceDraft = useVoice((s) => s.drafts[token] ?? null)
+  const notice = useVoice((s) => (s.notice?.token === token ? s.notice.text : null))
 
   useEffect(() => {
     setText(textDrafts.get(token) ?? '')
     setFiles(fileDrafts.get(token) ?? [])
     setError('')
     input.current?.focus()
+    void loadDraft(token)
+    return () => {
+      // Switching chats keeps a running recording as draft of its chat (like Signal).
+      void stopToDraft()
+      clearNotice()
+    }
   }, [token])
+
+  // Esc cancels a recording; Ctrl/Cmd+Shift+Y starts one (Signal Desktop's shortcut).
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (recording && e.key === 'Escape') {
+        e.preventDefault()
+        void cancelRecording()
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'y') {
+        e.preventDefault()
+        if (recording) void sendRecording(replyTo).then(onSent)
+        else if (!voiceDraft && !text.trim() && files.length === 0) void startRecording(token)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [recording, voiceDraft, text, files.length, token, replyTo, onSent])
   useEffect(() => {
     if (replyTo) input.current?.focus()
   }, [replyTo])
@@ -193,7 +230,26 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
           )}
         </div>
       )}
-      {error && <div className="composer-error">{error}</div>}
+      {(error || notice) && <div className="composer-error">{error || notice}</div>}
+      {recording ? (
+        <RecordingBar
+          rec={recording}
+          onCancel={() => void cancelRecording()}
+          onSend={() => {
+            void sendRecording(replyTo).then(onSent)
+            onCancelReply()
+          }}
+        />
+      ) : voiceDraft ? (
+        <DraftBar
+          draft={voiceDraft}
+          onDiscard={() => void discardDraft(token)}
+          onSend={() => {
+            void sendDraft(token, replyTo).then(onSent)
+            onCancelReply()
+          }}
+        />
+      ) : (
       <div className="composer-row">
         <div className="composer-cell emoji-anchor">
           <button
@@ -248,7 +304,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
             }}
           />
         </div>
-        {canSend && (
+        {canSend ? (
           <div className="composer-cell">
             <button className="send" aria-label="Senden" title="Senden" onClick={submit}>
               <svg viewBox="0 0 24 24" width="20" height="20">
@@ -256,8 +312,23 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
               </svg>
             </button>
           </div>
+        ) : (
+          files.length === 0 &&
+          staging === 0 && (
+            <div className="composer-cell">
+              <button
+                className="icon-button"
+                aria-label="Sprachnachricht aufnehmen"
+                title="Sprachnachricht aufnehmen (Strg+Umschalt+Y)"
+                onClick={() => void startRecording(token)}
+              >
+                <MicIcon />
+              </button>
+            </div>
+          )
         )}
       </div>
+      )}
     </div>
   )
 })

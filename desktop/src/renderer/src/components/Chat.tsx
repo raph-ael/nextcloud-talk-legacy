@@ -6,6 +6,8 @@ import { Markdown, plain } from './Markdown'
 import { Avatar } from './Avatar'
 import { ChatImage, FileRow, isImageAttachment } from './ChatMedia'
 import { Composer } from './Composer'
+import { VoiceMessage } from './Voice'
+import { isAudioAttachment } from '../voice'
 import { ImageViewer } from './ImageViewer'
 import { MessageMenu, type MenuItem } from './MessageMenu'
 import { OfflineBanner } from './Sidebar'
@@ -298,7 +300,7 @@ const MessageRow = memo(function MessageRow({
             )}
             {(!image || hasText) && (
               <div className="text">
-                {attachment && !image && <FileRow msg={msg} />}
+                {attachment && !image && (isAudioAttachment(msg) ? <VoiceMessage msg={msg} /> : <FileRow msg={msg} />)}
                 {deleted ? (
                   <em>Diese Nachricht wurde gelöscht.</em>
                 ) : msg.markdown ? (

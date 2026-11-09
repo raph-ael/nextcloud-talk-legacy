@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::cache::Cache;
 use crate::outbox::{Outbox, PendingMessage};
+use crate::voice::VoiceStore;
 
 use crate::client::TalkClient;
 use crate::error::{Error, Result};
@@ -200,6 +201,7 @@ pub struct Engine {
     attachment_folder: RwLock<Option<String>>,
     pub(crate) outbox: Outbox,
     pub(crate) cache: Cache,
+    pub(crate) voice: Arc<VoiceStore>,
     /// Runtime of `start`, for spawning from synchronous calls.
     pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
     weak: Weak<Self>,
@@ -227,6 +229,7 @@ impl Engine {
             state: Mutex::new(state),
             attachment_folder: RwLock::new(cache.meta("attachment_folder")),
             outbox: Outbox::open(data_dir.as_deref()),
+            voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
             cache,
             runtime: OnceLock::new(),
             weak: weak.clone(),
@@ -252,6 +255,7 @@ impl Engine {
         tokio::task::spawn_blocking(move || {
             if let Some(e) = weak.upgrade() {
                 e.cache.prune_media();
+                e.voice.prune_files();
             }
         });
         // User id and room list in parallel: saves a full round trip on cold start.
@@ -623,7 +627,7 @@ impl Engine {
         )?;
         self.guard(
             self.client
-                .share_to_room(token, &remote, reference_id, caption, reply_to)
+                .share_to_room(token, &remote, reference_id, caption, reply_to, false)
                 .await,
         )
     }

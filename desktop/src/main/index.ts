@@ -1,18 +1,34 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor, protocol, safeStorage, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  nativeTheme,
+  Notification,
+  powerMonitor,
+  protocol,
+  safeStorage,
+  session as electronSession,
+  shell,
+  systemPreferences,
+} from 'electron'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import {
   withAttachment,
   type AccountInfo,
   type AppEvent,
+  type AudioInfo,
   type CoreEvent,
   type PendingMessage,
   type ReplyPreview,
   type RoomView,
   type StagedFile,
   type TalkEvent,
+  type VoiceDraft,
+  type RecordingStatus,
 } from '@shared/core'
 
 // --- Native core -------------------------------------------------------------------
@@ -54,6 +70,17 @@ interface NativeSession {
   outboxUnsent(): number
   waitOutboxIdle(): Promise<{ waiting: number; failed: number }>
   filePreview(fileId: string, width: number, height: number): Promise<Buffer>
+  startVoice(token: string, sampleRate: number): NativeVoiceRecording
+  voiceDraft(token: string): VoiceDraft | null
+  discardVoiceDraft(token: string): void
+  sendVoiceDraft(token: string, name: string, replyTo: ReplyPreview | null, referenceId: string): PendingMessage
+  fetchFile(path: string, size: number): Promise<string>
+  audioInfo(localPath: string): Promise<AudioInfo>
+}
+interface NativeVoiceRecording {
+  push(pcm: Buffer): RecordingStatus
+  finish(): VoiceDraft | null
+  cancel(): void
 }
 interface NativeCore {
   coreVersion(): string
@@ -128,6 +155,8 @@ let firstRoomsEvent = true
 let sessionDir: string | null = null
 /** Failed messages already announced by a notification. */
 const notifiedFailures = new Set<string>()
+/** The voice recording in progress (encoded and written by the core in this process). */
+let recording: { token: string; rec: NativeVoiceRecording } | null = null
 
 function send(event: TalkEvent): void {
   win?.webContents.send('talk:event', event)
@@ -170,7 +199,29 @@ function startSession(stored: StoredAccount, plainPassword?: string): void {
   account = { server: stored.server, user: stored.loginName, userId: stored.loginName }
 }
 
+/** Ends a recording whose renderer went away: it stays as the chat's draft. */
+function finishRecording(): VoiceDraft | null {
+  const r = recording
+  recording = null
+  if (!r) return null
+  try {
+    return r.rec.finish()
+  } catch (err) {
+    console.warn('finishing recording failed:', (err as Error).message)
+    return null
+  }
+}
+
+/** "Sprachnachricht 2026-11-09 15-04-33" in local time (Talk adds " (2)" on clashes). */
+function voiceFileName(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `Sprachnachricht ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
+}
+
 async function signOut(revoke: boolean): Promise<void> {
+  recording?.rec.cancel()
+  recording = null
   const s = session
   session = null
   account = null
@@ -308,6 +359,11 @@ const MIME_BY_EXT: Record<string, string> = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.wav': 'audio/wav',
+  '.opus': 'audio/ogg',
+  '.oga': 'audio/ogg',
   '.ogg': 'audio/ogg',
   '.txt': 'text/plain',
   '.zip': 'application/zip',
@@ -360,7 +416,13 @@ function createWindow(): void {
     },
   })
   win.once('ready-to-show', () => win?.show())
-  win.on('closed', () => (win = null))
+  win.on('closed', () => {
+    finishRecording()
+    win = null
+  })
+  // Renderer crashed or reloaded mid-recording: what was recorded stays as draft.
+  win.webContents.on('render-process-gone', () => finishRecording())
+  win.webContents.on('did-start-loading', () => finishRecording())
 
   // Links open in the system browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -451,6 +513,34 @@ function registerIpc(): void {
   ipcMain.handle('talk:unstage', async (_e, path: string) => {
     if (sessionDir && inside(join(sessionDir, 'staging'), path)) await rm(path, { force: true })
   })
+  ipcMain.handle('talk:voiceStart', async (_e, token: string, sampleRate: number) => {
+    finishRecording()
+    if (process.platform === 'darwin' && !(await systemPreferences.askForMediaAccess('microphone'))) {
+      throw new Error('Kein Zugriff auf das Mikrofon')
+    }
+    recording = { token, rec: requireSession().startVoice(token, sampleRate) }
+  })
+  ipcMain.handle('talk:voicePush', (_e, pcm: Uint8Array) => {
+    if (!recording) throw new Error('no recording')
+    return recording.rec.push(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength))
+  })
+  ipcMain.handle('talk:voiceFinish', () => finishRecording())
+  ipcMain.handle('talk:voiceCancel', () => {
+    recording?.rec.cancel()
+    recording = null
+  })
+  ipcMain.handle('talk:voiceDraft', (_e, token: string) =>
+    recording?.token === token ? null : (session?.voiceDraft(token) ?? null),
+  )
+  ipcMain.handle('talk:voiceDiscard', (_e, token: string) => session?.discardVoiceDraft(token))
+  ipcMain.handle('talk:voiceSend', (_e, token: string, replyTo: ReplyPreview | null) =>
+    requireSession().sendVoiceDraft(token, voiceFileName(), replyTo, core.newReferenceId()),
+  )
+  ipcMain.handle('talk:fetchFile', (_e, path: string, size: number) => requireSession().fetchFile(path, size))
+  ipcMain.handle('talk:audioInfo', (_e, localPath: string) => {
+    if (!sessionDir || !inside(sessionDir, localPath)) throw new Error('not an app file')
+    return requireSession().audioInfo(localPath)
+  })
   ipcMain.handle('talk:markRead', (_e, token: string, messageId: number) => session?.markRead(token, messageId))
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
 }
@@ -459,7 +549,8 @@ function registerIpc(): void {
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'talk-avatar', privileges: { standard: true, secure: true, supportFetchAPI: true } },
-  { scheme: 'talk-media', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  // `stream`: <audio> reads local files in ranges (seeking in long voice messages).
+  { scheme: 'talk-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ])
 
 const avatarCache = new Map<string, { data: Buffer; contentType: string }>()
@@ -513,6 +604,8 @@ function registerMediaProtocol(): void {
         // Only files of the outbox/staging of this account, nothing else on disk.
         const path = url.searchParams.get('p') ?? ''
         if (!inside(sessionDir, path)) return new Response(null, { status: 403 })
+        const type = mimeFor(path, '')
+        if (type.startsWith('audio/') || type.startsWith('video/')) return rangeResponse(path, type, request)
         const data = await readFile(path)
         return new Response(new Uint8Array(data), {
           headers: { 'content-type': imageType(data, mimeFor(path, '')) },
@@ -523,6 +616,34 @@ function registerMediaProtocol(): void {
     }
     return new Response(null, { status: 404 })
   })
+}
+
+/** A local media file, honouring `Range` (the media element seeks by range requests). */
+async function rangeResponse(path: string, type: string, request: Request): Promise<Response> {
+  const size = (await stat(path)).size
+  const m = /^bytes=(\d*)-(\d*)$/.exec(request.headers.get('range') ?? '')
+  let start = 0
+  let end = size - 1
+  if (m) {
+    if (m[1]) {
+      start = Number(m[1])
+      if (m[2]) end = Math.min(Number(m[2]), size - 1)
+    } else if (m[2]) {
+      start = Math.max(0, size - Number(m[2]))
+    }
+    if (start > end || start >= size) {
+      return new Response(null, { status: 416, headers: { 'content-range': `bytes */${size}` } })
+    }
+  }
+  const headers: Record<string, string> = {
+    'content-type': type,
+    'content-length': String(end - start + 1),
+    'accept-ranges': 'bytes',
+  }
+  if (m) headers['content-range'] = `bytes ${start}-${end}/${size}`
+  // Streamed: an hour of audio is not read into memory for every seek.
+  const body = Readable.toWeb(createReadStream(path, { start, end })) as ReadableStream<Uint8Array>
+  return new Response(body, { status: m ? 206 : 200, headers })
 }
 
 /** Gives the outbox a moment to deliver what is in flight before the process ends. */
@@ -547,6 +668,16 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc()
     registerAvatarProtocol()
     registerMediaProtocol()
+    // Microphone (voice messages) for our window only; nothing else asks for permissions.
+    electronSession.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+      const own = wc === win?.webContents
+      if (permission === 'media') {
+        const types = (details as { mediaTypes?: string[] }).mediaTypes ?? []
+        callback(own && types.length > 0 && types.every((t) => t === 'audio'))
+      } else {
+        callback(own && (permission === 'clipboard-sanitized-write' || permission === 'fullscreen'))
+      }
+    })
     powerMonitor.on('resume', () => session?.networkChanged())
     const dev = devAccount()
     const stored = existsSync(accountFile) ? loadAccount() : null

@@ -1211,3 +1211,188 @@ a.file-row:hover .file-name {
 .msg.own .bubble pre {
   background: rgb(255 255 255 / 0.18);
 }
+
+/* ---------- voice messages (Signal Desktop: 47 bars 4–20 px, speed pill, 36 px play) ---------- */
+.voice-msg {
+  position: relative;
+  min-width: 240px;
+  max-width: 100%;
+  margin-bottom: 2px;
+}
+.voice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.voice-play {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--text);
+}
+.msg.own .voice-play {
+  background: rgb(255 255 255 / 0.95);
+  color: var(--bubble-own);
+}
+.voice-play .progress-ring circle {
+  stroke: currentColor;
+}
+.voice-play .progress-ring circle:first-child {
+  opacity: 0.25;
+}
+.voice-body {
+  flex: 1;
+  min-width: 0;
+}
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+.waveform i {
+  flex: 1;
+  min-width: 2px;
+  max-width: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.35;
+}
+.waveform i.played {
+  opacity: 1;
+}
+.waveform:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+  border-radius: 4px;
+}
+.voice-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  min-height: 18px;
+}
+.voice-time {
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.voice-rate {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: rgb(125 125 125 / 0.2);
+  color: inherit;
+}
+.voice-error {
+  font-size: 11px;
+  color: var(--danger);
+}
+.msg.own .voice-error {
+  color: #ffd1cc;
+}
+.voice-upload {
+  position: absolute;
+  left: 9px;
+  top: 9px;
+  pointer-events: none;
+}
+.voice-name {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+.voice-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  min-height: 34px;
+}
+.voice-pill {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  margin: 0 6px;
+  padding: 4px 12px;
+  border-radius: 18px;
+  background: var(--bubble-other);
+  color: var(--text);
+}
+.voice-bar.draft .voice-pill {
+  padding: 4px 12px 4px 4px;
+}
+.voice-bar.draft .voice {
+  flex: 1;
+}
+.voice-bar.draft .voice-play {
+  width: 30px;
+  height: 30px;
+}
+.voice-bar.draft .voice-meta {
+  margin: 0;
+}
+.voice-bar.draft .waveform {
+  flex: 1;
+  justify-content: space-between;
+}
+.voice-bar.draft .voice-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes rec-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.rec-time {
+  font-size: 14px;
+  opacity: 1;
+  min-width: 42px;
+}
+.level-meter {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  height: 22px;
+  overflow: hidden;
+}
+.level-meter i {
+  width: 2px;
+  flex-shrink: 0;
+  border-radius: 1px;
+  background: var(--text-muted);
+}
+.rec-warn {
+  font-size: 12px;
+  color: var(--danger);
+  white-space: nowrap;
+}
+.send:disabled {
+  opacity: 0.5;
+}

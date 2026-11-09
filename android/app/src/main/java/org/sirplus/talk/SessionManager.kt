@@ -105,6 +105,9 @@ class SessionManager(private val context: Context) : CoreListener {
     /** Failed sends already announced by a notification. */
     private val notifiedFailures = ConcurrentHashMap.newKeySet<String>()
 
+    /** Voice messages: recording, drafts, playback. */
+    val voice = VoiceManager(context, scope, { session }, { _state.value })
+
     init {
         val account = store.load()
         if (account == null) _state.update { it.copy(session = SessionState.LOGGED_OUT) }
@@ -193,6 +196,8 @@ class SessionManager(private val context: Context) : CoreListener {
 
     private suspend fun signOut(revoke: Boolean) {
         val s = session ?: return
+        voice.cancel()
+        voice.player.stop()
         session = null
         if (revoke) runCatching { s.logout() } else s.shutdown()
         s.close()

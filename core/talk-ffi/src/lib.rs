@@ -455,6 +455,93 @@ pub fn new_reference_id() -> String {
     core::new_reference_id()
 }
 
+// --- voice messages ------------------------------------------------------------------
+
+/// A recorded, not yet sent voice message (one per conversation).
+#[derive(uniffi::Record)]
+pub struct VoiceDraft {
+    pub id: String,
+    pub token: String,
+    /// MP3 file, playable as is.
+    pub path: String,
+    pub duration_ms: u64,
+    pub size: u64,
+    /// 100 levels, 0 (silence) ..= 255.
+    pub waveform: Vec<u8>,
+    pub created_at: i64,
+}
+
+impl From<core::VoiceDraft> for VoiceDraft {
+    fn from(d: core::VoiceDraft) -> Self {
+        Self {
+            id: d.id,
+            token: d.token,
+            path: d.path,
+            duration_ms: d.duration_ms,
+            size: d.size,
+            waveform: d.waveform,
+            created_at: d.created_at,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct RecordingStatus {
+    pub duration_ms: u64,
+    /// Current level 0..1.
+    pub level: f32,
+    /// One hour reached: call `finish`.
+    pub limit_reached: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct AudioInfo {
+    pub duration_ms: u64,
+    pub waveform: Vec<u8>,
+}
+
+/// Longest voice message in milliseconds.
+#[uniffi::export]
+pub fn voice_max_duration_ms() -> u64 {
+    core::voice::MAX_DURATION_MS
+}
+
+/// Shortest voice message kept (shorter ones are discarded on `finish`).
+#[uniffi::export]
+pub fn voice_min_duration_ms() -> u64 {
+    core::voice::MIN_DURATION_MS
+}
+
+/// A recording in progress: written to disk as MP3 with every `push`.
+#[derive(uniffi::Object)]
+pub struct VoiceRecording {
+    inner: core::VoiceRecorder,
+}
+
+#[uniffi::export]
+impl VoiceRecording {
+    /// 16-bit little-endian mono PCM at the rate given to `start_voice`.
+    pub fn push(&self, pcm: Vec<u8>) -> Result<RecordingStatus, CoreError> {
+        let samples: Vec<i16> = pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
+        let s = self.inner.push(&samples)?;
+        Ok(RecordingStatus {
+            duration_ms: s.duration_ms,
+            level: s.level,
+            limit_reached: s.limit_reached,
+        })
+    }
+
+    /// Ends the recording as the conversation's draft (`None`: shorter than a second).
+    pub fn finish(&self) -> Result<Option<VoiceDraft>, CoreError> {
+        Ok(self.inner.finish()?.map(Into::into))
+    }
+
+    /// Ends the recording and deletes it.
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
 /// One signed-in account: sync engine plus actions.
 #[derive(uniffi::Object)]
 pub struct TalkSession {
@@ -670,6 +757,57 @@ impl TalkSession {
         height: u32,
     ) -> Result<Vec<u8>, CoreError> {
         Ok(self.engine.file_preview(&file_id, width, height).await?)
+    }
+
+    // --- voice messages ---------------------------------------------------------------
+
+    /// Starts recording a voice message (16-bit mono PCM at `sample_rate` Hz).
+    pub fn start_voice(&self, token: String, sample_rate: u32) -> Result<Arc<VoiceRecording>, CoreError> {
+        Ok(Arc::new(VoiceRecording {
+            inner: self.engine.start_voice(&token, sample_rate)?,
+        }))
+    }
+
+    /// The unsent recording of a conversation (recovers an interrupted one; off the UI thread).
+    pub fn voice_draft(&self, token: String) -> Option<VoiceDraft> {
+        self.engine.voice_draft(&token).map(Into::into)
+    }
+
+    /// Conversations with an unsent recording.
+    pub fn voice_draft_tokens(&self) -> Vec<String> {
+        self.engine.voice_draft_tokens()
+    }
+
+    pub fn discard_voice_draft(&self, token: String) {
+        self.engine.discard_voice_draft(&token);
+    }
+
+    /// Sends the draft through the outbox as a voice message named `name` (.mp3).
+    pub fn send_voice_draft(
+        &self,
+        token: String,
+        name: String,
+        reply_to: Option<ReplyPreview>,
+        reference_id: String,
+    ) -> Result<PendingMessage, CoreError> {
+        Ok(self
+            .engine
+            .send_voice_draft(&token, &name, reply_to.map(Into::into), &reference_id)?
+            .into())
+    }
+
+    /// Local copy of a shared file (downloaded once, resumable, kept for offline use).
+    pub async fn fetch_file(&self, path: String, size: i64) -> Result<String, CoreError> {
+        Ok(self.engine.fetch_file(&path, size).await?)
+    }
+
+    /// Duration and waveform of a local audio file (decoded once, cached).
+    pub async fn audio_info(&self, local_path: String) -> Result<AudioInfo, CoreError> {
+        let i = self.engine.audio_info(&local_path).await?;
+        Ok(AudioInfo {
+            duration_ms: i.duration_ms,
+            waveform: i.waveform,
+        })
     }
 
     /// Conversation avatar image (PNG/SVG/JPEG bytes).

@@ -39,6 +39,19 @@ object TalkIcons {
             "v-3.28c3.28-0.48 6-3.3 6-6.72h-1.7z",
     )
     val Plus = icon("Plus", "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
+    val Play = icon("Play", "M8 5v14l11-7z")
+    val Pause = icon("Pause", "M6 19h4V5H6v14zm8-14v14h4V5h-4z")
+    val Lock = icon(
+        "Lock",
+        "M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 0.9-2 2v10c0 1.1 0.9 2 2 2h12c1.1 0 2-0.9 2-2V10" +
+            "c0-1.1-0.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10z" +
+            "m-6-3c1.1 0 2-0.9 2-2s-0.9-2-2-2-2 0.9-2 2 0.9 2 2 2z",
+    )
+    val ArrowUp = icon("ArrowUp", "M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z")
+    val Delete = icon(
+        "Delete",
+        "M16 9v10H8V9h8m-1.5-6h-5l-1 1H5v2h14V4h-3.5l-1-1zM18 7H6v12c0 1.1 0.9 2 2 2h8c1.1 0 2-0.9 2-2V7z",
+    )
     val Send = icon("Send", "M2.01 21L23 12 2.01 3 2 10l15 2-15 2z")
     val Close = icon(
         "Close",

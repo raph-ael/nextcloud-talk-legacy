@@ -74,9 +74,34 @@ enum Cmd {
         /// File to send (copied into the outbox first)
         #[arg(short, long)]
         file: Option<PathBuf>,
+        /// Send the file as voice message (Talk accepts audio/mpeg and audio/wav)
+        #[arg(long)]
+        voice: bool,
     },
     /// Resume the outbox of an earlier (killed) run until everything is delivered
     OutboxRun,
+    /// Record a voice message from an audio file (decoded with ffmpeg, pushed in 100 ms
+    /// blocks like a microphone) and send it through the outbox
+    Voice {
+        token: String,
+        input: PathBuf,
+        /// Simulate a kill: exit abruptly after this many seconds of audio (draft stays)
+        #[arg(long)]
+        abort_after: Option<u64>,
+        /// Keep the recording as draft instead of sending it
+        #[arg(long)]
+        draft: bool,
+    },
+    /// Show the voice draft of a conversation (recovers an interrupted one); --send sends it
+    VoiceDraft {
+        token: String,
+        #[arg(long)]
+        send: bool,
+    },
+    /// Duration and waveform of an audio file (as the apps compute it)
+    AudioInfo { path: PathBuf },
+    /// Download a shared file like the apps do (resumable), print the local path
+    Fetch { path: String, size: i64 },
     /// Cache check: shows the cached state (timed), then syncs a chat and shows the delta
     Cache {
         token: Option<String>,
@@ -113,7 +138,16 @@ async fn main() -> Result<()> {
 
     let client = TalkClient::new(load_account(&cli)?, Platform::Cli)?;
 
-    if let Cmd::Enqueue { .. } | Cmd::OutboxRun = &cli.cmd {
+    if let Cmd::AudioInfo { path } = &cli.cmd {
+        let t = Instant::now();
+        let info = talk_core::voice::analyze(path)?;
+        println!("Dauer {} ms (analysiert in {:?})", info.duration_ms, t.elapsed());
+        println!("Wellenform {:?}", info.waveform);
+        return Ok(());
+    }
+    if let Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Voice { .. } | Cmd::VoiceDraft { .. } | Cmd::Fetch { .. } =
+        &cli.cmd
+    {
         return run_outbox(&cli, client).await;
     }
     if let Cmd::Cache { token, lines } = &cli.cmd {
@@ -121,7 +155,11 @@ async fn main() -> Result<()> {
     }
 
     match cli.cmd {
-        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } => unreachable!(),
+        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. }
+        | Cmd::Voice { .. }
+        | Cmd::VoiceDraft { .. }
+        | Cmd::AudioInfo { .. }
+        | Cmd::Fetch { .. } => unreachable!(),
         Cmd::Rooms { json } => {
             let t = Instant::now();
             let mut batch = client.rooms(None, true).await?;
@@ -184,7 +222,7 @@ async fn main() -> Result<()> {
                 .upload(&user.id, &path, &folder, &name, "application/octet-stream")
                 .await?;
             client
-                .share_to_room(&token, &remote, &new_reference_id(), caption.as_deref(), None)
+                .share_to_room(&token, &remote, &new_reference_id(), caption.as_deref(), None, false)
                 .await?;
             eprintln!("gesendet: {remote} in {:?}", t.elapsed());
         }
@@ -324,7 +362,7 @@ async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
     if let Err(e) = engine.start().await {
         eprintln!("Start offline ({e}), Outbox läuft trotzdem");
     }
-    if let Cmd::Enqueue { token, text, file } = &cli.cmd {
+    if let Cmd::Enqueue { token, text, file, voice } = &cli.cmd {
         let text = text.clone().unwrap_or_default();
         match file {
             Some(path) => {
@@ -338,23 +376,62 @@ async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
                     .to_string();
                 let copy = staging.join(format!("{}-{name}", new_reference_id()));
                 std::fs::copy(path, &copy).with_context(|| format!("{}", path.display()))?;
-                engine.enqueue_file(
-                    token,
-                    &copy.to_string_lossy(),
-                    &name,
-                    mime_for(&name),
-                    0,
-                    0,
-                    &text,
-                    None,
-                    &new_reference_id(),
-                )?;
+                if *voice {
+                    engine.enqueue_voice_file(token, &copy.to_string_lossy(), &name, None, &new_reference_id())?;
+                } else {
+                    engine.enqueue_file(
+                        token,
+                        &copy.to_string_lossy(),
+                        &name,
+                        mime_for(&name),
+                        0,
+                        0,
+                        &text,
+                        None,
+                        &new_reference_id(),
+                    )?;
+                }
             }
             None if !text.is_empty() => {
                 engine.enqueue_text(token, &text, None, &new_reference_id());
             }
             None => bail!("--text oder --file angeben"),
         }
+    }
+    if let Cmd::Voice { token, input, abort_after, draft } = &cli.cmd {
+        record_voice(&engine, token, input, *abort_after)?;
+        if *draft {
+            engine.shutdown();
+            return Ok(());
+        }
+        send_draft(&engine, token)?;
+    }
+    if let Cmd::VoiceDraft { token, send } = &cli.cmd {
+        match engine.voice_draft(token) {
+            Some(d) => {
+                println!("Entwurf {}: {} ms, {} Bytes, {}", d.id, d.duration_ms, d.size, d.path);
+                if *send {
+                    send_draft(&engine, token)?;
+                } else {
+                    engine.shutdown();
+                    return Ok(());
+                }
+            }
+            None => {
+                println!("kein Entwurf");
+                engine.shutdown();
+                return Ok(());
+            }
+        }
+    }
+    if let Cmd::Fetch { path, size } = &cli.cmd {
+        let t = Instant::now();
+        let local = engine.fetch_file(path, *size).await?;
+        println!("{local} ({:?})", t.elapsed());
+        let info = engine.audio_info(&local).await;
+        println!("{info:?}");
+        engine.shutdown();
+        return Ok(());
     }
     loop {
         let idle = engine.wait_outbox_idle().await;
@@ -377,12 +454,79 @@ async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
     Ok(())
 }
 
+/// Feeds an audio file through the recorder like a microphone would (48 kHz mono).
+fn record_voice(engine: &Arc<Engine>, token: &str, input: &Path, abort_after: Option<u64>) -> Result<()> {
+    use std::io::Read;
+    const RATE: u32 = 48_000;
+    let mut ffmpeg = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(input)
+        .args(["-f", "s16le", "-ac", "1", "-ar", &RATE.to_string(), "-"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .context("ffmpeg")?;
+    let mut out = ffmpeg.stdout.take().unwrap();
+    let rec = engine.start_voice(token, RATE)?;
+    let t = Instant::now();
+    let mut block = vec![0u8; (RATE / 10 * 2) as usize];
+    let mut status = rec.status();
+    loop {
+        let mut filled = 0;
+        while filled < block.len() {
+            match out.read(&mut block[filled..])? {
+                0 => break,
+                n => filled += n,
+            }
+        }
+        if filled < 2 {
+            break;
+        }
+        let pcm: Vec<i16> = block[..filled].as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
+        status = rec.push(&pcm)?;
+        if abort_after.is_some_and(|s| status.duration_ms >= s * 1000) {
+            eprintln!("Abbruch simuliert nach {} ms Audio", status.duration_ms);
+            std::process::exit(0); // no finish, no drop: like a killed app
+        }
+        if status.limit_reached {
+            eprintln!("Limit erreicht");
+            break;
+        }
+        if filled < block.len() {
+            break;
+        }
+    }
+    let _ = ffmpeg.kill();
+    let draft = rec.finish()?.context("zu kurz, verworfen")?;
+    eprintln!(
+        "aufgenommen: {} ms in {:?}, {} Bytes → {}",
+        status.duration_ms,
+        t.elapsed(),
+        draft.size,
+        draft.path
+    );
+    Ok(())
+}
+
+fn send_draft(engine: &Arc<Engine>, token: &str) -> Result<()> {
+    let name = format!("Sprachnachricht CLI {}", new_reference_id().get(..6).unwrap_or_default());
+    let p = engine.send_voice_draft(token, &name, None, &new_reference_id())?;
+    eprintln!(
+        "in der Outbox: {} ({} Bytes)",
+        p.message.attachment.as_ref().map(|a| a.name.as_str()).unwrap_or_default(),
+        p.message.attachment.as_ref().map(|a| a.size).unwrap_or_default()
+    );
+    Ok(())
+}
+
 fn mime_for(name: &str) -> &'static str {
     match name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("png") => "image/png",
         Some("txt") => "text/plain",
         Some("pdf") => "application/pdf",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a") => "audio/mp4",
+        Some("wav") => "audio/wav",
         _ => "application/octet-stream",
     }
 }
@@ -392,7 +536,11 @@ fn print_message(m: &ChatMessage) {
     if m.is_system() {
         println!("[{time}] · {}", m.rendered_text());
     } else {
-        println!("[{time}] {}: {}", m.actor_display_name, m.rendered_text());
+        let file = m
+            .attachment()
+            .map(|a| format!("  [{} {} {} B]", m.message_type, a.mimetype, a.size))
+            .unwrap_or_default();
+        println!("[{time}] {}: {}{file}", m.actor_display_name, m.rendered_text());
     }
 }
 

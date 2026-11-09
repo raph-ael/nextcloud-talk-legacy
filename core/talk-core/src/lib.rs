@@ -7,6 +7,7 @@
 //! - [`engine`]: sync engine emitting UI-ready events (shared by all platforms)
 //!
 //! - `cache`: SQLite cache of rooms and messages, avatar/preview files
+//! - [`voice`]: voice messages (MP3 recording, drafts, downloads, waveforms)
 //!
 //! Upcoming: signaling client (HPB), call state machine, push.
 
@@ -17,6 +18,7 @@ pub mod error;
 pub mod login;
 pub mod models;
 pub mod outbox;
+pub mod voice;
 
 pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
@@ -24,6 +26,7 @@ pub use client::{
 pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReplyPreview, RoomView};
 pub use error::{Error, Result};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
+pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};
 pub use models::{ChatMessage, FileAttachment, IceServer, LoginCredentials, Room, RoomType, SignalingSettings};
 

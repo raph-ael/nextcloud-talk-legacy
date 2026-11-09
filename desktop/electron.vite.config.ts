@@ -12,6 +12,10 @@ export default defineConfig({
   renderer: {
     resolve: { alias: { '@shared': resolve('src/shared') } },
     plugins: [react()],
-    build: { minify: true },
+    build: {
+      minify: true,
+      // Never inline scripts as data: URLs (the AudioWorklet must load from 'self' under the CSP).
+      assetsInlineLimit: (file: string) => (file.endsWith('.js') ? false : undefined),
+    },
   },
 })

@@ -497,7 +497,7 @@ fn apply(conn: &mut Connection, op: Op) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-fn prune(dir: &Path, limit: u64) {
+pub(crate) fn prune(dir: &Path, limit: u64) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let mut files: Vec<(SystemTime, u64, PathBuf)> = entries
         .filter_map(|e| {

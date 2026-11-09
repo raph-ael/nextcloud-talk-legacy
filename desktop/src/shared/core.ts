@@ -113,6 +113,38 @@ export interface PendingMessage {
   localPath: string | null
 }
 
+/** Longest voice message (the core stops accepting audio after it). */
+export const VOICE_MAX_MS = 60 * 60 * 1000
+/** Shorter recordings are discarded. */
+export const VOICE_MIN_MS = 1000
+
+/** A recorded voice message not sent yet (one per conversation, survives restarts). */
+export interface VoiceDraft {
+  id: string
+  token: string
+  /** MP3 file in the app's data folder. */
+  path: string
+  durationMs: number
+  size: number
+  /** 100 levels 0..255. */
+  waveform: number[]
+  createdAt: number
+}
+
+/** Returned by every pushed block of a recording. */
+export interface RecordingStatus {
+  durationMs: number
+  /** Current level 0..1. */
+  level: number
+  /** One hour reached: the recording must be finished. */
+  limitReached: boolean
+}
+
+export interface AudioInfo {
+  durationMs: number
+  waveform: number[]
+}
+
 /** A file copied into the app's staging folder, ready for `enqueueFile`. */
 export interface StagedFile {
   path: string
@@ -175,12 +207,28 @@ export interface TalkApi {
   unstage(path: string): Promise<void>
   /** Local path of a dropped/pasted/picked file (empty for in-memory data). */
   pathForFile(file: File): string
+  /** Starts a voice recording for `token`; 16-bit mono PCM follows via `voicePush`. */
+  voiceStart(token: string, sampleRate: number): Promise<void>
+  /** One block of 16-bit little-endian PCM (written to disk as MP3 right away). */
+  voicePush(pcm: Uint8Array): Promise<RecordingStatus>
+  /** Ends the recording as draft (`null`: shorter than a second, discarded). */
+  voiceFinish(): Promise<VoiceDraft | null>
+  voiceCancel(): Promise<void>
+  /** The unsent recording of a conversation (also one interrupted by a crash). */
+  voiceDraft(token: string): Promise<VoiceDraft | null>
+  voiceDiscard(token: string): Promise<void>
+  /** Sends the draft through the outbox as a voice message. */
+  voiceSend(token: string, replyTo: ReplyPreview | null): Promise<PendingMessage>
+  /** Local copy of a shared file (downloaded once, kept for offline use). */
+  fetchFile(path: string, size: number): Promise<string>
+  /** Duration and waveform of a local audio file. */
+  audioInfo(localPath: string): Promise<AudioInfo>
   markRead(token: string, messageId: number): Promise<void>
   setBadge(count: number): void
   onEvent(cb: (event: TalkEvent) => void): () => void
   avatarUrl(token: string, version: string): string
   /** Server preview of a shared file, fitting into width×height (CSS px ×2 for HiDPI). */
   previewUrl(fileId: string, width: number, height: number): string
-  /** A local file of the outbox (pending attachment). */
+  /** A local file of the app (pending attachment, downloaded file, voice draft). */
   localFileUrl(path: string): string
 }

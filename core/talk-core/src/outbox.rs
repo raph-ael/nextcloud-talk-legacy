@@ -81,6 +81,9 @@ pub struct OutFile {
     /// Final path once the upload is complete.
     #[serde(default)]
     pub remote: Option<String>,
+    /// Posted as a voice message (`messageType: voice-message`).
+    #[serde(default)]
+    pub voice: bool,
 }
 
 fn one() -> u32 {
@@ -287,6 +290,25 @@ impl Engine {
         reply_to: Option<ReplyPreview>,
         reference_id: &str,
     ) -> Result<PendingMessage> {
+        self.enqueue_file_inner(
+            token, local_path, name, mime, width, height, caption, reply_to, reference_id, false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn enqueue_file_inner(
+        self: &Arc<Self>,
+        token: &str,
+        local_path: &str,
+        name: &str,
+        mime: &str,
+        width: i64,
+        height: i64,
+        caption: &str,
+        reply_to: Option<ReplyPreview>,
+        reference_id: &str,
+        voice: bool,
+    ) -> Result<PendingMessage> {
         let local = self
             .outbox
             .store
@@ -306,6 +328,7 @@ impl Engine {
             name_n: 1,
             upload_id: None,
             remote: None,
+            voice,
         };
         Ok(self.enqueue(token, caption.trim(), reply_to, Some(file), reference_id))
     }
@@ -404,7 +427,7 @@ impl Engine {
         let Some(item) = self.remove_item(reference_id) else { return };
         if let Some(id) = item.file.as_ref().and_then(|f| f.upload_id.clone()) {
             let engine = self.clone();
-            self.spawn(async move {
+            self.spawn_task(async move {
                 let _ = engine.client.chunk_abort(&engine.user_id(), &id).await;
             });
         }
@@ -471,7 +494,7 @@ impl Engine {
         live.task = Some(rt.spawn(async move { engine.run_item(reference).await }).abort_handle());
     }
 
-    fn spawn(&self, fut: impl Future<Output = ()> + Send + 'static) {
+    pub(crate) fn spawn_task(&self, fut: impl Future<Output = ()> + Send + 'static) {
         if let Some(rt) = self.runtime.get() {
             rt.spawn(fut);
         }
@@ -562,7 +585,7 @@ impl Engine {
             Some(f) => {
                 let remote = f.remote.as_deref().unwrap_or_default();
                 let caption = Some(item.text.as_str()).filter(|t| !t.is_empty());
-                self.guard(self.client.share_to_room(&item.token, remote, r, caption, reply).await)?;
+                self.guard(self.client.share_to_room(&item.token, remote, r, caption, reply, f.voice).await)?;
                 self.delivered(r, None);
             }
             None => {
@@ -786,13 +809,18 @@ impl Engine {
             self.note_own_message(&item.token, msg);
         }
         self.outbox.store.remove_record(r);
+        if let Some(f) = item.file.as_ref().filter(|f| f.voice) {
+            if let Some(remote) = &f.remote {
+                self.keep_sent_voice(&f.local, remote, f.size);
+            }
+        }
         let chat_open = self.chat_open(&item.token);
         if item.file.is_some() && chat_open {
             self.set_phase(r, Phase::Sent);
             self.outbox_changed(&item.token);
             let engine = self.weak_self();
             let reference = r.to_string();
-            self.spawn(async move {
+            self.spawn_task(async move {
                 tokio::time::sleep(ECHO_GRACE).await;
                 if let Some(e) = engine.upgrade() {
                     if let Some(item) = e.remove_item(&reference) {
@@ -930,7 +958,7 @@ impl Engine {
                     height: f.height,
                     preview_available: f.mime.starts_with("image/"),
                     link: String::new(),
-                    voice_message: false,
+                    voice_message: f.voice,
                 }),
             },
             state,
@@ -1197,6 +1225,7 @@ mod tests {
                 name_n: 1,
                 upload_id: None,
                 remote: None,
+                voice: false,
             }),
             post_attempted: true,
             attempts: 2,
@@ -1234,6 +1263,7 @@ mod tests {
         assert!(!dir.join("outbox/files/orphan.jpg").exists());
         assert!(local.exists());
 
+        assert!(!loaded[0].file.as_ref().unwrap().voice);
         store.remove(&loaded[0]);
         assert!(!local.exists());
         assert_eq!(store.load().len(), 1);

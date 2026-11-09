@@ -28,6 +28,15 @@ const api: TalkApi = {
       return ''
     }
   },
+  voiceStart: (token, sampleRate) => ipcRenderer.invoke('talk:voiceStart', token, sampleRate),
+  voicePush: (pcm) => ipcRenderer.invoke('talk:voicePush', pcm),
+  voiceFinish: () => ipcRenderer.invoke('talk:voiceFinish'),
+  voiceCancel: () => ipcRenderer.invoke('talk:voiceCancel'),
+  voiceDraft: (token) => ipcRenderer.invoke('talk:voiceDraft', token),
+  voiceDiscard: (token) => ipcRenderer.invoke('talk:voiceDiscard', token),
+  voiceSend: (token, replyTo) => ipcRenderer.invoke('talk:voiceSend', token, replyTo),
+  fetchFile: (path, size) => ipcRenderer.invoke('talk:fetchFile', path, size),
+  audioInfo: (localPath) => ipcRenderer.invoke('talk:audioInfo', localPath),
   markRead: (token, messageId) => ipcRenderer.invoke('talk:markRead', token, messageId),
   setBadge: (count) => ipcRenderer.send('talk:setBadge', count),
   onEvent: (cb) => {

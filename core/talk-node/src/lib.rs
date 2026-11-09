@@ -320,6 +320,62 @@ impl TalkSession {
         Ok(data.into())
     }
 
+    // --- voice messages ---------------------------------------------------------------
+
+    /// Starts recording a voice message (16-bit mono PCM at `sampleRate` Hz).
+    #[napi]
+    pub fn start_voice(&self, token: String, sample_rate: u32) -> Result<VoiceRecording> {
+        Ok(VoiceRecording {
+            inner: self.engine.start_voice(&token, sample_rate).map_err(to_napi)?,
+        })
+    }
+
+    /// The unsent recording of a conversation (`VoiceDraft` or null); recovers an
+    /// interrupted one.
+    #[napi(ts_return_type = "any")]
+    pub fn voice_draft(&self, token: String) -> Result<Value> {
+        json(&self.engine.voice_draft(&token))
+    }
+
+    #[napi]
+    pub fn voice_draft_tokens(&self) -> Vec<String> {
+        self.engine.voice_draft_tokens()
+    }
+
+    #[napi]
+    pub fn discard_voice_draft(&self, token: String) {
+        self.engine.discard_voice_draft(&token);
+    }
+
+    /// Sends the draft through the outbox as a voice message named `name` (.mp3).
+    #[napi(ts_return_type = "any")]
+    pub fn send_voice_draft(
+        &self,
+        token: String,
+        name: String,
+        #[napi(ts_arg_type = "any")] reply_to: Option<Value>,
+        reference_id: String,
+    ) -> Result<Value> {
+        let reply = reply_preview(reply_to)?;
+        let p = self
+            .engine
+            .send_voice_draft(&token, &name, reply, &reference_id)
+            .map_err(to_napi)?;
+        json(&p)
+    }
+
+    /// Local copy of a shared file (downloaded once, resumable, kept for offline use).
+    #[napi]
+    pub async fn fetch_file(&self, path: String, size: i64) -> Result<String> {
+        self.engine.fetch_file(&path, size).await.map_err(to_napi)
+    }
+
+    /// `{ durationMs, waveform }` of a local audio file (decoded once, cached).
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn audio_info(&self, local_path: String) -> Result<Value> {
+        json(&self.engine.audio_info(&local_path).await.map_err(to_napi)?)
+    }
+
     #[napi]
     pub async fn avatar(&self, token: String, dark: bool) -> Result<Avatar> {
         let (data, content_type) = self.engine.avatar(&token, dark).await.map_err(to_napi)?;
@@ -328,4 +384,36 @@ impl TalkSession {
             content_type,
         })
     }
+}
+
+/// A recording in progress: written to disk as MP3 with every `push`.
+#[napi]
+pub struct VoiceRecording {
+    inner: core::VoiceRecorder,
+}
+
+#[napi]
+impl VoiceRecording {
+    /// 16-bit little-endian mono PCM. Returns `{ durationMs, level, limitReached }`.
+    #[napi(ts_return_type = "any")]
+    pub fn push(&self, pcm: Buffer) -> Result<Value> {
+        let samples: Vec<i16> = pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
+        json(&self.inner.push(&samples).map_err(to_napi)?)
+    }
+
+    /// Ends the recording as the conversation's draft (null: shorter than a second).
+    #[napi(ts_return_type = "any")]
+    pub fn finish(&self) -> Result<Value> {
+        json(&self.inner.finish().map_err(to_napi)?)
+    }
+
+    #[napi]
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+#[napi]
+pub fn voice_max_duration_ms() -> u32 {
+    core::voice::MAX_DURATION_MS as u32
 }

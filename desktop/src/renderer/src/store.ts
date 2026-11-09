@@ -245,12 +245,12 @@ function refreshRoomsThrottled(): void {
   void window.talk.refreshRooms()
 }
 
-function toReply(m: UiMessage | null): ReplyPreview | null {
+export function toReply(m: UiMessage | null): ReplyPreview | null {
   return m ? { id: m.id, author: m.author, text: m.text, isOwn: m.isOwn, attachment: m.attachment ?? null } : null
 }
 
 /** Shows a queued message at once (the outbox event may arrive a moment later). */
-function showQueued(token: string, p: PendingMessage): void {
+export function showQueued(token: string, p: PendingMessage): void {
   setChat(token, (c) =>
     c.messages.some((m) => m.status && m.referenceId === p.message.referenceId)
       ? c

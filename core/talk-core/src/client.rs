@@ -587,9 +587,12 @@ impl TalkClient {
         reference_id: &str,
         caption: Option<&str>,
         reply_to: Option<i64>,
+        voice: bool,
     ) -> Result<()> {
         let mut meta = serde_json::Map::new();
-        meta.insert("messageType".into(), "comment".into());
+        // Talk keeps "voice-message" only for audio/mpeg and audio/wav files.
+        let kind = if voice { "voice-message" } else { "comment" };
+        meta.insert("messageType".into(), kind.into());
         if let Some(c) = caption.map(str::trim).filter(|c| !c.is_empty()) {
             meta.insert("caption".into(), c.into());
         }
@@ -607,6 +610,20 @@ impl TalkClient {
             ]);
         self.ocs::<serde_json::Value>(rb).await?;
         fault("share")
+    }
+
+    /// WebDAV GET of a file below the user root, from byte `offset` on (`Range`). The
+    /// caller streams the body; 206 means resumed, 200 the whole file, 416 a bad offset.
+    pub async fn download(&self, user_id: &str, remote: &str, offset: u64) -> Result<Response> {
+        let mut rb = self.dav(Method::GET, user_id, remote).timeout(UPLOAD_TIMEOUT);
+        if offset > 0 {
+            rb = rb.header(header::RANGE, format!("bytes={offset}-"));
+        }
+        let resp = rb.send().await?;
+        if resp.status() == StatusCode::RANGE_NOT_SATISFIABLE {
+            return Ok(resp);
+        }
+        check(resp).await
     }
 
     /// Server-rendered preview of a file, fitting into `width`×`height` (aspect kept).
