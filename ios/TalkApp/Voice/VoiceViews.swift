@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Bars drawn for a voice message (Signal draws a similar count).
 private let barCount = 36
@@ -36,17 +37,55 @@ struct Waveform: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onEnded { onSeek(Double($0.location.x / max(1, geo.size.width))) }
-            )
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 6)
-                    .onChanged { onSeek(Double($0.location.x / max(1, geo.size.width))) }
-            )
+            // A tap fails as soon as the finger moves, so a scroll starting here stays a scroll.
+            .onTapGesture(coordinateSpace: .local) { p in onSeek(Double(p.x / max(1, geo.size.width))) }
+            .modifier(HorizontalScrub { x in onSeek(Double(x / max(1, geo.size.width))) })
         }
         .frame(height: 28)
         .accessibilityHidden(true)
+    }
+}
+
+/// Scrubbing by dragging sideways. A SwiftUI DragGesture would take every touch – vertical
+/// drags then seek (and start playback) instead of scrolling the list – so this is a UIKit pan
+/// that only begins for horizontal movement (iOS 18+; on iOS 17 tapping still seeks).
+private struct HorizontalScrub: ViewModifier {
+    let onChange: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.gesture(ScrubRecognizer(onChange: onChange))
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+private struct ScrubRecognizer: UIGestureRecognizerRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let g = UIPanGestureRecognizer()
+        g.delegate = context.coordinator
+        return g
+    }
+
+    func handleUIGestureRecognizerAction(_ g: UIPanGestureRecognizer, context: Context) {
+        switch g.state {
+        case .began, .changed: onChange(context.converter.localLocation.x)
+        default: break
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let pan = g as? UIPanGestureRecognizer else { return true }
+            let v = pan.velocity(in: pan.view)
+            return abs(v.x) > abs(v.y) * 1.5
+        }
     }
 }
 

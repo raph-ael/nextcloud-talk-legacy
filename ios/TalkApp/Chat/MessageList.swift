@@ -165,6 +165,11 @@ struct MessageList: UIViewRepresentable {
             view.setContentOffset(.zero, animated: animated)
         }
 
+        // Rows are not selectable: a highlight would re-render the hosted cell on every touch.
+        func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool { false }
+
+        func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool { false }
+
         // MARK: Scrolling
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {

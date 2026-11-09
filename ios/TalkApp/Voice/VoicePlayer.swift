@@ -118,7 +118,7 @@ final class VoicePlayer: NSObject, AVAudioPlayerDelegate {
             do {
                 try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
                 try AVAudioSession.sharedInstance().setActive(true)
-                let p = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+                let p = try Self.open(path)
                 p.enableRate = true
                 p.rate = self.speed
                 p.delegate = self
@@ -129,10 +129,34 @@ final class VoicePlayer: NSObject, AVAudioPlayerDelegate {
                 self.loading = false
                 self.resume()
             } catch {
+                Log.media.error("play \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 self.loading = false
                 self.error = "Wiedergabe nicht möglich"
             }
         }
+    }
+
+    /// Opens a file by its content, not its name: the official Talk apps send AAC/MP4 named
+    /// `.mp3`. Opened by URL, AVAudioPlayer trusts the extension (even over a type hint) and
+    /// rejects or misreads such files – 0.07 s instead of 12 s, silence. From bytes it probes.
+    private static func open(_ path: String) throws -> AVAudioPlayer {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)
+        if let hint = fileType(data) { return try AVAudioPlayer(data: data, fileTypeHint: hint.rawValue) }
+        return try AVAudioPlayer(data: data)
+    }
+
+    private static func fileType(_ data: Data) -> AVFileType? {
+        guard data.count >= 12 else { return nil }
+        let b = [UInt8](data.prefix(12))
+        let ascii = { (r: Range<Int>) in String(decoding: b[r], as: UTF8.self) }
+        if ascii(4..<8) == "ftyp" { return .mp4 }
+        if ascii(0..<4) == "RIFF", ascii(8..<12) == "WAVE" { return .wav }
+        if ascii(0..<4) == "caff" { return .caf }
+        if ascii(0..<4) == "FORM" { return .aiff }
+        if ascii(0..<3) == "ID3" { return .mp3 }
+        // MPEG audio frame sync; layer bits 00 would be AAC in ADTS.
+        if b[0] == 0xFF, b[1] & 0xE0 == 0xE0, b[1] & 0x06 != 0 { return .mp3 }
+        return nil
     }
 
     private func resume() {

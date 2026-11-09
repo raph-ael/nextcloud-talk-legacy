@@ -246,4 +246,58 @@ final class ChatFlowTests: XCTestCase {
         app.buttons["Schließen"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["composer"].firstMatch.waitForExistence(timeout: 5))
     }
+
+    /// The lowest voice message on screen (the newest one).
+    private func newestVoiceBubble() -> XCUIElement {
+        let bubbles = app.descendants(matching: .any).matching(identifier: "voice-bubble")
+        XCTAssertTrue(bubbles.firstMatch.waitForExistence(timeout: 15), "no voice message on screen")
+        let screen = app.windows.firstMatch.frame
+        let visible = bubbles.allElementsBoundByIndex.filter { $0.exists && screen.intersects($0.frame) && $0.frame.height > 0 }
+        return visible.max(by: { $0.frame.maxY < $1.frame.maxY }) ?? bubbles.firstMatch
+    }
+
+    /// A scroll that starts on a voice message must neither seek nor start it.
+    func testScrollOverVoiceDoesNotPlay() {
+        openTestRoom()
+        let bubble = newestVoiceBubble()
+        // Elements are bound by index and may point to another row after scrolling: compare
+        // where all voice messages are instead.
+        let all = app.descendants(matching: .any).matching(identifier: "voice-bubble")
+        let positions = { all.allElementsBoundByIndex.filter(\.exists).map(\.frame.minY).sorted() }
+        let before = positions()
+        // On the waveform: finger down moves the list down (older messages come in).
+        let start = bubble.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.35))
+        func assertNotPlaying(_ step: String) {
+            XCTAssertFalse(app.buttons["Pause"].firstMatch.exists, "\(step): playback started")
+            XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Tempo'")).firstMatch.exists,
+                           "\(step): playback started")
+            XCTAssertFalse(app.staticTexts["Wiedergabe nicht möglich"].firstMatch.exists, "\(step): playback started")
+        }
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 8, dy: 250)))
+        sleep(1)
+        assertNotPlaying("drag down")
+        shot("after-scroll")
+        XCTAssertNotEqual(positions(), before, "list did not scroll")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.1)))
+        sleep(1)
+        assertNotPlaying("drag up")
+    }
+
+    /// The newest voice message plays (TALK_EXPECT_PLAY_SECONDS: it must still play after that).
+    func testPlayNewestVoice() {
+        openTestRoom()
+        let bubble = newestVoiceBubble()
+        // The play button sits at the bubble's top left (its own accessibility frame is
+        // unreliable inside the flipped list).
+        bubble.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 20, dy: 20)).tap()
+        let pause = app.buttons["Pause"].firstMatch
+        XCTAssertTrue(pause.waitForExistence(timeout: 20), "did not start")
+        let seconds = UInt32(env["TALK_EXPECT_PLAY_SECONDS"] ?? "2") ?? 2
+        sleep(seconds)
+        shot("playing")
+        XCTAssertFalse(app.staticTexts["Wiedergabe nicht möglich"].firstMatch.exists)
+        XCTAssertTrue(pause.exists, "stopped before \(seconds) s")
+        pause.tap()
+    }
 }
