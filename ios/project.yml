@@ -1,7 +1,8 @@
 # XcodeGen spec – generate the Xcode project with `xcodegen generate` (in ios/).
 # The Rust core must be built first: `scripts/build-core.sh` (creates Generated/).
 #
-# Forks: change the bundle id / display name below.
+# Forks: change the bundle id / display name below. Device builds take the Apple team
+# from the environment: DEVELOPMENT_TEAM=XXXXXXXXXX xcodegen generate
 name: TalkLegacy
 
 options:
@@ -18,6 +19,8 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     VERSIONING_SYSTEM: apple-generic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    CODE_SIGN_STYLE: Automatic
 
 targets:
   TalkLegacy:
@@ -43,6 +46,16 @@ targets:
           - UIInterfaceOrientationPortrait
         # Only standard HTTPS/TLS → exempt from export compliance documentation.
         ITSAppUsesNonExemptEncryption: false
+        NSMicrophoneUsageDescription: Zum Aufnehmen von Sprachnachrichten.
+        NSCameraUsageDescription: Zum Aufnehmen und Senden von Fotos.
+        NSPhotoLibraryUsageDescription: Zum Senden von Fotos aus deiner Mediathek.
+        # audio: voice messages keep playing with the screen locked;
+        # processing: the outbox finishes sending after the app was left.
+        UIBackgroundModes:
+          - audio
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - org.sirplus.talk.outbox
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.sirplus.talk
@@ -52,6 +65,19 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
 
+  TalkLegacyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: TalkLegacy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.sirplus.talk.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: TalkLegacy
+
 schemes:
   TalkLegacy:
     build:
@@ -59,5 +85,9 @@ schemes:
         TalkLegacy: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - TalkLegacyUITests
     archive:
       config: Release

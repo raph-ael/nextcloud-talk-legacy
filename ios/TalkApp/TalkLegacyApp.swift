@@ -1,100 +1,101 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct TalkLegacyApp: App {
-    @State private var store = AccountStore()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @Environment(\.scenePhase) private var scenePhase
+    private var store: SessionStore { .shared }
+
+    init() {
+        // Before the store starts a session (it may schedule the outbox task right away).
+        BackgroundSender.register()
+    }
 
     var body: some Scene {
         WindowGroup {
-            if store.session != nil {
-                RoomListView(store: store)
-            } else {
-                LoginView { result in try store.login(result) }
+            ZStack {
+                switch store.phase {
+                case .loading:
+                    Talk.background.ignoresSafeArea()
+                case .loggedOut:
+                    LoginView { result in try store.login(result) }
+                case .ready:
+                    RootView(store: store)
+                }
+                ToastOverlay()
+            }
+            .tint(Talk.accent)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            store.foreground = phase == .active
+            switch phase {
+            case .active:
+                BackgroundSender.shared.enteredForeground()
+                if let token = store.activeToken { store.markVisibleRead(token) }
+            case .inactive:
+                // Screen off, app switcher, incoming call: like Signal, a recording stops as draft.
+                store.voice.interrupt()
+            case .background:
+                store.voice.interrupt()
+                BackgroundSender.shared.enteredBackground()
+            @unknown default:
+                break
             }
         }
     }
 }
 
-/// Holds the signed-in account and the state the core pushes to us.
-/// Credentials live in the Keychain.
-@MainActor
-@Observable
-final class AccountStore {
-    private(set) var account: StoredAccount?
-    private(set) var session: TalkSession?
-    private(set) var rooms: [RoomView] = []
-    private(set) var online = true
-    @ObservationIgnored private let bridge = EventBridge()
+/// Conversation list with the open chat pushed on top; the store's active token is the
+/// single source of truth (notification taps open a chat the same way).
+struct RootView: View {
+    @Bindable var store: SessionStore
 
-    init() {
-        bridge.store = self
-        if let saved = Keychain.loadAccount() {
-            start(saved)
-        }
-    }
-
-    func login(_ result: LoginResult) throws {
-        let saved = StoredAccount(server: result.server, loginName: result.loginName, appPassword: result.appPassword)
-        Keychain.saveAccount(saved)
-        start(saved)
-    }
-
-    func logout() {
-        let s = session
-        Keychain.deleteAccount()
-        session = nil
-        account = nil
-        rooms = []
-        Task { try? await s?.logout() }
-    }
-
-    func refresh() async {
-        try? await session?.refreshRooms()
-    }
-
-    private func start(_ saved: StoredAccount) {
-        guard let s = try? TalkSession(
-            server: saved.server, user: saved.loginName, appPassword: saved.appPassword,
-            platform: .ios, listener: bridge
-        ) else { return }
-        account = saved
-        session = s
-        Task {
-            do {
-                try await s.start()
-            } catch CoreError.Unauthorized {
-                self.logout()
-            } catch {
-                // Offline: the core retries in the background.
+    private var path: Binding<[String]> {
+        Binding(
+            get: { store.activeToken.map { [$0] } ?? [] },
+            set: { new in
+                if let token = new.last { store.openRoom(token) } else { store.closeRoom() }
             }
-        }
+        )
     }
 
-    fileprivate func handle(_ event: CoreEvent) {
-        switch event {
-        case .roomsChanged(let rooms):
-            self.rooms = rooms
-        case .connection(let online):
-            self.online = online
-        case .authFailed:
-            Keychain.deleteAccount()
-            session?.shutdown()
-            session = nil
-            account = nil
-            rooms = []
-        case .messagesAdded, .messagesUpdated, .readStatus:
-            break // chat view: next iteration
+    var body: some View {
+        NavigationStack(path: path) {
+            RoomListView(store: store)
+                .navigationDestination(for: String.self) { token in
+                    ChatView(store: store, token: token)
+                }
         }
     }
 }
 
-/// Receives core events on a Rust thread and forwards them to the main actor.
-private final class EventBridge: CoreListener, @unchecked Sendable {
-    weak var store: AccountStore?
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
 
-    func onEvent(event: CoreEvent) {
-        Task { @MainActor [weak self] in
-            self?.store?.handle(event)
+    /// In front: show the failure banner unless that chat is open.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        let token = notification.request.content.userInfo["token"] as? String
+        let open = await MainActor.run { SessionStore.shared.activeToken }
+        return token != nil && token == open ? [] : [.banner, .sound]
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard let token = response.notification.request.content.userInfo["token"] as? String else { return }
+        await MainActor.run {
+            let store = SessionStore.shared
+            if store.activeToken != token {
+                store.closeRoom()
+                store.openRoom(token)
+            }
         }
     }
 }

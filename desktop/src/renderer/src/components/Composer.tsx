@@ -27,6 +27,9 @@ import {
 import { DraftBar, MicIcon, RecordingBar } from './Voice'
 
 // Emoji data is large: loaded on first use, not at startup.
+const IS_MAC = /Mac/.test(navigator.userAgent)
+const VOICE_HINT = IS_MAC ? 'Sprachnachricht aufnehmen (⇧⌘Y)' : 'Sprachnachricht aufnehmen (Strg+Umschalt+Y)'
+
 const EmojiPicker = lazy(() => import('./EmojiPicker').then((m) => ({ default: m.EmojiPicker })))
 
 /** Text and attachments not sent yet, per conversation (kept while switching chats). */
@@ -319,7 +322,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
               <button
                 className="icon-button"
                 aria-label="Sprachnachricht aufnehmen"
-                title="Sprachnachricht aufnehmen (Strg+Umschalt+Y)"
+                title={VOICE_HINT}
                 onClick={() => void startRecording(token)}
               >
                 <MicIcon />

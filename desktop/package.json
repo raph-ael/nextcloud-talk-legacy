@@ -14,7 +14,8 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "electron-vite preview",
-    "dist:linux": "npm run core:release && electron-vite build && electron-builder --linux"
+    "dist:linux": "npm run core:release && electron-vite build && electron-builder --linux",
+    "dist:mac": "PROFILE=release UNIVERSAL=1 scripts/build-core.sh && electron-vite build && electron-builder --mac --universal"
   },
   "build": {
     "appId": "org.sirplus.talk",
@@ -38,9 +39,15 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
       "category": "public.app-category.social-networking",
+      "icon": "resources/icon.icns",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "x64ArchFiles": "Contents/Resources/native/talk_node.node",
+      "minimumSystemVersion": "12.0",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Zum Aufnehmen von Sprachnachrichten."
       }
@@ -49,6 +56,9 @@
       "target": [
         "nsis"
       ]
+    },
+    "dmg": {
+      "title": "${productName}"
     }
   },
   "devDependencies": {

@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   nativeTheme,
   Notification,
   powerMonitor,
@@ -392,7 +393,8 @@ async function stagePath(source: string, name: string, mime: string): Promise<St
 // --- Window ------------------------------------------------------------------------
 
 function showWindow(): void {
-  if (!win) return
+  // macOS keeps running without a window: a notification click or a second launch reopens it.
+  if (!win) return createWindow()
   if (win.isMinimized()) win.restore()
   win.show()
   win.focus()
@@ -646,14 +648,77 @@ async function rangeResponse(path: string, type: string, request: Request): Prom
   return new Response(body, { status: m ? 206 : 200, headers })
 }
 
+let quitting = false
+let readyToQuit = false
+
 /** Gives the outbox a moment to deliver what is in flight before the process ends. */
 async function quitAfterOutbox(): Promise<void> {
+  if (quitting) return
+  quitting = true
+  finishRecording()
   const s = session
   if (s && s.outboxUnsent() > 0) {
     await Promise.race([s.waitOutboxIdle(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined)
   }
   s?.shutdown()
+  readyToQuit = true
   app.quit()
+}
+
+/** Standard macOS menu bar (app, edit, view, window); other platforms keep no menu. */
+function macMenu(): Menu {
+  const name = app.getName()
+  return Menu.buildFromTemplate([
+    {
+      label: name,
+      submenu: [
+        { role: 'about', label: `Über ${name}` },
+        { type: 'separator' },
+        { role: 'services', label: 'Dienste' },
+        { type: 'separator' },
+        { role: 'hide', label: `${name} ausblenden` },
+        { role: 'hideOthers', label: 'Andere ausblenden' },
+        { role: 'unhide', label: 'Alle einblenden' },
+        { type: 'separator' },
+        { role: 'quit', label: `${name} beenden` },
+      ],
+    },
+    {
+      label: 'Bearbeiten',
+      submenu: [
+        { role: 'undo', label: 'Widerrufen' },
+        { role: 'redo', label: 'Wiederholen' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Ausschneiden' },
+        { role: 'copy', label: 'Kopieren' },
+        { role: 'paste', label: 'Einsetzen' },
+        { role: 'pasteAndMatchStyle', label: 'Einsetzen und Stil anpassen' },
+        { role: 'selectAll', label: 'Alles auswählen' },
+      ],
+    },
+    {
+      label: 'Darstellung',
+      submenu: [
+        { role: 'resetZoom', label: 'Originalgröße' },
+        { role: 'zoomIn', label: 'Vergrößern' },
+        { role: 'zoomOut', label: 'Verkleinern' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: 'Vollbild' },
+        ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' as const }]),
+      ],
+    },
+    {
+      label: 'Fenster',
+      role: 'window',
+      submenu: [
+        { role: 'minimize', label: 'Im Dock ablegen' },
+        { role: 'zoom', label: 'Zoomen' },
+        { role: 'close', label: 'Fenster schließen' },
+        { type: 'separator' },
+        { role: 'front', label: 'Alle nach vorne bringen' },
+      ],
+    },
+  ])
 }
 
 // --- App lifecycle -----------------------------------------------------------------
@@ -662,9 +727,16 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', showWindow)
-  app.setAppUserModelId('org.sirplus.talk')
+  if (process.platform === 'win32') app.setAppUserModelId('org.sirplus.talk')
+  // Cmd+Q, the dock menu or logout on macOS: deliver what is in flight first.
+  app.on('before-quit', (e) => {
+    if (readyToQuit) return
+    e.preventDefault()
+    void quitAfterOutbox()
+  })
 
   void app.whenReady().then(() => {
+    if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu())
     registerIpc()
     registerAvatarProtocol()
     registerMediaProtocol()
