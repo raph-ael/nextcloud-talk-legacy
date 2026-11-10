@@ -110,7 +110,11 @@ impl Fcm {
             Ok(r) => {
                 let status = r.status();
                 let text = r.text().await.unwrap_or_default();
-                if status == reqwest::StatusCode::NOT_FOUND || text.contains("UNREGISTERED") {
+                // Gone or never valid: the server should forget the device.
+                if status == reqwest::StatusCode::NOT_FOUND
+                    || text.contains("UNREGISTERED")
+                    || text.contains("not a valid FCM registration token")
+                {
                     tracing::info!("FCM: token unregistered");
                     Outcome::Unknown
                 } else {
