@@ -25,8 +25,17 @@ class CallService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val controller = (application as TalkApplication).sessions.calls
-        val notification = CallNotifications.ongoing(this, controller.ui.value)
-        val mic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val call = controller.ui.value
+        val ringing = intent?.getBooleanExtra(EXTRA_RINGING, false) == true
+        if (ringing && call == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val id = if (ringing) CallNotifications.ID_INCOMING else CallNotifications.ID_ONGOING
+        val notification = if (ringing) CallNotifications.incoming(this, call!!) else CallNotifications.ongoing(this, call)
+        // Ringing needs no microphone yet; the call itself does.
+        val mic = !ringing &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val types = if (Build.VERSION.SDK_INT >= 30) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
         } else if (Build.VERSION.SDK_INT >= 29) {
@@ -35,7 +44,8 @@ class CallService : Service() {
             0
         }
         try {
-            ServiceCompat.startForeground(this, CallNotifications.ID_ONGOING, notification, types)
+            ServiceCompat.startForeground(this, id, notification, types)
+            Log.i(TAG, if (ringing) "foreground (ringing)" else "foreground (call)")
         } catch (e: Exception) {
             // E.g. started while in the background without an exemption: the call still
             // runs while the app is visible, but say so in the log.
@@ -54,12 +64,26 @@ class CallService : Service() {
     companion object {
         private const val TAG = "TalkCallService"
 
-        fun start(context: Context) {
-            try {
-                ContextCompat.startForegroundService(context, Intent(context, CallService::class.java))
-            } catch (e: Exception) {
-                Log.e(TAG, "could not start", e)
-            }
+        private const val EXTRA_RINGING = "ringing"
+
+        /** The call has audio: foreground with microphone. */
+        fun start(context: Context) = start(context, ringing = false)
+
+        /**
+         * Ringing while the app is in the background: keeps the process from being frozen,
+         * so the core can stop the ringing (answered elsewhere, missed). May be refused
+         * from the background; the caller still shows the notification.
+         */
+        fun startRinging(context: Context): Boolean = start(context, ringing = true)
+
+        private fun start(context: Context, ringing: Boolean): Boolean = try {
+            ContextCompat.startForegroundService(
+                context, Intent(context, CallService::class.java).putExtra(EXTRA_RINGING, ringing),
+            )
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "could not start (ringing=$ringing)", e)
+            false
         }
 
         fun stop(context: Context) {

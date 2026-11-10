@@ -13,7 +13,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import uniffi.talk_ffi.CallView
 import kotlinx.coroutines.delay
 import org.sirplus.talk.MainActivity
 import org.sirplus.talk.TalkApplication
@@ -29,6 +33,9 @@ import uniffi.talk_ffi.CallState
 class CallActivity : ComponentActivity() {
     private val sessions get() = (application as TalkApplication).sessions
     private var acceptRequested by mutableStateOf(false)
+    /** A call was shown since the last (re)start: its end closes the screen. */
+    private var seen = false
+    private var startWait: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,12 +48,14 @@ class CallActivity : ComponentActivity() {
                 if (sessions.calls.ui.value?.state != CallState.INCOMING) minimize()
             }
         })
+        // Not tied to the lifecycle: also when the screen is in the background, the end
+        // of the call has to close it (a stale instance would come back on the next call).
+        lifecycleScope.launch { sessions.calls.ui.collect { onCall(it) } }
         setContent {
             TalkTheme(dark = true) {
-                val call by sessions.calls.ui.collectAsStateWithLifecycle()
-                val routing by sessions.calls.audio.routing.collectAsStateWithLifecycle()
+                val call by sessions.calls.ui.collectAsState()
+                val routing by sessions.calls.audio.routing.collectAsState()
                 val withPermissions = rememberCallPermissions()
-                var seen by remember { mutableStateOf(false) }
                 val current = call
 
                 // Accept from the notification: once the microphone is allowed.
@@ -55,15 +64,6 @@ class CallActivity : ComponentActivity() {
                         acceptRequested = false
                         val token = current.token
                         withPermissions { sessions.calls.accept(token) }
-                    }
-                }
-                LaunchedEffect(current == null) {
-                    if (current != null) {
-                        seen = true
-                    } else {
-                        // Opened for a call that is still starting: give it a moment.
-                        if (!seen) delay(STARTUP_WAIT_MS)
-                        if (sessions.calls.ui.value == null) finishAndRemoveTask()
                     }
                 }
                 if (current != null) {
@@ -84,8 +84,25 @@ class CallActivity : ComponentActivity() {
         }
     }
 
+    private fun onCall(call: CallView?) {
+        if (call != null) {
+            seen = true
+            startWait?.cancel()
+        } else if (seen) {
+            finishAndRemoveTask()
+        } else if (startWait?.isActive != true) {
+            // Opened for a call that is still starting: give it a moment.
+            startWait = lifecycleScope.launch {
+                delay(STARTUP_WAIT_MS)
+                if (sessions.calls.ui.value == null) finishAndRemoveTask()
+            }
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        seen = false
+        onCall(sessions.calls.ui.value)
         if (intent.action == ACTION_ACCEPT) acceptRequested = true
     }
 

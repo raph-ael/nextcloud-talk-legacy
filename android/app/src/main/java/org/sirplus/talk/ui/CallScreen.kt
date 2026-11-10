@@ -63,7 +63,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -128,12 +131,20 @@ fun CallScreen(
 
 @Composable
 private fun CallBackground(avatar: ImageBitmap?) {
-    if (avatar != null) {
+    // A few pixels of the avatar, scaled up and blurred: only its colors remain (no
+    // giant initials), like Signal's call background.
+    val wash = remember(avatar) {
+        avatar?.let {
+            android.graphics.Bitmap.createScaledBitmap(it.asAndroidBitmap(), 4, 4, true).asImageBitmap()
+        }
+    }
+    if (wash != null) {
         Image(
-            bitmap = avatar,
+            bitmap = wash,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(28.dp) else Modifier.alpha(0.5f)),
+            filterQuality = FilterQuality.Low,
+            modifier = Modifier.fillMaxSize().then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(48.dp) else Modifier),
         )
     }
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)))

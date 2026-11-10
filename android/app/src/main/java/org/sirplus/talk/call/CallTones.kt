@@ -39,7 +39,7 @@ class CallTones(private val context: Context) {
         if (ring != null || vibrating) return
         val mode = audio.ringerMode
         if (mode == AudioManager.RINGER_MODE_NORMAL) {
-            ring = loop(ringtone(), AudioAttributes.USAGE_NOTIFICATION_RINGTONE, AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            ring = loop(ringtone(), AudioAttributes.USAGE_NOTIFICATION_RINGTONE, AudioAttributes.CONTENT_TYPE_SONIFICATION, RING_LOOPS)
         }
         if (mode != AudioManager.RINGER_MODE_SILENT) vibrate()
     }
@@ -54,7 +54,7 @@ class CallTones(private val context: Context) {
     /** Outgoing 1:1 call rings on the other side. */
     fun startRingback() {
         if (ringback != null) return
-        ringback = loop(ringbackTone(), AudioAttributes.USAGE_VOICE_COMMUNICATION, AudioAttributes.CONTENT_TYPE_SPEECH)
+        ringback = loop(ringbackTone(), AudioAttributes.USAGE_VOICE_COMMUNICATION, AudioAttributes.CONTENT_TYPE_SPEECH, RINGBACK_LOOPS)
     }
 
     fun stopRingback() {
@@ -94,9 +94,13 @@ class CallTones(private val context: Context) {
         null
     }
 
-    private fun loop(pcm: ShortArray, usage: Int, content: Int): AudioTrack? =
+    /**
+     * Repeats [pcm] [loops] more times. Never endless: if the process is frozen in the
+     * background, the system keeps playing a looping track on its own.
+     */
+    private fun loop(pcm: ShortArray, usage: Int, content: Int, loops: Int): AudioTrack? =
         track(pcm, usage, content)?.apply {
-            setLoopPoints(0, pcm.size, -1)
+            setLoopPoints(0, pcm.size, loops)
             play()
         }
 
@@ -113,7 +117,9 @@ class CallTones(private val context: Context) {
     private fun vibrate() {
         val v = vibrator ?: return
         if (!v.hasVibrator()) return
-        val effect = VibrationEffect.createWaveform(longArrayOf(0, 1000, 1000), 0)
+        // 1 s on / 1 s off for about a minute, not endlessly (see [loop]).
+        val pattern = LongArray(1 + 2 * VIBRATE_CYCLES) { if (it == 0) 0L else 1000L }
+        val effect = VibrationEffect.createWaveform(pattern, -1)
         if (Build.VERSION.SDK_INT >= 33) {
             v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_RINGTONE))
         } else {
@@ -128,6 +134,11 @@ class CallTones(private val context: Context) {
     private companion object {
         const val TAG = "TalkTones"
         const val RATE = 24_000
+        /** Ringtone loop is 3 s: ~63 s in total. */
+        const val RING_LOOPS = 20
+        /** Ringback loop is 5 s: ~65 s in total (the core gives up after 60 s). */
+        const val RINGBACK_LOOPS = 12
+        const val VIBRATE_CYCLES = 32
 
         /** Telephone ringback: 425 Hz, 1 s on, 4 s off (soft edges against clicks). */
         fun ringbackTone(): ShortArray {

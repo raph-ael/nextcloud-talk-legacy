@@ -59,6 +59,8 @@ class CallController(
     private var last: CallView? = null
     private var endHold: Job? = null
     private var audioActive = false
+    /** The service runs only to keep the process awake while ringing. */
+    private var ringService = false
     private var phoneMuted = false
     private var telephonyCallback: Any? = null
 
@@ -66,7 +68,7 @@ class CallController(
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) {
                 // Ringing while the app goes to the background: the notification takes over.
-                last?.takeIf { it.state == CallState.INCOMING }?.let { CallNotifications.showIncoming(context, it) }
+                last?.takeIf { it.state == CallState.INCOMING }?.let { ringInBackground(it) }
             }
         })
     }
@@ -78,6 +80,7 @@ class CallController(
         last = call
         if (call == null) {
             tones.stopAll()
+            stopRingService()
             CallNotifications.cancelIncoming(context)
             if (_ui.value?.state != CallState.ENDED) _ui.value = null
             if (audioActive) {
@@ -97,6 +100,7 @@ class CallController(
             if (prev?.id != call.id || prev.state != CallState.INCOMING) onIncoming(call)
         } else {
             tones.stopRinging()
+            stopRingService()
             CallNotifications.cancelIncoming(context)
         }
         if (call.state == CallState.RINGING && !call.isGroup && call.direction == CallDirection.OUTGOING) {
@@ -118,12 +122,24 @@ class CallController(
                 Intent(context, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             )
         } else {
-            CallNotifications.showIncoming(context, call)
+            ringInBackground(call)
         }
+    }
+
+    private fun ringInBackground(call: CallView) {
+        CallNotifications.showIncoming(context, call)
+        if (!audioActive && !ringService) ringService = CallService.startRinging(context)
+    }
+
+    private fun stopRingService() {
+        if (!ringService) return
+        ringService = false
+        if (!audioActive) CallService.stop(context)
     }
 
     private fun onEnded(call: CallView, prev: CallView?) {
         tones.stopAll()
+        stopRingService()
         CallNotifications.cancelIncoming(context)
         val reason = call.endReason
         val rangHere = prev?.state == CallState.INCOMING
@@ -166,6 +182,7 @@ class CallController(
             if (audioActive) return@post
             Log.i(TAG, "startAudio $callId")
             audioActive = true
+            ringService = false
             stopVoice()
             tones.stopRinging()
             audio.start()

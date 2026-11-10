@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -27,6 +28,8 @@ object CallNotifications {
     const val ID_INCOMING = 2001
     const val ID_ONGOING = 2002
     private const val ID_MISSED_BASE = 2100
+    /** The core stops ringing after 60 s; a little more for safety. */
+    const val RING_TIMEOUT_MS = 65_000L
 
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -43,6 +46,7 @@ object CallNotifications {
             NotificationChannel(CHANNEL_ONGOING, "Laufender Anruf", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Solange ein Anruf läuft"
                 setShowBadge(false)
+                setSound(null, null)
             },
         )
         nm.createNotificationChannel(
@@ -82,8 +86,14 @@ object CallNotifications {
     @SuppressLint("MissingPermission") // checked by allowed()
     fun showIncoming(context: Context, call: CallView) {
         if (!allowed(context)) return
+        runCatching { NotificationManagerCompat.from(context).notify(ID_INCOMING, incoming(context, call)) }
+            .onFailure { Log.e("TalkCall", "incoming notification", it) }
+    }
+
+    /** Ringing notification (also the foreground notification while ringing in the background). */
+    fun incoming(context: Context, call: CallView): Notification {
         val full = callActivity(context, accept = false)
-        val n = NotificationCompat.Builder(context, CHANNEL_INCOMING)
+        return NotificationCompat.Builder(context, CHANNEL_INCOMING)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle(person(call).name)
             .setContentText(if (call.isGroup) "Gruppenanruf" else "Talk-Anruf")
@@ -91,7 +101,12 @@ object CallNotifications {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .setSilent(true)
+            // No setSilent(): NotificationCompat implements it as a group alert behavior
+            // that suppresses heads-up and the full-screen intent. The channel is quiet
+            // anyway (the app rings itself).
+            .setOnlyAlertOnce(true)
+            // Even if the process is frozen, the ringing notification goes away.
+            .setTimeoutAfter(RING_TIMEOUT_MS)
             .setContentIntent(full)
             .setFullScreenIntent(full, true)
             .setStyle(
@@ -102,7 +117,6 @@ object CallNotifications {
                 ),
             )
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(ID_INCOMING, n) }
     }
 
     fun cancelIncoming(context: Context) {
