@@ -142,6 +142,19 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Push check: registers this account with a device key at the server and the proxy,
+    /// optionally asks the server for a test push (watch the proxy log), then unregisters
+    PushTest {
+        /// Push proxy, e.g. https://push.example.org
+        #[arg(long)]
+        proxy: String,
+        /// FCM token (or "<apns> <pushkit>" for iOS); a fake one tests the server → proxy path
+        #[arg(long, default_value = "talk-cli-fake-token")]
+        token: String,
+        /// Keep the registration (do not unregister at the end)
+        #[arg(long)]
+        keep: bool,
+    },
     /// Cache check: shows the cached state (timed), then syncs a chat and shows the delta
     Cache {
         token: Option<String>,
@@ -193,12 +206,26 @@ async fn main() -> Result<()> {
     if let Cmd::Call { .. } = &cli.cmd {
         return call_cmd(&cli).await;
     }
+    if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
+        let engine = Engine::new(client.clone(), Arc::new(talk_core_null_sink()), None);
+        let key = talk_core::push::generate_key()?;
+        let reg = engine.register_push(token, proxy, &key).await?;
+        println!("registriert: device {}… bei {}", &reg.device_identifier[..12.min(reg.device_identifier.len())], reg.proxy);
+        let r = client.test_push().await;
+        println!("Test-Push angefordert: {r:?}");
+        if !*keep {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            engine.unregister_push().await?;
+            println!("abgemeldet");
+        }
+        return Ok(());
+    }
     if let Cmd::Cache { token, lines } = &cli.cmd {
         return run_cache(&cli, client, token.as_deref(), *lines).await;
     }
 
     match cli.cmd {
-        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } | Cmd::Call { .. }
+        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } | Cmd::Call { .. } | Cmd::PushTest { .. }
         | Cmd::Voice { .. }
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
@@ -353,6 +380,14 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
 #[cfg(not(feature = "call-bot"))]
 async fn call_cmd(_cli: &Cli) -> Result<()> {
     bail!("talk-cli ohne Anruf-Bot gebaut: cargo run -p talk-cli --features call-bot -- call …")
+}
+
+struct NullSink;
+impl EventSink for NullSink {
+    fn emit(&self, _: Event) {}
+}
+fn talk_core_null_sink() -> NullSink {
+    NullSink
 }
 
 /// Prints outbox state changes (deduplicated per message).

@@ -771,6 +771,12 @@ impl TalkClient {
         Ok((status, env.ocs.data))
     }
 
+    /// Asks the server to send a test push to this user's devices (capability `test-push`).
+    pub async fn test_push(&self) -> Result<serde_json::Value> {
+        let rb = self.request(Method::POST, "/ocs/v2.php/apps/notifications/api/v3/test/self");
+        Ok(self.ocs::<serde_json::Value>(rb).await?.0)
+    }
+
     pub async fn unregister_push_device(&self) -> Result<()> {
         check(self.request(Method::DELETE, PUSH_API).send().await?).await?;
         Ok(())
