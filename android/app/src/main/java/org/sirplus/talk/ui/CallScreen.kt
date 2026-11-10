@@ -63,6 +63,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -92,6 +94,12 @@ import uniffi.talk_ffi.EndReason
 private val Decline = Color(0xFFE5483F)
 private val Accept = Color(0xFF2FB25B)
 private val Speaking = Color(0xFF6FD08C)
+private val WashFilter = ColorFilter.colorMatrix(
+    ColorMatrix().apply {
+        setToSaturation(1.8f)
+        timesAssign(ColorMatrix(floatArrayOf(0.6f, 0f, 0f, 0f, 0f, 0f, 0.6f, 0f, 0f, 0f, 0f, 0f, 0.6f, 0f, 0f, 0f, 0f, 0f, 1f, 0f)))
+    },
+)
 
 /**
  * The call screen, Signal's layout: blurred avatar behind a 40 % dimming; ringing with
@@ -120,7 +128,7 @@ fun CallScreen(
     val title = if (call.isGroup) call.roomName else call.callerName.ifBlank { call.roomName }
 
     Box(Modifier.fillMaxSize().background(Color(0xFF1B1B1D))) {
-        CallBackground(avatar)
+        CallBackground(avatar, colorFor(title))
         if (call.state == CallState.INCOMING) {
             Incoming(call, title, room?.token, room?.avatarVersion.orEmpty(), sessions, onAccept, onDecline)
         } else {
@@ -130,7 +138,7 @@ fun CallScreen(
 }
 
 @Composable
-private fun CallBackground(avatar: ImageBitmap?) {
+private fun CallBackground(avatar: ImageBitmap?, fallback: Color) {
     // A few pixels of the avatar, scaled up and blurred: only its colors remain (no
     // giant initials), like Signal's call background.
     val wash = remember(avatar) {
@@ -144,8 +152,13 @@ private fun CallBackground(avatar: ImageBitmap?) {
             contentDescription = null,
             contentScale = ContentScale.Crop,
             filterQuality = FilterQuality.Low,
+            // Pastel server avatars would turn grey under the dimming: richer and darker.
+            colorFilter = WashFilter,
             modifier = Modifier.fillMaxSize().then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(48.dp) else Modifier),
         )
+    } else {
+        // No bitmap avatar (initials): its color, darkened like the wash.
+        Box(Modifier.fillMaxSize().background(fallback.copy(red = fallback.red * 0.6f, green = fallback.green * 0.6f, blue = fallback.blue * 0.6f)))
     }
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)))
 }
