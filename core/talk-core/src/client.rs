@@ -754,6 +754,56 @@ impl TalkClient {
     }
 }
 
+// --- push ----------------------------------------------------------------------------
+
+const PUSH_API: &str = "/ocs/v2.php/apps/notifications/api/v2/push";
+
+impl TalkClient {
+    /// `POST notifications/api/v2/push`: status 200 (unchanged) or 201 (new, register at
+    /// the proxy) and `{publicKey, deviceIdentifier, signature}`.
+    pub async fn register_push_device(&self, token_hash: &str, device_public_key: &str, proxy: &str) -> Result<(u16, serde_json::Value)> {
+        let rb = self
+            .request(Method::POST, PUSH_API)
+            .form(&[("pushTokenHash", token_hash), ("devicePublicKey", device_public_key), ("proxyServer", proxy)]);
+        let resp = check(rb.send().await?).await?;
+        let status = resp.status().as_u16();
+        let env: OcsEnvelope<serde_json::Value> = resp.json().await?;
+        Ok((status, env.ocs.data))
+    }
+
+    pub async fn unregister_push_device(&self) -> Result<()> {
+        check(self.request(Method::DELETE, PUSH_API).send().await?).await?;
+        Ok(())
+    }
+
+    pub async fn register_at_proxy(&self, proxy: &str, push_token: &str, device: &str, signature: &str, user_key: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{proxy}/devices"))
+            .form(&[
+                ("pushToken", push_token),
+                ("deviceIdentifier", device),
+                ("deviceIdentifierSignature", signature),
+                ("userPublicKey", user_key),
+            ])
+            .send()
+            .await?;
+        check(resp).await?;
+        Ok(())
+    }
+
+    pub async fn unregister_at_proxy(&self, proxy: &str, device: &str, signature: &str, user_key: &str) -> Result<()> {
+        let resp = self
+            .http
+            .delete(format!("{proxy}/devices"))
+            .form(&[("deviceIdentifier", device), ("deviceIdentifierSignature", signature), ("userPublicKey", user_key)])
+            .send()
+            .await?;
+        check(resp).await?;
+        Ok(())
+    }
+}
+
 /// Random reference id for optimistic sends (sha256 hex, as the official clients do).
 pub fn new_reference_id() -> String {
     let digest = Sha256::digest(uuid::Uuid::new_v4().as_bytes());

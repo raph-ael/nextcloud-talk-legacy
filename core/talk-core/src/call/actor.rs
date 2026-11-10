@@ -73,6 +73,8 @@ pub(crate) enum Cmd {
     Mute(bool),
     Media(MediaReport),
     NetworkChanged,
+    /// Ringing: ask the server now whether it still rings (a delete push arrived).
+    RecheckRing,
     /// Display names fetched in the background (actor id → name).
     Names(HashMap<String, String>),
 }
@@ -349,7 +351,8 @@ impl Actor {
 
     async fn ring(&mut self) -> Result<(), EndReason> {
         let deadline = tokio::time::Instant::now() + RING_TIMEOUT;
-        let mut poll_at = tokio::time::Instant::now() + RING_POLL;
+        // First check right away: a push may announce a call that is already over.
+        let mut poll_at = tokio::time::Instant::now();
         loop {
             tokio::select! {
                 cmd = self.rx.recv() => match cmd {
@@ -370,6 +373,7 @@ impl Actor {
                         return Ok(());
                     }
                     Some(Cmd::Mute(m)) => { self.muted = m; self.view.muted = m; self.emit(); }
+                    Some(Cmd::RecheckRing) => poll_at = tokio::time::Instant::now(),
                     Some(_) => {}
                 },
                 _ = sleep_until(poll_at) => {
@@ -833,7 +837,7 @@ impl Actor {
                     return Some(EndReason::Declined);
                 }
             }
-            Cmd::Accept => {}
+            Cmd::Accept | Cmd::RecheckRing => {}
             Cmd::Mute(m) => {
                 self.muted = m;
                 self.view.muted = m;

@@ -11,8 +11,10 @@ uniffi::setup_scaffolding!();
 
 mod call;
 mod log;
+mod push;
 pub use call::*;
 pub use log::*;
+pub use push::*;
 
 #[uniffi::export]
 pub fn core_version() -> String {

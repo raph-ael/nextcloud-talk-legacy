@@ -365,6 +365,10 @@ impl Engine {
         self.calls.accept(token)
     }
 
+    pub(crate) fn state_room(&self, token: &str) -> Option<Room> {
+        self.state.lock().unwrap().rooms.get(token).cloned()
+    }
+
     /// Fresh room data for a call (`hasCall` must be current); falls back to the cache.
     async fn room_info(&self, token: &str) -> Result<RoomInfo> {
         let room = match self.client.room(token).await {

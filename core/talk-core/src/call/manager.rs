@@ -12,9 +12,12 @@ use crate::client::TalkClient;
 use crate::engine::{Event, EventSink};
 use crate::error::{Error, Result};
 
-/// The same incoming call is not rung again within this time (it arrives from push,
-/// notify_push and the room list).
-const RING_DEDUP: Duration = Duration::from_secs(90);
+/// The same incoming call (one notification) is not rung twice: it arrives from push,
+/// notify_push and the room list, and a declined call keeps its notification. A new call
+/// has a new notification id and rings at once (call-back right after a missed call).
+const RING_DEDUP: Duration = Duration::from_secs(10 * 60);
+/// Without a notification id (unknown source) only briefly.
+const RING_DEDUP_UNKEYED: Duration = Duration::from_secs(30);
 
 /// What the engine knows about a conversation when a call starts.
 pub(crate) struct RoomInfo {
@@ -28,7 +31,7 @@ pub(crate) struct RoomInfo {
 pub(crate) struct CallManager {
     media: Arc<RwLock<Option<Arc<dyn MediaEngine>>>>,
     shared: Arc<Shared>,
-    /// token → when it last rang (or was declined) here.
+    /// "token#notification id" → when it rang here (see [`RING_DEDUP`]).
     rung: Mutex<HashMap<String, Instant>>,
 }
 
@@ -129,15 +132,18 @@ impl CallManager {
         me: String,
         room: RoomInfo,
         caller_name: String,
+        notification_id: i64,
+        call_id: Option<String>,
         runtime: &tokio::runtime::Handle,
     ) -> bool {
         {
+            let key = format!("{}#{notification_id}", room.token);
             let mut rung = self.rung.lock().unwrap();
-            rung.retain(|_, t| t.elapsed() < RING_DEDUP);
-            if rung.contains_key(&room.token) {
+            rung.retain(|k, t| t.elapsed() < if k.ends_with("#0") { RING_DEDUP_UNKEYED } else { RING_DEDUP });
+            if rung.contains_key(&key) {
                 return false;
             }
-            rung.insert(room.token.clone(), Instant::now());
+            rung.insert(key, Instant::now());
             if self.busy() {
                 // In a call already: no second ring, but tell the user (like Signal's
                 // "missed call" while busy).
@@ -152,7 +158,7 @@ impl CallManager {
             }
         }
         let view = CallView {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: call_id.filter(|c| !c.is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             token: room.token,
             room_name: room.name,
             is_group: room.is_group,
@@ -204,6 +210,11 @@ impl CallManager {
 
     pub(crate) fn report(&self, report: MediaReport) {
         self.send(Cmd::Media(report));
+    }
+
+    /// Something changed about ringing (delete push): check the ring state now.
+    pub(crate) fn recheck_ring(&self) {
+        self.send(Cmd::RecheckRing);
     }
 
     pub(crate) fn network_changed(&self) {

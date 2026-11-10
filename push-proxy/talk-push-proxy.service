@@ -1,0 +1,22 @@
+[Unit]
+Description=Push proxy for Nextcloud push v2 (FCM/APNs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/talk-push-proxy.env
+ExecStart=/usr/local/bin/talk-push-proxy
+DynamicUser=yes
+StateDirectory=talk-push-proxy
+WorkingDirectory=/var/lib/talk-push-proxy
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+LoadCredential=fcm.json:/etc/talk-push-proxy/fcm.json
+LoadCredential=apns.p8:/etc/talk-push-proxy/apns.p8
+
+[Install]
+WantedBy=multi-user.target

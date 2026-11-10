@@ -10,7 +10,7 @@
 //! - [`voice`]: voice messages (MP3 recording, drafts, downloads, waveforms)
 //! - [`call`]: audio calls over the HPB (signaling, call state machine; media via [`MediaEngine`])
 //!
-//! Upcoming: push.
+//! - [`push`]: push notifications (device key, registration, decryption)
 
 pub mod call;
 pub(crate) mod cache;
@@ -20,6 +20,7 @@ pub mod error;
 pub mod login;
 pub mod models;
 pub mod outbox;
+pub mod push;
 pub mod voice;
 
 pub use call::{
@@ -31,6 +32,7 @@ pub use client::{
 };
 pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReplyPreview, RoomView};
 pub use error::{Error, Result};
+pub use push::{PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
 pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};

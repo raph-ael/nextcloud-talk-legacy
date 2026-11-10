@@ -21,6 +21,7 @@ const NOTIFY_IDLE: Duration = Duration::from_secs(120);
 struct CallNotification {
     token: String,
     caller: String,
+    id: i64,
 }
 
 fn call_notifications(list: &[Value]) -> Vec<CallNotification> {
@@ -33,7 +34,8 @@ fn call_notifications(list: &[Value]) -> Vec<CallNotification> {
                 .or_else(|| n["subjectRichParameters"]["call"]["name"].as_str())
                 .unwrap_or_default()
                 .to_string();
-            Some(CallNotification { token, caller })
+            let id = n["notification_id"].as_i64().unwrap_or(0);
+            Some(CallNotification { token, caller, id })
         })
         .collect()
 }
@@ -58,29 +60,56 @@ impl Engine {
                 Ok(RingState::Ringing) => {}
                 _ => continue,
             }
-            let room = match self.client.room(&n.token).await {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            if !room.has_call {
-                continue;
-            }
-            let info = RoomInfo {
-                token: room.token.clone(),
-                name: room.display_name.clone(),
-                is_group: !matches!(room.room_type, RoomType::OneToOne | RoomType::FormerOneToOne),
-                has_call: true,
-            };
-            let caller = if n.caller.is_empty() { room.display_name.clone() } else { n.caller };
-            let Some(rt) = self.runtime.get().cloned() else { return };
-            if self
-                .calls
-                .ring(self.client.clone(), self.sink.clone(), self.user_id(), info, caller, &rt)
-            {
-                tracing::info!(token = %n.token, "incoming call");
+            if self.ring_token(&n.token, &n.caller, n.id, None, true).await {
                 return;
             }
         }
+    }
+
+    /// Rings for a call in `token` (from a push or a notification). `call_id`: id the
+    /// platform already used (iOS: the CallKit UUID reported from PushKit). `checked`:
+    /// the ring state was verified already; otherwise the ringing call checks it at once
+    /// and ends (`missed`) if the call is over, so a reported CallKit call always ends.
+    pub(crate) async fn ring_token(
+        &self,
+        token: &str,
+        caller: &str,
+        notification_id: i64,
+        call_id: Option<String>,
+        checked: bool,
+    ) -> bool {
+        let room = match self.client.room(token).await {
+            Ok(r) => Some(r),
+            Err(_) => self.state_room(token),
+        };
+        let info = match &room {
+            Some(r) => {
+                if checked && !r.has_call {
+                    return false;
+                }
+                RoomInfo {
+                    token: r.token.clone(),
+                    name: r.display_name.clone(),
+                    is_group: !matches!(r.room_type, RoomType::OneToOne | RoomType::FormerOneToOne),
+                    has_call: true,
+                }
+            }
+            None => RoomInfo {
+                token: token.to_string(),
+                name: caller.to_string(),
+                is_group: false,
+                has_call: true,
+            },
+        };
+        let caller = if caller.is_empty() { info.name.clone() } else { caller.to_string() };
+        let Some(rt) = self.runtime.get().cloned() else { return false };
+        let rang = self
+            .calls
+            .ring(self.client.clone(), self.sink.clone(), self.user_id(), info, caller, notification_id, call_id, &rt);
+        if rang {
+            tracing::info!(token, "incoming call");
+        }
+        rang
     }
 
     pub(crate) fn spawn_incoming_check(&self) {
@@ -180,11 +209,11 @@ mod tests {
     fn finds_call_notifications() {
         let list = vec![
             json!({"app":"spreed","object_type":"chat","object_id":"x"}),
-            json!({"app":"spreed","object_type":"call","object_id":"tok",
+            json!({"app":"spreed","object_type":"call","object_id":"tok","notification_id":7,
                    "subjectRichParameters":{"user":{"name":"Bob"},"call":{"name":"Bob"}}}),
         ];
         let calls = call_notifications(&list);
         assert_eq!(calls.len(), 1);
-        assert_eq!((calls[0].token.as_str(), calls[0].caller.as_str()), ("tok", "Bob"));
+        assert_eq!((calls[0].token.as_str(), calls[0].caller.as_str(), calls[0].id), ("tok", "Bob", 7));
     }
 }
