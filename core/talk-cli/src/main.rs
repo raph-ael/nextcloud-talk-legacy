@@ -207,17 +207,30 @@ async fn main() -> Result<()> {
         return call_cmd(&cli).await;
     }
     if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
+        // Push registration needs an app password (token login), like the apps have.
+        let app_password = client.get_app_password().await?;
+        let mut account = load_account(&cli)?;
+        account.app_password = app_password;
+        let client = TalkClient::new(account, Platform::Cli)?;
         let engine = Engine::new(client.clone(), Arc::new(talk_core_null_sink()), None);
-        let key = talk_core::push::generate_key()?;
-        let reg = engine.register_push(token, proxy, &key).await?;
-        println!("registriert: device {}… bei {}", &reg.device_identifier[..12.min(reg.device_identifier.len())], reg.proxy);
-        let r = client.test_push().await;
-        println!("Test-Push angefordert: {r:?}");
+        let result: Result<()> = async {
+            let key = talk_core::push::generate_key()?;
+            let reg = engine.register_push(token, proxy, &key).await?;
+            println!("registriert: device {}… bei {}", &reg.device_identifier[..12.min(reg.device_identifier.len())], reg.proxy);
+            let r = client.test_push().await;
+            println!("Test-Push angefordert: {r:?}");
+            Ok(())
+        }
+        .await;
         if !*keep {
             tokio::time::sleep(Duration::from_secs(3)).await;
-            engine.unregister_push().await?;
-            println!("abgemeldet");
+            if let Err(e) = engine.unregister_push().await {
+                println!("abmelden: {e}");
+            }
+            client.revoke_app_password().await?;
+            println!("temporäres App-Passwort widerrufen");
         }
+        result?;
         return Ok(());
     }
     if let Cmd::Cache { token, lines } = &cli.cmd {

@@ -333,6 +333,16 @@ impl TalkClient {
         Ok((resp.bytes().await?.to_vec(), content_type))
     }
 
+    /// Exchanges a login password for a new app password (`core/getapppassword`).
+    pub async fn get_app_password(&self) -> Result<String> {
+        let rb = self.request(Method::GET, "/ocs/v2.php/core/getapppassword");
+        let (data, _) = self.ocs::<serde_json::Value>(rb).await?;
+        data["apppassword"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| Error::Decode("no app password".into()))
+    }
+
     /// Revokes the app password this client uses (sign-out). Afterwards every call fails
     /// with `Unauthorized`.
     pub async fn revoke_app_password(&self) -> Result<()> {

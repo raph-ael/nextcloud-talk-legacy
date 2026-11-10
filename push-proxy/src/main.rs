@@ -67,7 +67,7 @@ async fn register(State(app): State<Arc<App>>, body: Bytes) -> Response {
     if token.is_empty() || token.len() > 1024 {
         return bad("invalid push token");
     }
-    if !verify::signature(key, id.as_bytes(), sig) {
+    if !verify::device_signature(key, id, sig) {
         tracing::info!(device = %short(id), "register: invalid signature");
         return (StatusCode::FORBIDDEN, "invalid signature").into_response();
     }
@@ -99,7 +99,7 @@ async fn unregister(State(app): State<Arc<App>>, body: Bytes) -> Response {
     ) else {
         return bad("missing parameter");
     };
-    if !verify::signature(key, id.as_bytes(), sig) {
+    if !verify::device_signature(key, id, sig) {
         return (StatusCode::FORBIDDEN, "invalid signature").into_response();
     }
     match app.store.delete(id) {
@@ -160,8 +160,9 @@ async fn notifications(State(app): State<Arc<App>>, body: Bytes) -> Response {
                 continue;
             }
         };
+        let raw_subject = verify::b64(&n.subject).unwrap_or_default();
         if device.push_token_hash != n.push_token_hash
-            || !verify::signature(&device.user_public_key, n.subject.as_bytes(), &n.signature)
+            || !verify::signature(&device.user_public_key, &raw_subject, &n.signature)
         {
             tracing::info!(device = %short(&n.device_identifier), "notification: token hash or signature mismatch");
             failed += 1;
