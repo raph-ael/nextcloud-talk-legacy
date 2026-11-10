@@ -31,6 +31,10 @@ use crate::models::{IceServer, SignalingSettings};
 
 /// Outgoing: give up when nobody joined. Incoming: stop ringing.
 pub(crate) const RING_TIMEOUT: Duration = Duration::from_secs(60);
+/// Incoming: stop ringing a bit before the caller gives up (RING_TIMEOUT). iOS ends an
+/// unanswered CallKit call itself after exactly 60 s and suspends the app right away;
+/// ending here first reports "missed" while the app still runs.
+const INCOMING_RING_TIMEOUT: Duration = Duration::from_secs(55);
 const RING_POLL: Duration = Duration::from_secs(5);
 const PUBLISHER_ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 const ICE_RESTART_TIMEOUT: Duration = Duration::from_secs(5);
@@ -373,7 +377,7 @@ impl Actor {
     // --- incoming: ringing -----------------------------------------------------------
 
     async fn ring(&mut self) -> Result<(), EndReason> {
-        let deadline = tokio::time::Instant::now() + RING_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + INCOMING_RING_TIMEOUT;
         // First check right away: a push may announce a call that is already over.
         let mut poll_at = tokio::time::Instant::now();
         loop {

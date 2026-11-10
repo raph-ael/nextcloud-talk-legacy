@@ -57,14 +57,18 @@ Anrufansicht. Neue Anrufe sind sofort möglich.
 
 **1:1-Logik wie bei Signal:**
 - Die Gegenseite tritt bei → `connected`.
-- Die Gegenseite verlässt den Anruf → `ended(remoteHangup)`.
+- Die Gegenseite verlässt den Anruf → `ended(remoteHangup)`. Legt sie mit einem unserer
+  Clients auf, sofort (Signaling-Nachricht `hangup`). Sonst (Web, offizielle Apps, oder
+  die Gegenseite baut die Verbindung neu auf) zeigt der Kern bis zu 6 s `reconnecting`.
 - Niemand nimmt binnen 60 s ab → `ended(noAnswer)`.
+- Eingehend klingelt es höchstens 55 s, dann `ended(missed)` (vor dem 60-s-Limit von
+  iOS/CallKit).
 
 **Gruppe:** Der Anruf läuft, solange wir drin sind. Allein im Anruf heißt `ringing` bzw.
 „Warte auf andere …“.
 
-**Ablehnen:** Talk kennt kein Ablehnen. `declineCall` beendet nur hier das Klingeln. Der
-Anrufer sieht nach 60 s „Keine Antwort“.
+**Ablehnen:** siehe `declined` oben: Bei 1:1 endet der Anruf auch beim Anrufer
+(„Abgelehnt“), bei Gruppen hört nur hier das Klingeln auf.
 
 **Ein Anruf gleichzeitig:**
 - Ein zweiter eingehender Anruf während eines Anrufs klingelt nicht. Der Kern meldet ihn
