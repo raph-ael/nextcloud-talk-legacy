@@ -137,6 +137,9 @@ function startRinging(call: SystemCall): void {
   const id = call.id
   const stillRinging = () => current?.id === id && current.state === 'incoming'
   n.on('click', () => controls?.showWindow())
+  // macOS refuses notifications that were not allowed (UNErrorDomain 1); the dock and the
+  // window still ring.
+  n.on('failed', (_e, error) => log('notification failed:', error))
   n.on('action', () => {
     log('notification: accept', id)
     controls?.showWindow()
