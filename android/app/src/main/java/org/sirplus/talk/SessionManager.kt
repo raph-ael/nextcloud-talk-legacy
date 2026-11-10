@@ -36,6 +36,14 @@ import org.sirplus.talk.call.CallController
 import org.sirplus.talk.call.CallNotifications
 import org.sirplus.talk.call.MediaReports
 import org.sirplus.talk.call.WebRtcMediaEngine
+import org.sirplus.talk.push.Push
+import android.util.Log
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import uniffi.talk_ffi.PushMessage
+import uniffi.talk_ffi.decryptPush
+import uniffi.talk_ffi.generatePushKey
 import uniffi.talk_ffi.ClientPlatform
 import uniffi.talk_ffi.CoreEvent
 import uniffi.talk_ffi.CoreException
@@ -126,6 +134,10 @@ class SessionManager(private val context: Context) : CoreListener {
         voice.player.stop()
     }
 
+    /** Push registration of this process run (again on every start and token change). */
+    private var pushJob: Job? = null
+    private var pushRegistered = false
+
     /** WebRTC for the core; one per process, handed to every session. */
     private val media = WebRtcMediaEngine(context, MediaReportsImpl(), calls)
 
@@ -138,6 +150,8 @@ class SessionManager(private val context: Context) : CoreListener {
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     session?.networkChanged()
+                    // Registration failed offline: try again now.
+                    scope.launch { if (!pushRegistered) registerPush() }
                 }
             },
         )
@@ -178,6 +192,7 @@ class SessionManager(private val context: Context) : CoreListener {
         scope.launch {
             try {
                 s.start()
+                registerPush()
             } catch (e: CoreException.Unauthorized) {
                 signOut(revoke = false)
             } catch (e: CoreException) {
@@ -221,6 +236,10 @@ class SessionManager(private val context: Context) : CoreListener {
         voice.cancel()
         voice.player.stop()
         s.hangUpAndWait(2000u)
+        pushJob?.cancel()
+        if (revoke && pushRegistered) runCatching { s.unregisterPush() }
+        pushRegistered = false
+        Push.deleteToken(context)
         session = null
         if (revoke) runCatching { s.logout() } else s.shutdown()
         s.close()
@@ -233,6 +252,68 @@ class SessionManager(private val context: Context) : CoreListener {
         avatars.evictAll()
         previews.evictAll()
         _state.value = UiState(session = SessionState.LOGGED_OUT)
+    }
+
+    // --- push -------------------------------------------------------------------------
+
+    /**
+     * Registers this device at the server and the push proxy: on every start and with a
+     * new FCM token ([token]). Main thread; a running registration is not repeated.
+     */
+    private fun registerPush(token: String? = null) {
+        val s = session ?: return
+        if (!Push.enabled(context)) return
+        if (token == null && pushJob?.isActive == true) return
+        pushJob?.cancel()
+        pushJob = scope.launch {
+            try {
+                val fcm = token ?: Push.token()
+                val key = store.pushKey() ?: generatePushKey().also { store.savePushKey(it) }
+                s.registerPush(fcm, Push.proxyUrl, key)
+                if (session === s) pushRegistered = true
+                Log.i(Push.TAG, "registered")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(Push.TAG, "registration failed: ${e.message}")
+            }
+        }
+    }
+
+    /** FCM issued a new token (called on a background thread). */
+    fun onPushToken(token: String) {
+        scope.launch { registerPush(token) }
+    }
+
+    /**
+     * A push arrived (FCM thread, process possibly just started). Returns once a call
+     * rings here, so the ringing foreground service runs before FCM's window closes.
+     */
+    suspend fun handlePush(subject: String) {
+        val key = store.pushKey()
+        if (key == null) {
+            Log.w(Push.TAG, "push without device key")
+            return
+        }
+        val message = try {
+            decryptPush(key, subject)
+        } catch (e: CoreException) {
+            Log.w(Push.TAG, "push not decryptable: ${e.message}")
+            return
+        }
+        val s = withContext(Dispatchers.Main) { session } ?: return
+        when (message) {
+            is PushMessage.Call -> {
+                Log.i(Push.TAG, "call push")
+                if (!s.handlePush(message, null)) return
+                withTimeoutOrNull(RING_WAIT_MS) { calls.ui.first { it?.token == message.token } }
+                // The incoming call is handled on the main thread right after the state is set.
+                withContext(Dispatchers.Main) { }
+            }
+            is PushMessage.Delete, PushMessage.DeleteAll -> s.handlePush(message, null)
+            // Chat pushes are not forwarded by the proxy yet; the app has no message notifications.
+            is PushMessage.Chat, is PushMessage.Other -> Unit
+        }
     }
 
     // --- calls ------------------------------------------------------------------------
@@ -670,5 +751,7 @@ class SessionManager(private val context: Context) : CoreListener {
         const val PREVIEW_PX = 1024
         const val FULL_PX = 2048
         const val PREVIEW_CACHE_BYTES = 48 * 1024 * 1024
+        /** How long a call push waits for the ringing to start. */
+        const val RING_WAIT_MS = 3_000L
     }
 }

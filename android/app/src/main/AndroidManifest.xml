@@ -77,6 +77,15 @@
             android:name=".call.CallActionReceiver"
             android:exported="false" />
 
+        <!-- Push (FCM, only in builds with a Firebase config): rings for incoming calls. -->
+        <service
+            android:name=".push.TalkMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Resumes unsent messages after a reboot or an app update. -->
         <receiver
             android:name=".StartupReceiver"

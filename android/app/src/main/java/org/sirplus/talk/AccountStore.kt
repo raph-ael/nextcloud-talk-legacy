@@ -13,8 +13,8 @@ import javax.crypto.spec.GCMParameterSpec
 data class StoredAccount(val server: String, val loginName: String, val appPassword: String)
 
 /**
- * Persists the account; the app password is encrypted with an AES key that never
- * leaves the Android Keystore.
+ * Persists the account; the app password and the push device key are encrypted with an
+ * AES key that never leaves the Android Keystore.
  */
 class AccountStore(context: Context) {
     private val prefs = context.getSharedPreferences("account", Context.MODE_PRIVATE)
@@ -33,6 +33,15 @@ class AccountStore(context: Context) {
             .putString("login", account.loginName)
             .putString("secret", encrypt(account.appPassword))
             .apply()
+    }
+
+    /** Push device key (PKCS#8 PEM) of this account, encrypted like the app password. */
+    fun pushKey(): String? = prefs.getString("push_key", null)?.let { runCatching { decrypt(it) }.getOrNull() }
+
+    @android.annotation.SuppressLint("ApplySharedPref")
+    fun savePushKey(pem: String) {
+        // commit: the server gets the public key right after; the private key must not be lost.
+        prefs.edit().putString("push_key", encrypt(pem)).commit()
     }
 
     fun clear() {

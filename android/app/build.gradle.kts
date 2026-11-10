@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -5,6 +6,19 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// Push (FCM): the Firebase config and the push proxy are deployment data and stay out of the
+// public repo. google-services.json goes to app/ (gitignored); the proxy URL comes from the
+// Gradle property or environment variable TALK_PUSH_PROXY_URL, or from local.properties
+// (talk.pushProxyUrl). Without both, the app builds and runs without push.
+if (file("google-services.json").exists()) apply(plugin = "com.google.gms.google-services")
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val pushProxyUrl = (findProperty("TALK_PUSH_PROXY_URL") as String?)
+    ?: System.getenv("TALK_PUSH_PROXY_URL")
+    ?: localProps.getProperty("talk.pushProxyUrl")
+    ?: ""
 
 android {
     namespace = "org.sirplus.talk"
@@ -17,7 +31,9 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        buildConfigField("String", "PUSH_PROXY_URL", "\"$pushProxyUrl\"")
+        // armeabi-v7a: low-end devices with a 32-bit-only system (e.g. Galaxy A13 with Android 13).
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
     buildTypes {
@@ -33,7 +49,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
     packaging { jniLibs { useLegacyPackaging = false } }
 }
@@ -62,6 +81,8 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
     implementation(libs.webrtc)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
     implementation("${libs.jna.get()}@aar")
@@ -81,7 +102,7 @@ val buildRustCore by tasks.registering(Exec::class) {
     environment("ANDROID_NDK_HOME", android.ndkDirectory.absolutePath)
     commandLine(
         cargo, "ndk",
-        "-t", "arm64-v8a", "-t", "x86_64",
+        "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64",
         "--platform", "26",
         "-o", jniLibsDir.absolutePath,
         "build", "-p", "talk-ffi", "--release",
