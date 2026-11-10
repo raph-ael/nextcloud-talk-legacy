@@ -35,9 +35,8 @@ final class CallController: NSObject {
     @ObservationIgnored private var reportedConnected = false
     @ObservationIgnored private var lastState: CallState?
     @ObservationIgnored private var closeTask: Task<Void, Never>?
-    /// Keeps the app running while a pushed call rings (else iOS suspends it right after the
-    /// push and the core misses the caller hanging up). Ends when the call leaves `incoming`.
-    @ObservationIgnored private var ringTask: UIBackgroundTaskIdentifier = .invalid
+    /// When CallKit started ringing for the current incoming call.
+    @ObservationIgnored private var ringingSince: Date?
     /// Debug: a mock call is shown, core events are ignored.
     @ObservationIgnored var mocking = false
 
@@ -220,10 +219,9 @@ final class CallController: NSObject {
 
     func update(_ new: CallView?) {
         if mocking { return }
-        if new?.state != .incoming { keepAwake(false) }
         guard let new else {
             #if DEBUG
-            LogDump.write()
+            LogDump.write(sync: UIApplication.shared.applicationState == .background)
             #endif
             // `ended` came before; its screen closes by itself. Nothing else to show.
             if call?.state != .ended {
@@ -238,7 +236,8 @@ final class CallController: NSObject {
         if previous != new.state {
             Log.call.info("call \(String(describing: new.state), privacy: .public) participants=\(new.participants.count) end=\(String(describing: new.endReason), privacy: .public)")
             #if DEBUG
-            LogDump.write()
+            // In the background iOS suspends the app right after a call ends.
+            LogDump.write(sync: UIApplication.shared.applicationState == .background)
             #endif
         }
         let isNewCall = call?.id != new.id
@@ -356,6 +355,7 @@ final class CallController: NSObject {
         let id = UUID(uuidString: c.id) ?? UUID()
         uuid = id
         uuidToken = c.token
+        ringingSince = Date()
         endedLocally = false
         let update = Self.update(c)
         provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in
@@ -389,10 +389,10 @@ final class CallController: NSObject {
         if adopt {
             uuid = id
             uuidToken = token
+            ringingSince = Date()
             endedLocally = false
             reportedConnecting = false
             reportedConnected = false
-            keepAwake(true)
         }
         provider.reportNewIncomingCall(with: id, update: Self.update(handle: token ?? "talk", name: name)) { [weak self] error in
             Task { @MainActor in
@@ -420,26 +420,7 @@ final class CallController: NSObject {
                     provider.reportCall(with: id, endedAt: nil, reason: .unanswered)
                     self.clearCallKit()
                 }
-                // Nothing rings: the core sends no `incoming`, so stop keeping the app awake here.
-                if !rang { self.keepAwake(false) }
             }
-        }
-    }
-
-    private func keepAwake(_ on: Bool) {
-        if on, ringTask == .invalid {
-            ringTask = UIApplication.shared.beginBackgroundTask(withName: "ringing") { [weak self] in
-                MainActor.assumeIsolated {
-                    Log.call.info("ringing background time over")
-                    #if DEBUG
-                    LogDump.write()
-                    #endif
-                    self?.keepAwake(false)
-                }
-            }
-        } else if !on, ringTask != .invalid {
-            UIApplication.shared.endBackgroundTask(ringTask)
-            ringTask = .invalid
         }
     }
 
@@ -479,6 +460,7 @@ final class CallController: NSObject {
 
     private func clearCallKit() {
         uuid = nil
+        ringingSince = nil
         uuidToken = nil
         endedLocally = false
         reportedConnecting = false
@@ -561,6 +543,9 @@ extension CallController: CXProviderDelegate {
     nonisolated func providerDidReset(_ provider: CXProvider) {
         MainActor.assumeIsolated {
             Log.call.error("CallKit reset")
+            #if DEBUG
+            LogDump.write(sync: true)
+            #endif
             session?.hangUp()
             clearCallKit()
             CallAudio.shared.stopAudio()
@@ -611,9 +596,19 @@ extension CallController: CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         MainActor.assumeIsolated {
+            Log.call.info("CallKit end action (ours: \(self.uuid == action.callUUID), state: \(String(describing: self.call?.state), privacy: .public))")
+            #if DEBUG
+            LogDump.write(sync: UIApplication.shared.applicationState == .background)
+            #endif
             if uuid == action.callUUID {
                 endedLocally = true
-                endInCore()
+                // iOS ends an unanswered incoming call itself after 60 s. That is no decline
+                // (in a 1:1 the caller would see "Abgelehnt"); the core reports it as missed.
+                if call?.state == .incoming, let since = ringingSince, Date().timeIntervalSince(since) >= 55 {
+                    Log.call.info("CallKit ring timeout")
+                } else {
+                    endInCore()
+                }
             }
             action.fulfill()
         }

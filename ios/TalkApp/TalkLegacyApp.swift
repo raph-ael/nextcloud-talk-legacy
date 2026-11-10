@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         application.registerForRemoteNotifications()
         #if DEBUG
         DebugEnv.persist()
+        Heartbeat.start()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             CallController.shared.showMockIfRequested()

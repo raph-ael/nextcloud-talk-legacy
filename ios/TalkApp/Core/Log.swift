@@ -48,9 +48,10 @@ import OSLog
 enum LogDump {
     static var enabled: Bool { DebugEnv.sticky("TALK_LOG_DUMP") == "1" }
 
-    static func write() {
+    /// `sync`: right before the app is suspended (an async write would not finish).
+    static func write(sync: Bool = false) {
         guard enabled else { return }
-        DispatchQueue.global(qos: .utility).async {
+        let run = {
             guard let store = try? OSLogStore(scope: .currentProcessIdentifier) else { return }
             let since = store.position(timeIntervalSinceLatestBoot: 0)
             let entries = (try? store.getEntries(at: since, matching: NSPredicate(format: "subsystem == 'org.sirplus.talk'"))) ?? AnySequence([])
@@ -62,6 +63,7 @@ enum LogDump {
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("talk.log")
             try? text.write(to: url, atomically: true, encoding: .utf8)
         }
+        if sync { run() } else { DispatchQueue.global(qos: .utility).async(execute: run) }
     }
 }
 #endif
@@ -82,6 +84,49 @@ enum DebugEnv {
             return v.isEmpty ? nil : v
         }
         return d.string(forKey: "debug.\(key)")
+    }
+}
+#endif
+
+#if DEBUG
+import UIKit
+
+/// Debug (`TALK_LOG_DUMP=1`): every 2 s a background thread appends the app state and how
+/// long ago the main thread last ticked to Documents/heartbeat.log – tells a suspended app
+/// (no lines) from a hung main thread (lines, main age growing).
+enum Heartbeat {
+    nonisolated(unsafe) private static var mainTick = Date()
+    nonisolated(unsafe) private static var state = "?"
+    nonisolated(unsafe) private static var timers: [DispatchSourceTimer] = []
+
+    @MainActor static func start() {
+        guard LogDump.enabled, timers.isEmpty else { return }
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("heartbeat.log")
+        try? "".write(to: url, atomically: true, encoding: .utf8)
+        let main = DispatchSource.makeTimerSource(queue: .main)
+        main.schedule(deadline: .now(), repeating: 1)
+        main.setEventHandler {
+            mainTick = Date()
+            state = MainActor.assumeIsolated {
+                let call = CallController.shared.call.map { "\($0.state)" } ?? "none"
+                return "\(UIApplication.shared.applicationState.rawValue) bg=\(Int(min(UIApplication.shared.backgroundTimeRemaining, 9999))) call=\(call)"
+            }
+        }
+        let bg = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        bg.schedule(deadline: .now(), repeating: 2)
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        bg.setEventHandler {
+            let line = "\(f.string(from: Date())) state=\(state) mainAge=\(String(format: "%.1f", Date().timeIntervalSince(mainTick)))\n"
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile()
+                h.write(Data(line.utf8))
+                try? h.close()
+            }
+        }
+        main.resume()
+        bg.resume()
+        timers = [main, bg]
     }
 }
 #endif
