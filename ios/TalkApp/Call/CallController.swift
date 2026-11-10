@@ -92,9 +92,10 @@ final class CallController: NSObject {
         presented = true
         guard useCallKit else {
             CallAudio.shared.beginCall()
-            Task { await self.startInCore(token) }
+            Task { await self.startInCore(token, callId: nil) }
             return
         }
+        Notifications.askOnce()
         let id = UUID()
         uuid = id
         uuidToken = token
@@ -113,13 +114,14 @@ final class CallController: NSObject {
     }
 
     @discardableResult
-    private func startInCore(_ token: String) async -> Bool {
+    private func startInCore(_ token: String, callId: UUID?) async -> Bool {
         if AVAudioApplication.shared.recordPermission == .undetermined {
             _ = await AVAudioApplication.requestRecordPermission()
         }
         guard let session else { return false }
         do {
-            try await session.startCall(token: token, silent: silent)
+            // The CallKit UUID becomes the core's call id.
+            try await session.startCall(token: token, silent: silent, callId: callId?.uuidString)
             return true
         } catch {
             Log.call.error("startCall: \(error.localizedDescription, privacy: .public)")
@@ -228,6 +230,9 @@ final class CallController: NSObject {
         let previous = lastState
         if previous != new.state {
             Log.call.info("call \(String(describing: new.state), privacy: .public) participants=\(new.participants.count) end=\(String(describing: new.endReason), privacy: .public)")
+            #if DEBUG
+            LogDump.write()
+            #endif
         }
         let isNewCall = call?.id != new.id
         lastState = new.state
@@ -242,7 +247,7 @@ final class CallController: NSObject {
         case .incoming:
             if !useCallKit { presented = true }
             #if DEBUG
-            if isNewCall, let delay = ProcessInfo.processInfo.environment["TALK_AUTOANSWER"].flatMap(Double.init) {
+            if isNewCall, let delay = DebugEnv.sticky("TALK_AUTOANSWER").flatMap(Double.init) {
                 let id = new.id
                 Task {
                     try? await Task.sleep(for: .seconds(delay))
@@ -265,7 +270,9 @@ final class CallController: NSObject {
         CallAudio.shared.stopAudio()
         let quiet: Bool
         switch c.endReason {
-        case .answeredElsewhere, .declined, .missed: quiet = true
+        case .answeredElsewhere, .missed: quiet = true
+        // The callee declined (1:1): the caller sees "Abgelehnt"; declined here stays quiet.
+        case .declined: quiet = c.direction == .incoming
         default: quiet = c.direction == .incoming && previousWasIncoming(c)
         }
         if quiet {
@@ -327,7 +334,7 @@ final class CallController: NSObject {
             }
         case .ended:
             if !endedLocally {
-                provider.reportCall(with: uuid, endedAt: nil, reason: Self.reason(c.endReason))
+                provider.reportCall(with: uuid, endedAt: nil, reason: Self.reason(c.endReason, c.direction))
             }
             clearCallKit()
         default:
@@ -354,38 +361,52 @@ final class CallController: NSObject {
         }
     }
 
-    /// PushKit (iOS requires a CallKit report for every VoIP push, right away). `token`
-    /// nil: the push could not be read – the call shows and ends at once. Otherwise the
-    /// core's `incoming` for this conversation adopts this CallKit call.
-    func reportPushedIncoming(token: String?, name: String, completion: @escaping () -> Void) {
+    /// PushKit: iOS requires a CallKit report for every VoIP push, right away. A push that
+    /// cannot be read (or is no call) shows and ends at once. A call push is reported with a
+    /// new UUID that the core takes over through `handlePush`.
+    func reportPushed(_ message: PushMessage?, completion: @escaping () -> Void) {
         guard let provider else { return completion() }
-        let id = UUID()
-        let u = CXCallUpdate()
-        u.remoteHandle = CXHandle(type: .generic, value: token ?? "unknown")
-        u.localizedCallerName = name
-        u.hasVideo = false
-        u.supportsHolding = false
-        u.supportsGrouping = false
-        u.supportsUngrouping = false
-        u.supportsDTMF = false
+        var token: String?
+        var name = "Talk"
+        if case .call(let t, _, let subject)? = message {
+            token = t
+            name = pushCallerName(subject: subject)
+        }
+        // notify_push was faster: report that call again (CallKit answers that it exists,
+        // the push is accounted for).
+        let known = token != nil && uuid != nil && uuidToken == token
         let adopt = token != nil && uuid == nil
+        let id = known ? uuid! : UUID()
         if adopt {
             uuid = id
             uuidToken = token
             endedLocally = false
+            reportedConnecting = false
+            reportedConnected = false
         }
-        provider.reportNewIncomingCall(with: id, update: u) { [weak self] error in
+        provider.reportNewIncomingCall(with: id, update: Self.update(handle: token ?? "talk", name: name)) { [weak self] error in
             Task { @MainActor in
-                defer { completion() }
-                guard let self else { return }
-                if error != nil || !adopt {
+                completion()
+                guard let self, !known else { return }
+                if let error {
+                    // Do not disturb, blocked: this device does not ring.
+                    Log.push.info("pushed call not shown: \(error.localizedDescription, privacy: .public)")
                     if self.uuid == id { self.clearCallKit() }
-                    if error == nil { provider.reportCall(with: id, endedAt: nil, reason: .failed) }
                     return
                 }
-                // The core has to take the call over; if it does not (already over), end it.
-                try? await Task.sleep(for: .seconds(10))
-                if self.uuid == id && self.call?.token != token {
+                guard let token, let message, adopt, let session = self.session else {
+                    // Unreadable, no call, or another call runs here: end it; the core still
+                    // learns of the push (deletions, missed second call).
+                    provider.reportCall(with: id, endedAt: nil, reason: token == nil ? .failed : .unanswered)
+                    if self.uuid == id { self.clearCallKit() }
+                    if let message, let session = self.session {
+                        _ = await session.handlePush(message: message, callId: nil)
+                    }
+                    return
+                }
+                let rang = await session.handlePush(message: message, callId: id.uuidString)
+                Log.push.info("handlePush rang=\(rang)")
+                if !rang, session.currentCall()?.token != token, self.uuid == id {
                     provider.reportCall(with: id, endedAt: nil, reason: .unanswered)
                     self.clearCallKit()
                 }
@@ -393,10 +414,10 @@ final class CallController: NSObject {
         }
     }
 
-    private static func update(_ c: CallView) -> CXCallUpdate {
+    private static func update(handle: String, name: String) -> CXCallUpdate {
         let u = CXCallUpdate()
-        u.remoteHandle = CXHandle(type: .generic, value: c.token)
-        u.localizedCallerName = c.isGroup || c.callerName.isEmpty ? c.roomName : c.callerName
+        u.remoteHandle = CXHandle(type: .generic, value: handle)
+        u.localizedCallerName = name
         u.hasVideo = false
         u.supportsHolding = false
         u.supportsGrouping = false
@@ -405,12 +426,17 @@ final class CallController: NSObject {
         return u
     }
 
-    private static func reason(_ r: EndReason?) -> CXCallEndedReason {
+    private static func update(_ c: CallView) -> CXCallUpdate {
+        update(handle: c.token, name: c.isGroup || c.callerName.isEmpty ? c.roomName : c.callerName)
+    }
+
+    private static func reason(_ r: EndReason?, _ direction: CallDirection) -> CXCallEndedReason {
         switch r {
         case .remoteHangup, .hangup, .none: return .remoteEnded
         case .noAnswer, .missed: return .unanswered
         case .answeredElsewhere: return .answeredElsewhere
-        case .declined: return .declinedElsewhere
+        // Outgoing: the other side declined; incoming: declined on another of our devices.
+        case .declined: return direction == .outgoing ? .remoteEnded : .declinedElsewhere
         case .failed: return .failed
         }
     }
@@ -525,7 +551,7 @@ extension CallController: CXProviderDelegate {
             update.supportsUngrouping = false
             update.supportsDTMF = false
             Task {
-                if await self.startInCore(token) {
+                if await self.startInCore(token, callId: action.callUUID) {
                     action.fulfill()
                     provider.reportCall(with: action.callUUID, updated: update)
                 } else {
@@ -545,6 +571,10 @@ extension CallController: CXProviderDelegate {
             CallAudio.shared.beginCall()
             presented = true
             Task {
+                // Answered right after a push: the core may still be taking the call over.
+                for _ in 0..<50 where self.call?.token != token || self.call?.state != .incoming {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
                 if await self.acceptInCore(token) { action.fulfill() } else { action.fail() }
             }
         }

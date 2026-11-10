@@ -25,6 +25,18 @@ enum Notifications {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// A call that rang here unanswered, or came in during another call. Tap opens the chat.
+    static func missedCall(token: String, name: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Verpasster Anruf"
+        content.body = name
+        content.sound = .default
+        content.userInfo = ["token": token]
+        content.threadIdentifier = "missed_call.\(token)"
+        let id = "missed_call.\(token).\(Int(Date().timeIntervalSince1970))"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
     static func setBadge(_ count: Int) {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
     }

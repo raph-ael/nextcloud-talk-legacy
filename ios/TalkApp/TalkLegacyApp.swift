@@ -81,7 +81,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         _ = CallController.shared
         VoipPush.shared.register()
+        // APNs token (background pushes); the push itself needs no permission.
+        application.registerForRemoteNotifications()
         #if DEBUG
+        DebugEnv.persist()
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
             CallController.shared.showMockIfRequested()
@@ -89,6 +92,33 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         #endif
         return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Push.shared.apnsToken(deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Log.push.error("apns: \(error.localizedDescription, privacy: .public)")
+    }
+
+    /// Background push from the server (e.g. a call notification was deleted).
+    nonisolated func application(
+        _ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
+        await Push.handleBackground(userInfo)
+        return .newData
+    }
+
+    /// Swiped away during a call: leave it properly so the others do not wait for us.
+    func applicationWillTerminate(_ application: UIApplication) {
+        guard let session = SessionStore.shared.session, session.currentCall() != nil else { return }
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await session.hangUpAndWait(timeoutMs: 2000)
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 2.5)
     }
 
     /// In front: show the failure banner unless that chat is open.

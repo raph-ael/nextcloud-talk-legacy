@@ -3,6 +3,8 @@
 #
 # Forks: change the bundle id / display name below. Device builds take the Apple team
 # from the environment: DEVELOPMENT_TEAM=XXXXXXXXXX xcodegen generate
+# Pushes (calls while the app is closed) need the push proxy's URL the same way:
+# TALK_PUSH_PROXY_URL=https://push.example.org xcodegen generate
 name: TalkLegacy
 
 options:
@@ -26,6 +28,8 @@ settings:
     VERSIONING_SYSTEM: apple-generic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    # Push proxy (push-proxy/), from the environment when generating: empty = no push.
+    TALK_PUSH_PROXY_URL: ${TALK_PUSH_PROXY_URL}
     CODE_SIGN_STYLE: Automatic
 
 targets:
@@ -44,9 +48,17 @@ targets:
       - package: WebRTC
       - sdk: CallKit.framework
       - sdk: PushKit.framework
-    # aps-environment: development for Debug, production for Release (APS_ENVIRONMENT).
+      - target: TalkNotify
+    # Written by xcodegen (the file is generated). aps-environment: development for Debug,
+    # production for Release (APS_ENVIRONMENT). The first keychain group stays the app's
+    # default (the account); the shared one holds the push key for TalkNotify.
     entitlements:
       path: TalkApp/TalkLegacy.entitlements
+      properties:
+        aps-environment: $(APS_ENVIRONMENT)
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)org.sirplus.talk
+          - $(AppIdentifierPrefix)org.sirplus.talk.shared
     info:
       path: TalkApp/Info.plist
       properties:
@@ -58,6 +70,9 @@ targets:
           - UIInterfaceOrientationPortrait
         # Only standard HTTPS/TLS → exempt from export compliance documentation.
         ITSAppUsesNonExemptEncryption: false
+        TalkPushProxyURL: $(TALK_PUSH_PROXY_URL)
+        # Shared with TalkNotify: the push device key.
+        TalkKeychainGroup: $(AppIdentifierPrefix)org.sirplus.talk.shared
         NSMicrophoneUsageDescription: Für Anrufe und zum Aufnehmen von Sprachnachrichten.
         NSCameraUsageDescription: Zum Aufnehmen und Senden von Fotos.
         NSPhotoLibraryUsageDescription: Zum Senden von Fotos aus deiner Mediathek.
@@ -83,6 +98,42 @@ targets:
           APS_ENVIRONMENT: development
         Release:
           APS_ENVIRONMENT: production
+
+  # Notification Service Extension: decrypts chat pushes with the core.
+  TalkNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotifyExt
+      - path: TalkApp/Core/PushKey.swift
+      - path: Generated/talk_ffi.swift
+        group: Generated
+    dependencies:
+      - framework: Generated/TalkCoreFFI.xcframework
+        embed: false
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+    entitlements:
+      path: NotifyExt/TalkNotify.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)org.sirplus.talk.shared
+    info:
+      path: NotifyExt/Info.plist
+      properties:
+        CFBundleDisplayName: Sirplus Talk
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        TalkKeychainGroup: $(AppIdentifierPrefix)org.sirplus.talk.shared
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.sirplus.talk.notify
+        PRODUCT_NAME: TalkNotify
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
 
   TalkLegacyUITests:
     type: bundle.ui-testing

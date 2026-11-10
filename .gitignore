@@ -32,3 +32,5 @@ DerivedData/
 /ios/Generated/
 /ios/*.xcodeproj/
 /ios/TalkApp/Info.plist
+/ios/NotifyExt/Info.plist
+/ios/*/*.entitlements

@@ -51,7 +51,9 @@ workflows:
         script: |
           command -v xcodegen >/dev/null || brew install xcodegen
           # Signing settings come from use-profiles below; an empty team keeps the spec valid.
-          cd ios && DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" xcodegen generate
+          # TALK_PUSH_PROXY_URL (push proxy for calls) comes from the app's environment
+          # variables in Codemagic; without it the app builds without push.
+          cd ios && DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" TALK_PUSH_PROXY_URL="${TALK_PUSH_PROXY_URL:-}" xcodegen generate
 
       - name: Set up code signing
         script: |

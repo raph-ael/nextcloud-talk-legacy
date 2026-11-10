@@ -66,6 +66,8 @@ final class SessionStore {
 
     private init() {
         bridge.store = self
+        // Core logs before the first session.
+        CoreLog.install()
         if let dev = Self.devAccount() {
             start(dev)
         } else if let saved = Keychain.loadAccount() {
@@ -116,7 +118,10 @@ final class SessionStore {
         let env = ProcessInfo.processInfo.environment
         if let server = env["TALK_DEV_SERVER"], let user = env["TALK_DEV_USER"], let pass = env["TALK_DEV_PASS"],
            !server.isEmpty, !user.isEmpty, !pass.isEmpty {
-            return StoredAccount(server: server, loginName: user, appPassword: pass)
+            let account = StoredAccount(server: server, loginName: user, appPassword: pass)
+            // Push tests: keep the account so a cold start from a VoIP push finds it.
+            if env["TALK_DEV_SAVE"] == "1" { Keychain.saveAccount(account) }
+            return account
         }
         #endif
         return nil
@@ -152,6 +157,10 @@ final class SessionStore {
         Task {
             do {
                 try await s.start()
+                Push.shared.update()
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["TALK_DEV_LOGOUT"] == "1" { self.logout() }
+                #endif
             } catch CoreError.Unauthorized {
                 await self.signOut(revoke: false)
             } catch {
@@ -169,6 +178,7 @@ final class SessionStore {
         guard let s = session else { return }
         voice.reset()
         s.hangUp()
+        if revoke { await Push.shared.unregister(s) } else { PushKey.delete() }
         session = nil
         callMedia.session = nil
         if revoke { try? await s.logout() } else { s.shutdown() }
@@ -219,6 +229,8 @@ final class SessionStore {
             Task { await signOut(revoke: false) }
         case .callChanged(let call):
             CallController.shared.update(call)
+        case .callMissed(let token, let roomName, let callerName, let isGroup):
+            Notifications.missedCall(token: token, name: isGroup || callerName.isEmpty ? roomName : callerName)
         case .outboxChanged(let token, let items):
             updateChat(token) { $0.messages = Self.withPending($0.messages, items) }
             announceFailures(token, items)
