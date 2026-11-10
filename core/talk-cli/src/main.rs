@@ -114,6 +114,9 @@ enum Cmd {
         /// Wait for an incoming call in `token` and answer it
         #[arg(long)]
         answer: bool,
+        /// Wait for an incoming call in `token` and decline it
+        #[arg(long, conflicts_with = "answer")]
+        decline: bool,
         /// Do not ring anybody (shared test rooms)
         #[arg(long)]
         silent: bool,
@@ -350,7 +353,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "call-bot")]
 async fn call_cmd(cli: &Cli) -> Result<()> {
-    let Cmd::Call { token, answer, silent, seconds, expect_audio, mute_after, tone, ring_wait, connect_timeout, passive, json } = &cli.cmd else {
+    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, tone, ring_wait, connect_timeout, passive, json } = &cli.cmd else {
         unreachable!()
     };
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -377,6 +380,7 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
     let opts = callbot::CallOpts {
         token: token.clone(),
         answer: *answer,
+        decline: *decline,
         silent: *silent,
         seconds: *seconds,
         expect_audio: *expect_audio,

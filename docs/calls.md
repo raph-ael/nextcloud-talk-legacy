@@ -32,6 +32,11 @@ Die Plattform trifft keine Protokollentscheidungen. Sie zeigt `CallView` an und 
 - `remoteHangup` „Anruf beendet“
 - `noAnswer` „Keine Antwort“
 - `declined`
+  - Eingehend (wir haben abgelehnt): still. Bei 1:1 beendet der Kern den Anruf auch
+    beim Anrufer und auf unseren anderen Geräten (Talk kennt kein Ablehnen: der Kern
+    beendet den Anruf „für alle“, das dürfen in 1:1 beide Seiten). Bei Gruppen hört
+    nur hier das Klingeln auf.
+  - Ausgehend 1:1 (die Gegenseite hat abgelehnt): „Abgelehnt“, Auflegen-Ton.
 - `answeredElsewhere` (still)
 - `missed` „Verpasster Anruf“
 - `failed { code, message }`

@@ -485,6 +485,8 @@ impl EventSink for CallSink {
 pub struct CallOpts {
     pub token: String,
     pub answer: bool,
+    /// Wait for an incoming call and decline it (1:1: ends it for the caller).
+    pub decline: bool,
     pub silent: bool,
     pub seconds: u64,
     pub expect_audio: bool,
@@ -531,7 +533,7 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     // first event), so it never reads "no call" for a call that is just starting.
     let eng = engine.clone();
     let state = move |_: &CallSink| eng.current_call();
-    if o.answer {
+    if o.answer || o.decline {
         eprintln!("warte auf eingehenden Anruf in {} …", o.token);
         let deadline = Instant::now() + Duration::from_secs(o.ring_wait);
         loop {
@@ -550,6 +552,17 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         tokio::time::sleep(Duration::from_millis(800)).await;
+        if o.decline {
+            engine.decline_call(&o.token);
+            let end = Instant::now() + Duration::from_secs(5);
+            while engine.current_call().is_some() && Instant::now() < end {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // Ending the call for the caller runs in the background.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            eprintln!("abgelehnt");
+            return Ok(());
+        }
         engine.accept_call(&o.token).await?;
     } else {
         engine.start_call(&o.token, o.silent, None).await?;

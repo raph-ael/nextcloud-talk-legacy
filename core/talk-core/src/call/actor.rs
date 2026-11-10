@@ -57,6 +57,7 @@ const CONNECTED_GRACE: Duration = Duration::from_secs(4);
 /// Media trouble shorter than this is not shown as `reconnecting`.
 const MEDIA_TROUBLE_SHOWN_AFTER: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DECLINE_TIMEOUT: Duration = Duration::from_secs(10);
 const LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
 const SPEAKING_LEVEL: f32 = 0.04;
 const SPEAKING_HOLD: Duration = Duration::from_millis(700);
@@ -987,7 +988,11 @@ impl Actor {
             (Some("participants"), Some("update")) => {
                 let u = &ev["update"];
                 if u["all"].as_bool() == Some(true) && u["incall"].as_u64() == Some(0) {
-                    self.ended = Some(EndReason::RemoteHangup);
+                    // 1:1, nobody answered yet: the callee declined (see `decline_for_caller`).
+                    let declined = !self.view.is_group
+                        && self.view.direction == CallDirection::Outgoing
+                        && !self.ever_joined;
+                    self.ended = Some(if declined { EndReason::Declined } else { EndReason::RemoteHangup });
                     return;
                 }
                 if u.get("users").is_some() {
@@ -1594,9 +1599,27 @@ impl Actor {
                 is_group: self.view.is_group,
             });
         }
+        let decline_caller = reason == EndReason::Declined
+            && self.view.direction == CallDirection::Incoming
+            && !self.view.is_group;
         self.view.state = CallState::Ended;
         self.view.end_reason = Some(reason);
         self.emit();
+        if decline_caller {
+            // In the background: the UI is already closing, and a new call must not wait.
+            let client = self.client.clone();
+            let token = self.token();
+            let me = self.me.clone();
+            let id = self.view.id.clone();
+            tokio::spawn(async move {
+                match tokio::time::timeout(DECLINE_TIMEOUT, decline_for_caller(&client, &token, &me)).await {
+                    Ok(Ok(true)) => tracing::info!(call = %id, "declined: call ended for the caller"),
+                    Ok(Ok(false)) => tracing::info!(call = %id, "declined: nothing to end"),
+                    Ok(Err(e)) => tracing::info!(call = %id, "declined: could not end the call: {e}"),
+                    Err(_) => tracing::info!(call = %id, "declined: timeout"),
+                }
+            });
+        }
         self.close_all_peers();
         if self.audio_started {
             self.media.stop_audio(self.view.id.clone());
@@ -1623,6 +1646,30 @@ impl Actor {
         *self.shared.view.lock().unwrap() = None;
         self.sink.emit(Event::CallChanged { call: None });
     }
+}
+
+/// Declining a 1:1 call like on a phone: Talk has no decline signal, but in a 1:1 both
+/// sides are moderators and may end the call for everybody. The caller then gets
+/// `all: true` before anybody joined and shows "declined"; our other devices stop ringing.
+/// Does nothing if another of our devices already answered or the call is over.
+async fn decline_for_caller(client: &TalkClient, token: &str, me: &str) -> crate::error::Result<bool> {
+    // Without `force` the server refuses when one of our sessions is active elsewhere.
+    client.join_room(token, false).await?;
+    let result = async {
+        let peers = client.call_peers(token).await?;
+        let answered_here = peers.iter().any(|p| {
+            p.get("actorType").and_then(Value::as_str) == Some("users")
+                && p.get("actorId").and_then(Value::as_str) == Some(me)
+        });
+        if peers.is_empty() || answered_here {
+            return Ok(false);
+        }
+        client.leave_call(token, true).await?;
+        Ok(true)
+    }
+    .await;
+    let _ = client.leave_room(token).await;
+    result
 }
 
 /// Ringing stopped on the server side: answered on another device, or over.

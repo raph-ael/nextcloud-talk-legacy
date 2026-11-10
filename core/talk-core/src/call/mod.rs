@@ -50,7 +50,8 @@ pub enum EndReason {
     RemoteHangup,
     /// Outgoing: nobody answered within the ring timeout. "Keine Antwort"
     NoAnswer,
-    /// Incoming: we declined (only stops ringing here; Talk has no decline signal).
+    /// Incoming: we declined. 1:1: the call ends for the caller too (and on our other
+    /// devices). Outgoing 1:1: the callee declined.
     Declined,
     /// Incoming: answered on another device of the same account.
     AnsweredElsewhere,
