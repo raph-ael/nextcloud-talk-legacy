@@ -213,6 +213,9 @@ final class CallController: NSObject {
     func update(_ new: CallView?) {
         if mocking { return }
         guard let new else {
+            #if DEBUG
+            LogDump.write()
+            #endif
             // `ended` came before; its screen closes by itself. Nothing else to show.
             if call?.state != .ended {
                 call = nil
