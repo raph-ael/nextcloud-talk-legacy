@@ -69,13 +69,17 @@ function show(next: CallView | null): void {
     endTimer = null
   }
   tones(prev, next)
+  if (next.state === 'ended' && quiet(next)) {
+    // Not even a frame of the call view (an incoming bar just goes away).
+    close()
+    return
+  }
   // A new call always opens the view; an incoming one shows as the bar on top.
   const minimized = next.id === prev?.id ? st.minimized : false
   set({ call: next, minimized })
   if (next.state === 'ended') {
     if (endTimer) clearTimeout(endTimer)
-    const quiet = next.endReason?.kind === 'answeredElsewhere'
-    endTimer = setTimeout(close, quiet ? 0 : ENDED_MS)
+    endTimer = setTimeout(close, ENDED_MS)
   }
 }
 
@@ -105,7 +109,7 @@ function tones(prev: CallView | null, next: CallView): void {
       } else stopTones()
       break
     case 'ended':
-      if (was && audible(next.endReason)) playHangup()
+      if (was && !quiet(next)) playHangup()
       else stopTones()
       break
     default:
@@ -113,9 +117,15 @@ function tones(prev: CallView | null, next: CallView): void {
   }
 }
 
-/** Declined / answered elsewhere / missed end quietly; everything else with the hang-up tone. */
-function audible(r: EndReason | null): boolean {
-  return !r || !['declined', 'answeredElsewhere', 'missed'].includes(r.kind)
+/**
+ * Ends without the hang-up tone and without lingering on screen: answered on another device,
+ * and an incoming call we declined or missed (the bar just goes away; a missed call gets
+ * its notification). The caller side of `declined` ("Abgelehnt") is a normal end.
+ */
+function quiet(c: CallView): boolean {
+  const kind = c.endReason?.kind
+  if (kind === 'answeredElsewhere') return true
+  return c.direction === 'incoming' && (kind === 'declined' || kind === 'missed')
 }
 
 // --- Actions ----------------------------------------------------------------------------
