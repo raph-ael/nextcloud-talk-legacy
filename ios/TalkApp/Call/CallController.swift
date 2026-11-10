@@ -35,6 +35,9 @@ final class CallController: NSObject {
     @ObservationIgnored private var reportedConnected = false
     @ObservationIgnored private var lastState: CallState?
     @ObservationIgnored private var closeTask: Task<Void, Never>?
+    /// Keeps the app running while a pushed call rings (else iOS suspends it right after the
+    /// push and the core misses the caller hanging up). Ends when the call leaves `incoming`.
+    @ObservationIgnored private var ringTask: UIBackgroundTaskIdentifier = .invalid
     /// Debug: a mock call is shown, core events are ignored.
     @ObservationIgnored var mocking = false
 
@@ -138,7 +141,10 @@ final class CallController: NSObject {
     func accept() {
         guard let call, call.state == .incoming else { return }
         if useCallKit, let uuid {
-            controller.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { _ in }
+            controller.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { error in
+                guard let error else { return }
+                Log.call.error("answer transaction: \(error.localizedDescription, privacy: .public)")
+            }
             return
         }
         CallAudio.shared.beginCall()
@@ -214,6 +220,7 @@ final class CallController: NSObject {
 
     func update(_ new: CallView?) {
         if mocking { return }
+        if new?.state != .incoming { keepAwake(false) }
         guard let new else {
             #if DEBUG
             LogDump.write()
@@ -252,8 +259,10 @@ final class CallController: NSObject {
                 Task {
                     try? await Task.sleep(for: .seconds(delay))
                     guard self.call?.id == id, self.call?.state == .incoming else { return }
-                    Log.call.info("autoanswer")
+                    Log.call.info("autoanswer state=\(UIApplication.shared.applicationState.rawValue)")
                     self.accept()
+                    try? await Task.sleep(for: .seconds(1))
+                    LogDump.write()
                 }
             }
             #endif
@@ -383,6 +392,7 @@ final class CallController: NSObject {
             endedLocally = false
             reportedConnecting = false
             reportedConnected = false
+            keepAwake(true)
         }
         provider.reportNewIncomingCall(with: id, update: Self.update(handle: token ?? "talk", name: name)) { [weak self] error in
             Task { @MainActor in
@@ -410,7 +420,26 @@ final class CallController: NSObject {
                     provider.reportCall(with: id, endedAt: nil, reason: .unanswered)
                     self.clearCallKit()
                 }
+                // Nothing rings: the core sends no `incoming`, so stop keeping the app awake here.
+                if !rang { self.keepAwake(false) }
             }
+        }
+    }
+
+    private func keepAwake(_ on: Bool) {
+        if on, ringTask == .invalid {
+            ringTask = UIApplication.shared.beginBackgroundTask(withName: "ringing") { [weak self] in
+                MainActor.assumeIsolated {
+                    Log.call.info("ringing background time over")
+                    #if DEBUG
+                    LogDump.write()
+                    #endif
+                    self?.keepAwake(false)
+                }
+            }
+        } else if !on, ringTask != .invalid {
+            UIApplication.shared.endBackgroundTask(ringTask)
+            ringTask = .invalid
         }
     }
 

@@ -83,7 +83,16 @@ final class Push {
     /// Background push (deletions: a call that ended rings no longer).
     nonisolated static func handleBackground(_ info: [AnyHashable: Any]) async {
         guard let subject = info["subject"] as? String, let key = PushKey.load(),
-              let msg = try? decryptPush(deviceKeyPem: key, subject: subject) else { return }
+              let msg = try? decryptPush(deviceKeyPem: key, subject: subject) else {
+            Log.push.info("background push unreadable")
+            return
+        }
+        Log.push.info("background push: \(String(describing: msg).prefix(40), privacy: .public)")
+        defer {
+            #if DEBUG
+            LogDump.write()
+            #endif
+        }
         await removeDelivered(msg)
         guard let session = await SessionStore.shared.session else { return }
         _ = await session.handlePush(message: msg, callId: nil)
