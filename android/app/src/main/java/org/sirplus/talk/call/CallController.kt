@@ -143,8 +143,10 @@ class CallController(
         CallNotifications.cancelIncoming(context)
         val reason = call.endReason
         val rangHere = prev?.state == CallState.INCOMING
-        // Missed calls are announced by the core's CallMissed event.
-        val silentEnd = reason is EndReason.AnsweredElsewhere || reason is EndReason.Declined || reason is EndReason.Missed
+        // Missed calls are announced by the core's CallMissed event. Declined is silent only
+        // here (we declined); the caller of an outgoing call hears it ended.
+        val silentEnd = reason is EndReason.AnsweredElsewhere || reason is EndReason.Missed ||
+            (reason is EndReason.Declined && call.direction == CallDirection.INCOMING)
         if (!rangHere && !silentEnd) tones.playEnded()
         _ui.value = call
         endHold?.cancel()
