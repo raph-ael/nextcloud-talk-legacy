@@ -313,6 +313,7 @@ export function installSystem(c: SystemControls): void {
     c.networkChanged()
   })
   powerMonitor.on('suspend', () => log('suspend', current?.state ?? 'no call'))
+  app.on('before-quit', () => log('quit', current?.state ?? 'no call'))
   if (!mac) return
   tray = new Tray(menuBarImage())
   tray.setToolTip('Sirplus Talk')
