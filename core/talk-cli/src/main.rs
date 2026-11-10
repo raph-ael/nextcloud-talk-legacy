@@ -129,6 +129,9 @@ enum Cmd {
         /// Mute after this many seconds
         #[arg(long)]
         mute_after: Option<u64>,
+        /// Force a full rejoin (new signaling and Talk session) after this many seconds
+        #[arg(long)]
+        rejoin_after: Option<u64>,
         /// Tone frequency in Hz
         #[arg(long, default_value_t = 440.0)]
         tone: f32,
@@ -353,7 +356,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "call-bot")]
 async fn call_cmd(cli: &Cli) -> Result<()> {
-    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, tone, ring_wait, connect_timeout, passive, json } = &cli.cmd else {
+    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json } = &cli.cmd else {
         unreachable!()
     };
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -385,6 +388,7 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
         seconds: *seconds,
         expect_audio: *expect_audio,
         mute_after: *mute_after,
+        rejoin_after: *rejoin_after,
         ring_wait: *ring_wait,
         connect_timeout: *connect_timeout,
         passive: *passive,

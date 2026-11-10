@@ -406,6 +406,12 @@ impl Engine {
         self.calls.set_muted(muted);
     }
 
+    /// Tests (talk-cli): full rejoin of the running call, as after a long outage.
+    #[doc(hidden)]
+    pub fn debug_force_rejoin(&self) {
+        self.calls.force_rejoin();
+    }
+
     /// Feedback from the platform's [`MediaEngine`].
     pub fn media_report(&self, report: MediaReport) {
         self.calls.report(report);

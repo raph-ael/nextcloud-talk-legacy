@@ -220,4 +220,8 @@ impl CallManager {
     pub(crate) fn network_changed(&self) {
         self.send(Cmd::NetworkChanged);
     }
+
+    pub(crate) fn force_rejoin(&self) {
+        self.send(Cmd::ForceRejoin);
+    }
 }

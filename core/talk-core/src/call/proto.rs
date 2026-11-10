@@ -97,6 +97,12 @@ pub(crate) fn mute(to: &str, muted: bool) -> Value {
     )
 }
 
+/// We hang up (sent right before leaving the call). Leaving the call alone looks the
+/// same as a rejoin to the others; this lets them end at once. Other clients ignore it.
+pub(crate) fn hangup(to: &str) -> Value {
+    to_session(to, json!({"type": "hangup", "roomType": ROOM_TYPE}))
+}
+
 /// Signaling URL from the settings `server` value (string or list).
 pub(crate) fn signaling_url(server: &Value) -> Option<String> {
     let base = match server {

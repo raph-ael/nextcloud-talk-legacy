@@ -65,7 +65,23 @@ const NAMES_REFRESH: Duration = Duration::from_secs(10);
 /// 1:1: the other side's session vanished without hanging up (network, app reconnecting
 /// with a new session): wait this long for them to come back before ending the call.
 const VANISH_GRACE: Duration = Duration::from_secs(12);
+/// 1:1: the other side's session left the call without saying "hangup" first. Either a
+/// client that does not send it (web, official apps) hung up, or the other side is doing
+/// a full rejoin: the server then puts the old session out of the call right before the
+/// new one joins. Wait this long for a new session of the same person.
+const LEFT_GRACE: Duration = Duration::from_secs(6);
 const TICK: Duration = Duration::from_millis(250);
+
+/// How a session left the call.
+#[derive(Debug, Clone, Copy)]
+enum Leave {
+    /// It said "hangup" (our clients do): over at once.
+    HungUp,
+    /// inCall 0 without "hangup": a hang-up or a rejoin of the other side ([`LEFT_GRACE`]).
+    LeftCall,
+    /// Gone without leaving the call (connection lost, new session) ([`VANISH_GRACE`]).
+    Vanished,
+}
 
 pub(crate) enum Cmd {
     Accept,
@@ -78,6 +94,8 @@ pub(crate) enum Cmd {
     RecheckRing,
     /// Display names fetched in the background (actor id → name).
     Names(HashMap<String, String>),
+    /// Tests: drop the connection and do a full rejoin (new session, like after a long outage).
+    ForceRejoin,
 }
 
 /// Published state, shared with the [`super::CallManager`].
@@ -201,7 +219,10 @@ pub(crate) struct Actor {
     session_names: HashMap<String, String>,
     names_fetched: Option<Instant>,
     /// Actor ids whose session disappeared without hanging up, and since when.
+    /// 1:1: actor → until when we wait for them to come back.
     vanished: HashMap<String, Instant>,
+    /// Sessions that left recently (session → actor), for a late "hangup" message.
+    left_sessions: HashMap<String, String>,
     publisher: Option<Publisher>,
     publisher_failures: u32,
     /// `requestoffer` message id → session (to retry on errors).
@@ -300,6 +321,7 @@ impl Actor {
             session_names: HashMap::new(),
             names_fetched: None,
             vanished: HashMap::new(),
+            left_sessions: HashMap::new(),
             publisher: None,
             publisher_failures: 0,
             offer_requests: HashMap::new(),
@@ -862,6 +884,11 @@ impl Actor {
                     }
                 }
             }
+            Cmd::ForceRejoin => {
+                tracing::info!(call = %self.view.id, "forced rejoin (test)");
+                self.resume_id.clear();
+                self.lost("forced rejoin");
+            }
             Cmd::Names(names) => {
                 self.names.extend(names);
                 if let Some(n) = self.names.get(&self.me) {
@@ -981,7 +1008,7 @@ impl Actor {
                     .filter_map(|s| s.as_str().map(str::to_string))
                     .collect();
                 for s in gone {
-                    self.remove_other(&s, false);
+                    self.remove_other(&s, Leave::Vanished);
                 }
                 self.check_alone();
             }
@@ -1024,7 +1051,7 @@ impl Actor {
                 continue;
             }
             if u.in_call & 1 == 0 {
-                self.remove_other(&u.session_id, true);
+                self.remove_other(&u.session_id, Leave::LeftCall);
                 continue;
             }
             present.push(u.session_id.clone());
@@ -1071,7 +1098,7 @@ impl Actor {
         if full {
             let gone: Vec<String> = self.others.keys().filter(|k| !present.contains(k)).cloned().collect();
             for s in gone {
-                self.remove_other(&s, false);
+                self.remove_other(&s, Leave::Vanished);
             }
         }
         self.check_alone();
@@ -1087,15 +1114,23 @@ impl Actor {
         }
     }
 
-    /// `hung_up`: the session explicitly left the call (inCall 0). Otherwise it vanished
-    /// (lost connection, rejoining with a new session) and may come back.
-    fn remove_other(&mut self, session: &str, hung_up: bool) {
+    /// A session is gone; in 1:1 the call ends unless it may come back (see [`Leave`]).
+    fn remove_other(&mut self, session: &str, how: Leave) {
         if let Some(o) = self.others.remove(session) {
-            tracing::info!(call = %self.view.id, session, hung_up, "participant left");
-            if !hung_up && !o.user.actor_id.is_empty() {
-                self.vanished.insert(o.user.actor_id.clone(), Instant::now());
-            } else {
-                self.vanished.remove(&o.user.actor_id);
+            tracing::info!(call = %self.view.id, session, ?how, "participant left");
+            let grace = match how {
+                Leave::HungUp => None,
+                Leave::LeftCall => Some(LEFT_GRACE),
+                Leave::Vanished => Some(VANISH_GRACE),
+            };
+            match grace {
+                Some(g) if !o.user.actor_id.is_empty() => {
+                    self.vanished.insert(o.user.actor_id.clone(), Instant::now() + g);
+                    self.left_sessions.insert(session.to_string(), o.user.actor_id.clone());
+                }
+                _ => {
+                    self.vanished.remove(&o.user.actor_id);
+                }
             }
             if let Some(p) = o.peer {
                 self.close_peer(&p.peer_id);
@@ -1103,10 +1138,26 @@ impl Actor {
         }
     }
 
+    /// The other side said it hangs up (our clients do before leaving the call).
+    fn remote_hangup(&mut self, session: &str) {
+        if self.others.contains_key(session) {
+            self.remove_other(session, Leave::HungUp);
+        } else if let Some(actor) = self.left_sessions.remove(session) {
+            // The "left the call" update came first.
+            tracing::info!(call = %self.view.id, session, "participant hung up");
+            self.vanished.remove(&actor);
+        }
+        self.check_alone();
+    }
+
     /// 1:1: the other side left → the call is over (like a phone call). A vanished
     /// session gets [`VANISH_GRACE`] to come back.
     fn check_alone(&mut self) {
-        self.vanished.retain(|_, t| t.elapsed() < VANISH_GRACE);
+        let now = Instant::now();
+        self.vanished.retain(|_, until| now < *until);
+        if self.vanished.is_empty() {
+            self.left_sessions.clear();
+        }
         if !self.view.is_group
             && self.ever_joined
             && self.others.is_empty()
@@ -1163,6 +1214,7 @@ impl Actor {
                     }
                 }
             }
+            "hangup" if !own => self.remote_hangup(sender),
             "mute" | "unmute" => {
                 if payload["name"] == "audio" {
                     if let Some(o) = self.others.get_mut(sender) {
@@ -1629,6 +1681,19 @@ impl Actor {
             let client = self.client.clone();
             // Leave the call first: the others see "left the call" (a hang-up) before the
             // session disappears, which they would treat as a connection loss.
+            // Our clients end at once on "hangup"; without it they wait (LEFT_GRACE),
+            // because leaving the call also happens during a rejoin.
+            let targets: Vec<String> = self.others.keys().cloned().collect();
+            if let (Some(ws), false) = (self.ws.as_mut(), self.reconnect.is_some()) {
+                let _ = tokio::time::timeout(LEAVE_TIMEOUT, async {
+                    for to in targets {
+                        if ws::send_text(ws, proto::hangup(&to).to_string()).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+                .await;
+            }
             let _ = tokio::time::timeout(LEAVE_TIMEOUT, async {
                 if let Err(e) = client.leave_call(&token, false).await {
                     tracing::debug!("leave call: {e}");

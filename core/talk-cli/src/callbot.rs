@@ -491,6 +491,7 @@ pub struct CallOpts {
     pub seconds: u64,
     pub expect_audio: bool,
     pub mute_after: Option<u64>,
+    pub rejoin_after: Option<u64>,
     /// Wait this long for a call to answer (with `answer`).
     pub ring_wait: u64,
     /// Hang up if not connected after this many seconds.
@@ -589,6 +590,7 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     };
     eprintln!("verbunden, halte {} s", o.seconds);
     let mut muted = false;
+    let mut rejoined = false;
     while started.elapsed() < Duration::from_secs(o.seconds) {
         if let Some(v) = state(&sink) {
             if v.state == CallState::Ended {
@@ -597,6 +599,13 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
             }
         } else {
             break;
+        }
+        if let Some(r) = o.rejoin_after {
+            if !rejoined && started.elapsed() > Duration::from_secs(r) {
+                eprintln!("erzwinge full rejoin");
+                engine.debug_force_rejoin();
+                rejoined = true;
+            }
         }
         if let Some(m) = o.mute_after {
             if !muted && started.elapsed() > Duration::from_secs(m) {
