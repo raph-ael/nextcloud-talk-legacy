@@ -11,6 +11,7 @@ struct ChatView: View {
     @State private var actionsFor: UiMessage?
     @State private var scrollTick = 0
     @State private var atBottom = true
+    @State private var showJump = false
     @State private var panelOpen = false
     @State private var camera = false
     @State private var sending: PreparedImage?
@@ -48,10 +49,20 @@ struct ChatView: View {
                     onBottomChanged: { bottom in
                         atBottom = bottom
                         if bottom { store.markVisibleRead(token) }
-                    }
+                    },
+                    onFarChanged: { showJump = $0 }
                 )
             )
             .background(Talk.background)
+            .overlay(alignment: .bottomTrailing) {
+                if showJump {
+                    JumpToBottomButton(unread: Int(room?.unreadMessages ?? 0)) { scrollTick += 1 }
+                        .padding(.trailing, 14)
+                        .padding(.bottom, 14)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: showJump)
             if room?.readOnly == true {
                 Text("Diese Unterhaltung ist schreibgeschützt.")
                     .foregroundStyle(Talk.muted)
@@ -194,5 +205,46 @@ struct ChatView: View {
         if m.status != nil {
             Button("Löschen", role: .destructive) { store.discard(msg) }
         }
+    }
+}
+
+/// Round floating button bottom right of the message list (docs/chat.md, "Zum Ende springen"):
+/// shown once the list is more than half its height away from the newest message.
+private struct JumpToBottomButton: View {
+    let unread: Int
+    let action: () -> Void
+
+    private var label: String {
+        switch unread {
+        case ..<1: "Zum Ende springen"
+        case 1: "Zum Ende springen, 1 neue Nachricht"
+        default: "Zum Ende springen, \(unread) neue Nachrichten"
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Talk.muted)
+                .frame(width: 40, height: 40)
+                .background(Talk.floating, in: Circle())
+                .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+                .overlay(alignment: .top) {
+                    if unread > 0 {
+                        Text(unread > 99 ? "99+" : "\(unread)")
+                            .font(.system(size: 11, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Talk.accent, in: Capsule())
+                            .offset(y: -9)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("jump-to-bottom")
     }
 }

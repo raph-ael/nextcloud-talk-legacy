@@ -15,6 +15,8 @@ enum Talk {
     static let surfaceVariant = dynamic(light: 0xE9E9EB, dark: 0x2C2C2E)
     static let surface = dynamic(light: 0xFFFFFF, dark: 0x1B1B1C)
     static let onSurface = dynamic(light: 0x1B1B1D, dark: 0xE9E9EB)
+    /// Floating controls above content (desktop `--floating`).
+    static let floating = dynamic(light: 0xFFFFFF, dark: 0x2E2E2E)
     static let callDot = Color(hex: 0x2FB35A)
     static let offlineText = Color(hex: 0x6A5000)
     static let offlineBackground = Color(hex: 0xFFF3CD)

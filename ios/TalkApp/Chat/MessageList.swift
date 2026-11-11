@@ -10,6 +10,9 @@ struct MessageListActions {
     var onNearTop: () -> Void
     /// The newest message became visible (true) or was scrolled away from (false).
     var onBottomChanged: (Bool) -> Void
+    /// The list moved more than half its height away from the newest message (true) or came
+    /// back (false): shows the "Zum Ende springen" button. Independent of `onBottomChanged`.
+    var onFarChanged: (Bool) -> Void = { _ in }
 }
 
 /// The message list: a vertically flipped `UICollectionView` (newest message at the bottom,
@@ -69,6 +72,7 @@ struct MessageList: UIViewRepresentable {
         private var index: [String: Int] = [:]
         private var lastScrollRequest = 0
         private var atBottom = true
+        private var farFromBottom = false
         private let replyIcon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
         private var swipeCell: UICollectionViewCell?
         private var swipeMessage: MessageView?
@@ -160,8 +164,15 @@ struct MessageList: UIViewRepresentable {
             }
         }
 
+        /// Far away (more than ~15 rows), the list first jumps to about a screen before the end
+        /// without animation, then scrolls the rest smoothly (docs/chat.md, "Zum Ende springen").
         private func scrollToNewest(animated: Bool) {
             guard let view, !rows.isEmpty else { return }
+            let nearest = view.indexPathsForVisibleItems.map(\.item).min() ?? 0
+            if animated, nearest > 15 || view.contentOffset.y > view.bounds.height * 4 {
+                view.setContentOffset(CGPoint(x: 0, y: view.bounds.height), animated: false)
+                view.layoutIfNeeded()
+            }
             view.setContentOffset(.zero, animated: animated)
         }
 
@@ -176,6 +187,9 @@ struct MessageList: UIViewRepresentable {
             let bottom = scrollView.contentOffset.y <= 40
             if bottom != atBottom { parent?.actions.onBottomChanged(bottom) }
             atBottom = bottom
+            let far = scrollView.contentOffset.y > scrollView.bounds.height / 2
+            if far != farFromBottom { parent?.actions.onFarChanged(far) }
+            farFromBottom = far
             let remaining = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.height
             // Roughly 40 messages before the top (~60 pt each).
             if remaining < 2400 { parent?.actions.onNearTop() }
