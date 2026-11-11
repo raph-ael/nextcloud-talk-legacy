@@ -14,6 +14,29 @@ import { OfflineBanner } from './Sidebar'
 import { CallButton } from '../call/CallScreen'
 import { RecordingBanners } from '../call/RecordingBanners'
 
+/** Floating „Zum Ende springen“ (docs/chat.md); always mounted so it can fade in and out. */
+function JumpButton({ shown, unread, onJump }: { shown: boolean; unread: number; onJump: () => void }) {
+  const label =
+    unread > 0
+      ? `Zum Ende springen, ${unread} ${unread === 1 ? 'neue Nachricht' : 'neue Nachrichten'}`
+      : 'Zum Ende springen'
+  return (
+    <button
+      className={`jump${shown ? ' shown' : ''}`}
+      onClick={onJump}
+      aria-label={label}
+      title={label}
+      aria-hidden={!shown}
+      tabIndex={shown ? 0 : -1}
+    >
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <path fill="currentColor" d="M12 16.5l-6-6 1.4-1.4 4.6 4.6 4.6-4.6L18 10.5z" />
+      </svg>
+      {unread > 0 && <span className="jump-badge">{unread > 99 ? '99+' : unread}</span>}
+    </button>
+  )
+}
+
 /** Messages of the same author within this window form one visual group. */
 const GROUP_WINDOW_S = 3 * 60
 
@@ -26,7 +49,10 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const [dropping, setDropping] = useState(false)
   const addFiles = useRef<((files: File[]) => void) | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  // Two independent thresholds (docs/chat.md, „Zum Ende springen“): `atBottom` is the tight one
+  // for the read marker, `showJump` shows the button only half a screen away from the end.
   const [atBottom, setAtBottom] = useState(true)
+  const [showJump, setShowJump] = useState(false)
 
   const isGroup = room.roomType !== 1 && room.roomType !== 6
   const messages = chat?.messages ?? []
@@ -48,6 +74,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     const el = scroller.current
     if (!el) return
     setAtBottom(el.scrollTop > -40)
+    setShowJump(el.scrollTop < -el.clientHeight / 2)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
   }
 
@@ -58,7 +85,11 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   }, [chat, room.token])
 
   function scrollToBottom() {
-    scroller.current?.scrollTo({ top: 0, behavior: 'smooth' })
+    const el = scroller.current
+    if (!el) return
+    // Far away (older pages loaded): jump to one screen before the end, animate only the rest.
+    if (el.scrollTop < -2 * el.clientHeight) el.scrollTo({ top: -el.clientHeight, behavior: 'instant' })
+    el.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const openMenu = useCallback((msg: UiMessage, x: number, y: number) => setMenu({ msg, x, y }), [])
@@ -143,13 +174,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
             {chat?.loading && <div className="spinner" />}
           </div>
         </div>
-        {!atBottom && (
-          <button className="jump" onClick={scrollToBottom} aria-label="Zum Ende springen" title="Zum Ende springen">
-            <svg viewBox="0 0 24 24" width="20" height="20">
-              <path fill="currentColor" d="M12 16.5l-6-6 1.4-1.4 4.6 4.6 4.6-4.6L18 10.5z" />
-            </svg>
-          </button>
-        )}
+        <JumpButton shown={showJump} unread={room.unreadMessages} onJump={scrollToBottom} />
       </div>
 
       {room.readOnly ? (

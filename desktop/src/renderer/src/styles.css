@@ -929,7 +929,7 @@ a.file-row:hover .file-name {
   color: var(--text);
 }
 
-/* Signal: 36 px, 16 px from the right, 12 px above the composer. */
+/* Signal: 36 px, 16 px from the right, 12 px above the composer; fades in and out (docs/chat.md). */
 .jump {
   position: absolute;
   right: 16px;
@@ -944,6 +944,45 @@ a.file-row:hover .file-name {
     0 0 2px rgb(0 0 0 / 0.2),
     0 2px 6px rgb(0 0 0 / 0.12);
   color: var(--text-muted);
+  opacity: 0;
+  transform: scale(0.8);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    visibility 0s linear 0.15s;
+}
+.jump.shown {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+.jump-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump,
+  .jump.shown {
+    transform: none;
+  }
 }
 
 /* ---------- composer (Signal Desktop: 10 px padding, 4 px button gaps, 34 px pill) ---------- */
