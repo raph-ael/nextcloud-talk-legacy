@@ -275,6 +275,12 @@ impl TalkClient {
 
     /// Join a conversation (creates a Talk session). Returns the session id used for signaling.
     pub async fn join_room(&self, token: &str, force: bool) -> Result<String> {
+        Ok(self.join_room_data(token, force).await?.0)
+    }
+
+    /// Like [`Self::join_room`], also returns the room data of the response (with
+    /// `participantType`, `callRecording`, `recordingConsent` of this session).
+    pub async fn join_room_data(&self, token: &str, force: bool) -> Result<(String, serde_json::Value)> {
         let rb = self
             .request(
                 Method::POST,
@@ -282,10 +288,12 @@ impl TalkClient {
             )
             .form(&[("force", if force { "true" } else { "false" })]);
         let (data, _) = self.ocs::<serde_json::Value>(rb).await?;
-        data.get("sessionId")
+        let session = data
+            .get("sessionId")
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .ok_or_else(|| Error::Decode("join response without sessionId".into()))
+            .ok_or_else(|| Error::Decode("join response without sessionId".into()))?;
+        Ok((session, data))
     }
 
     pub async fn leave_room(&self, token: &str) -> Result<()> {
@@ -704,10 +712,14 @@ pub enum RingState {
 impl TalkClient {
     /// Joins the call of a conversation (requires `join_room` with the same cookie jar).
     /// `flags`: 1 in call | 2 audio | 4 video. `silent`: nobody is notified.
-    pub async fn join_call(&self, token: &str, flags: u32, silent: bool) -> Result<()> {
-        let rb = self
-            .request(Method::POST, &format!("{SPREED}/v4/call/{token}"))
-            .form(&[("flags", flags.to_string()), ("silent", silent.to_string())]);
+    /// `recording_consent`: the user agreed to being recorded (required when the server
+    /// asks for consent, see `CallView::recording_consent_pending`).
+    pub async fn join_call(&self, token: &str, flags: u32, silent: bool, recording_consent: bool) -> Result<()> {
+        let mut form = vec![("flags", flags.to_string()), ("silent", silent.to_string())];
+        if recording_consent {
+            form.push(("recordingConsent", "true".into()));
+        }
+        let rb = self.request(Method::POST, &format!("{SPREED}/v4/call/{token}")).form(&form);
         self.ocs::<serde_json::Value>(rb).await?;
         Ok(())
     }
@@ -750,6 +762,42 @@ impl TalkClient {
     pub async fn participants(&self, token: &str) -> Result<Vec<serde_json::Value>> {
         let rb = self.request(Method::GET, &format!("{SPREED}/v4/room/{token}/participants"));
         Ok(self.ocs::<Vec<serde_json::Value>>(rb).await?.0)
+    }
+
+    /// Starts recording the running call (moderators). `video`: the recording server
+    /// records the call view (avatars, screen shares); otherwise audio only.
+    pub async fn start_recording(&self, token: &str, video: bool) -> Result<()> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v1/recording/{token}"))
+            .form(&[("status", if video { "1" } else { "2" })]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    pub async fn stop_recording(&self, token: &str) -> Result<()> {
+        let rb = self.request(Method::DELETE, &format!("{SPREED}/v1/recording/{token}"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Runs an action of a notification (`actions[].link` with its `type`). Only links on
+    /// our own server are followed.
+    pub async fn notification_action(&self, method: &str, link: &str) -> Result<()> {
+        let path = link
+            .strip_prefix(self.account.server.trim_end_matches('/'))
+            .filter(|p| p.starts_with('/'))
+            .ok_or_else(|| Error::Decode(format!("action link on another server: {link}")))?;
+        let method = Method::from_bytes(method.to_ascii_uppercase().as_bytes())
+            .map_err(|_| Error::Decode(format!("action method {method}")))?;
+        self.ocs::<serde_json::Value>(self.request(method, path)).await?;
+        Ok(())
+    }
+
+    /// Deletes one notification of the user.
+    pub async fn dismiss_notification(&self, id: i64) -> Result<()> {
+        let rb = self.request(Method::DELETE, &format!("/ocs/v2.php/apps/notifications/api/v2/notifications/{id}"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
     }
 
     /// Notifications of the user (notifications app v2), newest first.

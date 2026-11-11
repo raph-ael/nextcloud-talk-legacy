@@ -24,7 +24,8 @@ pub mod push;
 pub mod voice;
 
 pub use call::{
-    CallDirection, CallParticipant, CallState, CallView, EndReason, IceCandidate, MediaEngine,
+    CallDirection, CallParticipant, CallRecording, CallState, CallView, EndReason, IceCandidate, MediaEngine,
+    RecordingNotice, RecordingNoticeKind,
     MediaReport, PeerKind, PeerState, SdpType,
 };
 pub use client::{

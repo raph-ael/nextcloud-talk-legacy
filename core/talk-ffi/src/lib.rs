@@ -412,6 +412,8 @@ pub enum CoreEvent {
     CallChanged { call: Option<CallView> },
     /// An incoming call was missed (not answered, or came in during another call).
     CallMissed { token: String, room_name: String, caller_name: String, is_group: bool },
+    /// Finished call recordings waiting for the user: the full current list.
+    RecordingsChanged { items: Vec<call::RecordingNotice> },
 }
 
 impl From<core::Event> for CoreEvent {
@@ -454,6 +456,9 @@ impl From<core::Event> for CoreEvent {
                 room_name,
                 caller_name,
                 is_group,
+            },
+            core::Event::RecordingsChanged { items } => Self::RecordingsChanged {
+                items: items.into_iter().map(Into::into).collect(),
             },
         }
     }

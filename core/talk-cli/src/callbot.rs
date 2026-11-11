@@ -498,6 +498,10 @@ pub struct CallOpts {
     pub connect_timeout: u64,
     /// With `answer`: do not poll for calls, wait for the core's own detection.
     pub passive: bool,
+    /// Start a recording once connected (`true`: video).
+    pub record: Option<bool>,
+    pub record_after: u64,
+    pub record_stop_after: Option<u64>,
 }
 
 fn own_sessions(peers: &[serde_json::Value], me: &str) -> Vec<String> {
@@ -573,6 +577,10 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     let connect_deadline = Instant::now() + Duration::from_secs(o.connect_timeout);
     let started = loop {
         match state(&sink) {
+            Some(v) if v.recording_consent_pending => {
+                eprintln!("Zustimmung zur Aufnahme verlangt: stimme zu");
+                engine.consent_to_recording();
+            }
             Some(v) if v.state == CallState::Connected => break Instant::now(),
             Some(v) if v.state == CallState::Ended => bail!("Anruf beendet: {:?}", v.end_reason),
             None => bail!("Anruf weg"),
@@ -591,14 +599,39 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     eprintln!("verbunden, halte {} s", o.seconds);
     let mut muted = false;
     let mut rejoined = false;
+    let mut recording = None;
+    let mut record_started = false;
+    let mut record_stopped = false;
     while started.elapsed() < Duration::from_secs(o.seconds) {
         if let Some(v) = state(&sink) {
             if v.state == CallState::Ended {
                 eprintln!("Anruf von der Gegenseite beendet: {:?}", v.end_reason);
                 break;
             }
+            if recording != Some(v.recording) {
+                eprintln!("Aufnahme: {:?} (darf aufnehmen: {})", v.recording, v.can_record);
+                recording = Some(v.recording);
+            }
         } else {
             break;
+        }
+        if let Some(video) = o.record {
+            if !record_started && started.elapsed() > Duration::from_secs(o.record_after) {
+                record_started = true;
+                match engine.start_recording(video).await {
+                    Ok(()) => eprintln!("Aufnahme angefordert ({})", if video { "Video" } else { "Audio" }),
+                    Err(e) => bail!("Aufnahme starten: {e}"),
+                }
+            }
+            if let Some(stop) = o.record_stop_after {
+                if record_started && !record_stopped && started.elapsed() > Duration::from_secs(stop) {
+                    record_stopped = true;
+                    match engine.stop_recording().await {
+                        Ok(()) => eprintln!("Aufnahme beendet"),
+                        Err(e) => bail!("Aufnahme beenden: {e}"),
+                    }
+                }
+            }
         }
         if let Some(r) = o.rejoin_after {
             if !rejoined && started.elapsed() > Duration::from_secs(r) {

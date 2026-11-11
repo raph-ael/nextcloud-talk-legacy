@@ -147,6 +147,22 @@ enum Cmd {
         /// Print every call change as JSON on stdout
         #[arg(long)]
         json: bool,
+        /// Start a recording ("audio" or "video") once connected
+        #[arg(long, value_parser = ["audio", "video"])]
+        record: Option<String>,
+        /// With --record: start it after this many seconds
+        #[arg(long, default_value_t = 5)]
+        record_after: u64,
+        /// With --record: stop it after this many seconds (otherwise it runs until the call ends)
+        #[arg(long)]
+        record_stop_after: Option<u64>,
+    },
+    /// Finished call recordings waiting for us (notifications); --share/--dismiss one
+    Recordings {
+        #[arg(long)]
+        share: Option<i64>,
+        #[arg(long, conflicts_with = "share")]
+        dismiss: Option<i64>,
     },
     /// Push check: registers this account with a device key at the server and the proxy,
     /// optionally asks the server for a test push (watch the proxy log), then unregisters
@@ -212,6 +228,25 @@ async fn main() -> Result<()> {
     if let Cmd::Call { .. } = &cli.cmd {
         return call_cmd(&cli).await;
     }
+    if let Cmd::Recordings { share, dismiss } = &cli.cmd {
+        let engine = Engine::new(client, Arc::new(talk_core_null_sink()), None);
+        // Fetches the notifications (rings nothing: the engine is not started).
+        engine.check_incoming_calls().await;
+        if let Some(id) = share {
+            engine.share_recording(*id).await?;
+            eprintln!("geteilt: {id}");
+        } else if let Some(id) = dismiss {
+            engine.dismiss_recording(*id).await?;
+            eprintln!("verworfen: {id}");
+        } else {
+            let items = engine.recording_notices();
+            for n in &items {
+                println!("{:<8} {:<10} {:<18} {:?} {} teilen={}", n.id, n.token, n.kind_label(), n.room_name, n.file_name, n.can_share);
+            }
+            eprintln!("{} Hinweise", items.len());
+        }
+        return Ok(());
+    }
     if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
         // Push registration needs an app password (token login), like the apps have.
         let app_password = client.get_app_password().await?;
@@ -248,7 +283,8 @@ async fn main() -> Result<()> {
         | Cmd::Voice { .. }
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
-        | Cmd::Fetch { .. } => unreachable!(),
+        | Cmd::Fetch { .. }
+        | Cmd::Recordings { .. } => unreachable!(),
         Cmd::Rooms { json } => {
             let t = Instant::now();
             let mut batch = client.rooms(None, true).await?;
@@ -356,7 +392,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "call-bot")]
 async fn call_cmd(cli: &Cli) -> Result<()> {
-    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json } = &cli.cmd else {
+    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json, record, record_after, record_stop_after } = &cli.cmd else {
         unreachable!()
     };
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -392,6 +428,9 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
         ring_wait: *ring_wait,
         connect_timeout: *connect_timeout,
         passive: *passive,
+        record: record.as_deref().map(|r| r == "video"),
+        record_after: *record_after,
+        record_stop_after: *record_stop_after,
     };
     let r = callbot::run(engine.clone(), sink, media, opts).await;
     engine.shutdown();

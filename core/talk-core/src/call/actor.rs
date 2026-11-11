@@ -75,6 +75,8 @@ const VANISH_GRACE: Duration = Duration::from_secs(12);
 /// new one joins. Wait this long for a new session of the same person.
 const LEFT_GRACE: Duration = Duration::from_secs(6);
 const TICK: Duration = Duration::from_millis(250);
+/// The server requires consent to recording and the user did not answer the dialog.
+const CONSENT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How a session left the call.
 #[derive(Debug, Clone, Copy)]
@@ -100,6 +102,11 @@ pub(crate) enum Cmd {
     Names(HashMap<String, String>),
     /// Tests: drop the connection and do a full rejoin (new session, like after a long outage).
     ForceRejoin,
+    /// The user agreed to being recorded (see `CallView::recording_consent_pending`).
+    ConsentToRecording,
+    /// We started/stopped a recording (REST call succeeded): show it right away; the
+    /// server's own status update follows.
+    RecordingRequested(super::CallRecording),
 }
 
 /// Published state, shared with the [`super::CallManager`].
@@ -238,6 +245,15 @@ pub(crate) struct Actor {
     media_trouble_since: Option<Instant>,
     muted: bool,
     ended: Option<EndReason>,
+
+    // recording
+    /// The server has a recording backend (`config.call.recording`).
+    recording_enabled: bool,
+    /// `config.call.recording-consent`: 0 off, 1 always, 2 per conversation.
+    consent_config: i64,
+    consent_given: bool,
+    /// Logged-in owner or moderator of the conversation (may record).
+    moderator: bool,
 }
 
 fn now_ms() -> i64 {
@@ -336,6 +352,10 @@ impl Actor {
             media_trouble_since: None,
             muted: false,
             ended: None,
+            recording_enabled: false,
+            consent_config: 0,
+            consent_given: false,
+            moderator: false,
         }
     }
 
@@ -557,6 +577,8 @@ impl Actor {
                 if call["enabled"].as_bool() == Some(false) {
                     return Err(Stop::End(failed("disabled", "Anrufe sind auf dem Server ausgeschaltet")));
                 }
+                self.recording_enabled = call["recording"].as_bool() == Some(true);
+                self.consent_config = call["recording-consent"].as_i64().unwrap_or(0);
             }
             self.fetch_names();
         }
@@ -606,13 +628,21 @@ impl Actor {
         for attempt in 0..2 {
             let client = self.client.clone();
             let token = self.token();
-            self.nc_session = self.abortable(async move { client.join_room(&token, true).await }).await??;
+            let (session, room) = self.abortable(async move { client.join_room_data(&token, true).await }).await??;
+            self.nc_session = session;
+            self.apply_room_data(&room);
             let msg = proto::join_room("", &self.view.token, &self.nc_session);
             self.request(msg).await?;
+            let consent_required = self.consent_config == 1
+                || self.consent_config == 2 && room["recordingConsent"].as_i64() == Some(1);
+            if consent_required && !self.consent_given {
+                self.wait_for_consent().await?;
+            }
             let client = self.client.clone();
             let token = self.token();
             let silent = self.silent;
-            match self.abortable(async move { client.join_call(&token, 3, silent).await }).await? {
+            let consent = self.consent_given;
+            match self.abortable(async move { client.join_call(&token, 3, silent, consent).await }).await? {
                 Ok(()) => break,
                 // The Nextcloud session got lost (cookie, expiry): join the room again.
                 Err(Error::NotFound | Error::Http { status: 404, .. }) if attempt == 0 => continue,
@@ -633,6 +663,67 @@ impl Actor {
         }
         self.emit();
         Ok(())
+    }
+
+    /// Room data from joining (`participants/active`): our role and the recording state.
+    fn apply_room_data(&mut self, room: &Value) {
+        // 1 owner, 2 moderator (guest moderators cannot record).
+        self.moderator = matches!(room["participantType"].as_i64(), Some(1 | 2));
+        if let Some(r) = room["callRecording"].as_i64() {
+            self.set_recording(r, "room data");
+        }
+    }
+
+    fn set_recording(&mut self, status: i64, source: &str) {
+        let r = super::CallRecording::from_server(status);
+        if r != self.view.recording {
+            tracing::info!(call = %self.view.id, recording = ?r, source, "recording changed");
+            self.view.recording = r;
+        }
+    }
+
+    /// The server requires consent to recording: wait for the user's answer while keeping
+    /// the signaling connection alive (we are in the room, not yet in the call).
+    async fn wait_for_consent(&mut self) -> Step<()> {
+        tracing::info!(call = %self.view.id, "waiting for recording consent");
+        self.view.recording_consent_pending = true;
+        self.emit();
+        let deadline = tokio::time::Instant::now() + CONSENT_TIMEOUT;
+        loop {
+            tokio::select! {
+                inc = async {
+                    match self.ws.as_mut() {
+                        Some(ws) => ws::next(ws).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Incoming::Closed(r) = &inc {
+                        self.ws = None;
+                        return Err(Stop::Err(signaling_err(&format!("closed: {r}"))));
+                    }
+                    self.on_ws(inc).await;
+                }
+                cmd = self.rx.recv() => {
+                    if let Some(Cmd::ConsentToRecording) = cmd {
+                        tracing::info!(call = %self.view.id, "recording consent given");
+                        self.consent_given = true;
+                        self.view.recording_consent_pending = false;
+                        self.emit();
+                        return Ok(());
+                    }
+                    if let Some(r) = self.handle_cmd(cmd).await {
+                        return Err(Stop::End(r));
+                    }
+                }
+                _ = sleep_until(deadline) => {
+                    return Err(Stop::End(failed("recording-consent", "Keine Zustimmung zur Aufnahme")));
+                }
+            }
+            if let Some(r) = self.ended.take() {
+                return Err(Stop::End(r));
+            }
+            self.emit();
+        }
     }
 
     // --- main loop -------------------------------------------------------------------
@@ -893,6 +984,12 @@ impl Actor {
                 self.resume_id.clear();
                 self.lost("forced rejoin");
             }
+            // Outside the consent dialog (`wait_for_consent`) there is nothing to agree to.
+            Cmd::ConsentToRecording => {}
+            Cmd::RecordingRequested(r) => {
+                tracing::info!(call = %self.view.id, recording = ?r, "recording requested");
+                self.view.recording = r;
+            }
             Cmd::Names(names) => {
                 self.names.extend(names);
                 if let Some(n) = self.names.get(&self.me) {
@@ -957,6 +1054,10 @@ impl Actor {
         match v["type"].as_str().unwrap_or_default() {
             "event" => self.handle_event(&v["event"]).await,
             "message" => {
+                if v["message"]["sender"]["type"] == "room" {
+                    self.room_message(&v["message"]["data"]);
+                    return;
+                }
                 let sender = v["message"]["sender"]["sessionid"].as_str().unwrap_or_default().to_string();
                 self.handle_peer_message(&sender, &v["message"]["data"]).await;
             }
@@ -1015,6 +1116,13 @@ impl Actor {
                     self.remove_other(&s, Leave::Vanished);
                 }
                 self.check_alone();
+            }
+            // Messages of the server to the whole room (`recording` status changes).
+            (Some("room"), Some("message")) => self.room_message(&ev["message"]["data"]),
+            (Some("room"), Some("update")) => {
+                if let Some(r) = ev["update"]["properties"]["callRecording"].as_i64() {
+                    self.set_recording(r, "room update");
+                }
             }
             (Some("participants"), Some("update")) => {
                 let u = &ev["update"];
@@ -1172,6 +1280,17 @@ impl Actor {
         }
         if self.others.is_empty() {
             self.someone_since = None;
+        }
+    }
+
+    /// A message of the server to everybody in the room.
+    fn room_message(&mut self, data: &Value) {
+        if data["type"] == "recording" {
+            if let Some(r) = data["recording"]["status"].as_i64() {
+                self.set_recording(r, "signaling");
+            }
+        } else {
+            tracing::debug!(call = %self.view.id, "room message: {}", data.to_string().chars().take(300).collect::<String>());
         }
     }
 
@@ -1636,6 +1755,10 @@ impl Actor {
             .collect();
         participants.sort_by(|a, b| a.name.cmp(&b.name).then(a.session_id.cmp(&b.session_id)));
         self.view.participants = participants;
+        self.view.can_record = self.recording_enabled
+            && self.moderator
+            && self.in_call_since.is_some()
+            && self.view.state != CallState::Ended;
         if self.last_emitted.as_ref() == Some(&self.view) {
             return;
         }

@@ -1,6 +1,7 @@
 //! Detecting incoming calls while the app runs: notify_push (instant), the room list
 //! (`hasCall` turning on) as a safety net, and later decrypted pushes. Every source ends
-//! in [`Engine::check_incoming_calls`], which asks the server what actually rings.
+//! in [`Engine::check_incoming_calls`], which asks the server what actually rings (and
+//! picks up recording notices from the same notifications).
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -43,10 +44,8 @@ fn call_notifications(list: &[Value]) -> Vec<CallNotification> {
 impl Engine {
     /// Looks for calls that ring for us right now and starts ringing (at most one).
     /// Safe to call often: calls that rang already are ignored.
+    /// Also updates the recording notices from the same response.
     pub async fn check_incoming_calls(&self) {
-        if self.calls.busy() {
-            return;
-        }
         let list = match self.client.notifications().await {
             Ok(l) => l,
             Err(e) => {
@@ -54,6 +53,10 @@ impl Engine {
                 return;
             }
         };
+        self.update_recording_notices(&list);
+        if self.calls.busy() {
+            return;
+        }
         for n in call_notifications(&list) {
             // Only calls that still ring (the notification stays after a missed call).
             match self.client.ring_state(&n.token).await {

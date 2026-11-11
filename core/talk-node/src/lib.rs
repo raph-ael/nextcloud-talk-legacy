@@ -415,6 +415,40 @@ impl TalkSession {
         self.engine.set_call_muted(muted);
     }
 
+    /// Starts recording the current call (only when `call.canRecord`). `video`: records
+    /// the call view; otherwise audio only. Rejects with a readable message.
+    #[napi]
+    pub async fn start_recording(&self, video: bool) -> Result<()> {
+        self.engine.start_recording(video).await.map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn stop_recording(&self) -> Result<()> {
+        self.engine.stop_recording().await.map_err(to_napi)
+    }
+
+    /// Answer to `call.recordingConsentPending`: the user agrees to being recorded.
+    #[napi]
+    pub fn consent_to_recording(&self) {
+        self.engine.consent_to_recording();
+    }
+
+    /// Finished recordings waiting for the user (changes: event `recordingsChanged`).
+    #[napi(ts_return_type = "any[]")]
+    pub fn recording_notices(&self) -> Result<Value> {
+        json(&self.engine.recording_notices())
+    }
+
+    #[napi]
+    pub async fn share_recording(&self, id: i64) -> Result<()> {
+        self.engine.share_recording(id).await.map_err(to_napi)
+    }
+
+    #[napi]
+    pub async fn dismiss_recording(&self, id: i64) -> Result<()> {
+        self.engine.dismiss_recording(id).await.map_err(to_napi)
+    }
+
     /// Report of the media engine, e.g.
     /// `{ type: "localDescription", peerId, sdpType: "offer", sdp }`,
     /// `{ type: "localCandidate", peerId, candidate: { candidate, sdpMid, sdpMLineIndex } }`,

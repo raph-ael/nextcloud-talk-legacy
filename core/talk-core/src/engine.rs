@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
 use crate::cache::Cache;
-use crate::call::{CallManager, CallView, MediaEngine, MediaReport, RoomInfo};
+use crate::call::{CallManager, CallView, MediaEngine, MediaReport, RecordingNotice, Recordings, RoomInfo};
 use crate::outbox::{Outbox, PendingMessage};
 use crate::voice::VoiceStore;
 
@@ -106,6 +106,9 @@ pub enum Event {
         caller_name: String,
         is_group: bool,
     },
+    /// Finished call recordings (transcripts, summaries, failures) waiting for the user:
+    /// the full current list. See [`Engine::recording_notices`].
+    RecordingsChanged { items: Vec<RecordingNotice> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,6 +219,7 @@ pub struct Engine {
     pub(crate) cache: Cache,
     pub(crate) voice: Arc<VoiceStore>,
     pub(crate) calls: CallManager,
+    pub(crate) recordings: Recordings,
     /// Runtime of `start`, for spawning from synchronous calls.
     pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
     weak: Weak<Self>,
@@ -246,6 +250,7 @@ impl Engine {
             voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
             cache,
             calls: CallManager::default(),
+            recordings: Recordings::default(),
             runtime: OnceLock::new(),
             weak: weak.clone(),
         })
@@ -404,6 +409,12 @@ impl Engine {
 
     pub fn set_call_muted(&self, muted: bool) {
         self.calls.set_muted(muted);
+    }
+
+    /// The user agreed to being recorded (answer to `CallView::recording_consent_pending`);
+    /// the core then joins the call.
+    pub fn consent_to_recording(&self) {
+        self.calls.consent_to_recording();
     }
 
     /// Tests (talk-cli): full rejoin of the running call, as after a long outage.

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::actor::{Actor, Cmd, Ctx, Shared};
-use super::{CallDirection, CallState, CallView, MediaEngine, MediaReport};
+use super::{CallDirection, CallRecording, CallState, CallView, MediaEngine, MediaReport};
 use crate::client::TalkClient;
 use crate::engine::{Event, EventSink};
 use crate::error::{Error, Result};
@@ -119,6 +119,9 @@ impl CallManager {
             muted: false,
             participants: Vec::new(),
             end_reason: None,
+            recording: CallRecording::Off,
+            can_record: false,
+            recording_consent_pending: false,
         };
         self.launch(client, sink, me, view, silent, runtime)
     }
@@ -169,6 +172,9 @@ impl CallManager {
             muted: false,
             participants: Vec::new(),
             end_reason: None,
+            recording: CallRecording::Off,
+            can_record: false,
+            recording_consent_pending: false,
         };
         self.launch(client, sink, me, view, true, runtime).is_ok()
     }
@@ -219,6 +225,14 @@ impl CallManager {
 
     pub(crate) fn network_changed(&self) {
         self.send(Cmd::NetworkChanged);
+    }
+
+    pub(crate) fn consent_to_recording(&self) {
+        self.send(Cmd::ConsentToRecording);
+    }
+
+    pub(crate) fn recording_requested(&self, r: CallRecording) {
+        self.send(Cmd::RecordingRequested(r));
     }
 
     pub(crate) fn force_rejoin(&self) {

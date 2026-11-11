@@ -72,6 +72,82 @@ impl From<core::EndReason> for EndReason {
     }
 }
 
+/// Recording of the call; see docs/calls.md "Aufnahme".
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum CallRecording {
+    Off,
+    StartingAudio,
+    StartingVideo,
+    Audio,
+    Video,
+    Failed,
+}
+
+impl From<core::CallRecording> for CallRecording {
+    fn from(r: core::CallRecording) -> Self {
+        match r {
+            core::CallRecording::Off => Self::Off,
+            core::CallRecording::StartingAudio => Self::StartingAudio,
+            core::CallRecording::StartingVideo => Self::StartingVideo,
+            core::CallRecording::Audio => Self::Audio,
+            core::CallRecording::Video => Self::Video,
+            core::CallRecording::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingNoticeKind {
+    Recording,
+    Transcript,
+    Summary,
+    RecordingFailed,
+    TranscriptFailed,
+    SummaryFailed,
+}
+
+impl From<core::RecordingNoticeKind> for RecordingNoticeKind {
+    fn from(k: core::RecordingNoticeKind) -> Self {
+        match k {
+            core::RecordingNoticeKind::Recording => Self::Recording,
+            core::RecordingNoticeKind::Transcript => Self::Transcript,
+            core::RecordingNoticeKind::Summary => Self::Summary,
+            core::RecordingNoticeKind::RecordingFailed => Self::RecordingFailed,
+            core::RecordingNoticeKind::TranscriptFailed => Self::TranscriptFailed,
+            core::RecordingNoticeKind::SummaryFailed => Self::SummaryFailed,
+        }
+    }
+}
+
+/// A finished recording (transcript, summary, or a failure) waiting for the user.
+#[derive(uniffi::Record, Clone)]
+pub struct RecordingNotice {
+    /// Pass to `share_recording` / `dismiss_recording`.
+    pub id: i64,
+    pub token: String,
+    pub room_name: String,
+    pub kind: RecordingNoticeKind,
+    pub file_name: String,
+    /// Unix seconds.
+    pub timestamp: i64,
+    /// "In Chat teilen" possible (otherwise only dismiss).
+    pub can_share: bool,
+}
+
+impl From<core::RecordingNotice> for RecordingNotice {
+    fn from(n: core::RecordingNotice) -> Self {
+        Self {
+            id: n.id,
+            token: n.token,
+            room_name: n.room_name,
+            kind: n.kind.into(),
+            file_name: n.file_name,
+            timestamp: n.timestamp,
+            can_share: n.can_share,
+        }
+    }
+}
+
 #[derive(uniffi::Record, Clone)]
 pub struct CallParticipant {
     pub session_id: String,
@@ -96,6 +172,13 @@ pub struct CallView {
     pub muted: bool,
     pub participants: Vec<CallParticipant>,
     pub end_reason: Option<EndReason>,
+    /// Recording state (also when somebody else started it): show the indicator.
+    pub recording: CallRecording,
+    /// We may start/stop a recording (moderator, recording backend, call running).
+    pub can_record: bool,
+    /// The server requires consent to recording before joining: show the dialog, then
+    /// `consent_to_recording()` or `hang_up()`.
+    pub recording_consent_pending: bool,
 }
 
 impl From<core::CallView> for CallView {
@@ -123,6 +206,9 @@ impl From<core::CallView> for CallView {
                 })
                 .collect(),
             end_reason: c.end_reason.map(Into::into),
+            recording: c.recording.into(),
+            can_record: c.can_record,
+            recording_consent_pending: c.recording_consent_pending,
         }
     }
 }
@@ -305,6 +391,38 @@ impl TalkSession {
 
     pub fn set_call_muted(&self, muted: bool) {
         self.engine.set_call_muted(muted);
+    }
+
+    // Recording (docs/calls.md "Aufnahme").
+
+    /// Starts recording the current call (only when `CallView.can_record`). `video`:
+    /// records the call view (avatars, screen shares); otherwise audio only.
+    pub async fn start_recording(&self, video: bool) -> Result<(), CoreError> {
+        Ok(self.engine.start_recording(video).await?)
+    }
+
+    pub async fn stop_recording(&self) -> Result<(), CoreError> {
+        Ok(self.engine.stop_recording().await?)
+    }
+
+    /// Answer to `CallView.recording_consent_pending`: the user agrees to being recorded.
+    pub fn consent_to_recording(&self) {
+        self.engine.consent_to_recording();
+    }
+
+    /// Finished recordings waiting for the user (changes: `CoreEvent::RecordingsChanged`).
+    pub fn recording_notices(&self) -> Vec<RecordingNotice> {
+        self.engine.recording_notices().into_iter().map(Into::into).collect()
+    }
+
+    /// "In Chat teilen": posts the file into its conversation, removes the notice.
+    pub async fn share_recording(&self, id: i64) -> Result<(), CoreError> {
+        Ok(self.engine.share_recording(id).await?)
+    }
+
+    /// "Verwerfen": removes the notice (the file stays in the user's files).
+    pub async fn dismiss_recording(&self, id: i64) -> Result<(), CoreError> {
+        Ok(self.engine.dismiss_recording(id).await?)
     }
 
     // Reports of the MediaEngine.

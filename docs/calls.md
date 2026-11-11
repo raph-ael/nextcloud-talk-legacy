@@ -110,6 +110,53 @@ Klingeln funktioniert auch ohne `setMediaEngine`. Annehmen ohne MediaEngine ende
 | `currentCall()` | aktueller `CallView` oder nichts |
 | `userAvatar(userId, dark)` | Avatar für Gruppen-Kacheln |
 | `networkChanged()` | gibt es schon; bei jedem Netzwechsel aufrufen (sofortiger Reconnect, ICE-Restart) |
+| `startRecording(video)` | Aufnahme starten (nur bei `canRecord`), Fehler mit lesbarer `message` |
+| `stopRecording()` | Aufnahme beenden |
+| `consentToRecording()` | Antwort auf `recordingConsentPending`: Zustimmung, der Kern tritt dann bei |
+| `recordingNotices()` | wartende Hinweise „Aufnahme verfügbar“ (Änderungen: `RecordingsChanged`) |
+| `shareRecording(id)` | „In Chat teilen“ |
+| `dismissRecording(id)` | „Verwerfen“ (die Datei bleibt in den Dateien) |
+
+## Aufnahme
+
+Die Aufnahme macht der Aufnahme-Server von Nextcloud, nicht die App. Er tritt dem Anruf
+unsichtbar bei. Der Kern zeigt nur den Stand an und startet bzw. stoppt die Aufnahme.
+
+**`CallView`:**
+
+| Feld | Bedeutung |
+|---|---|
+| `recording` | `off`, `startingAudio`, `startingVideo`, `audio`, `video`, `failed`. Kommt live vom Server, auch wenn jemand anderes (z. B. im Web) die Aufnahme startet. |
+| `canRecord` | Wir dürfen aufnehmen: Aufnahme-Server vorhanden, wir sind Moderator (eingeloggt) und im Anruf. Nur dann die Bedienelemente zeigen. |
+| `recordingConsentPending` | Der Server verlangt eine Zustimmung, bevor wir dem Anruf beitreten. Der Kern wartet im Zustand `connecting` bis zu 2 min. Dialog zeigen, dann `consentToRecording()` oder `hangUp()`. Ohne Antwort endet der Anruf mit `failed{recording-consent}`. |
+
+**Oberfläche (alle Plattformen gleich):**
+- **Anzeige für alle** bei `recording` ≠ `off`:
+  - Oben im Anrufbildschirm ein roter Punkt mit „Aufnahme läuft“ (der Punkt pulsiert sanft).
+  - `starting*`: „Aufnahme startet …“.
+  - `failed`: nur für `canRecord` „Aufnahme fehlgeschlagen“.
+  - Die Anzeige erscheint auch in der Leiste „Zurück zum Anruf“ (● REC) und in der System-Anrufanzeige, wo möglich.
+- **Ansage**, sobald `recording` zu `audio`/`video` wird (auch beim Beitritt in eine laufende Aufnahme):
+  - Toast „Dieser Anruf wird aufgezeichnet“
+  - ein leiser selbst erzeugter Hinweiston
+  - TalkBack/VoiceOver-Ansage
+- **Bedienung nur bei `canRecord`:**
+  - Knopf „Mehr“ (⋯) in der Steuerleiste; der Video-Platz bleibt frei.
+  - Menü „Audio aufnehmen“ / „Video aufnehmen“. Läuft eine Aufnahme: „Aufnahme beenden“ mit Rückfrage „Aufnahme beenden?“.
+  - Fehler als Toast.
+  - Video zeichnet die Talk-Weboberfläche auf (Avatare, Bildschirmfreigaben aus dem Web).
+- **Zustimmung** (`recordingConsentPending`): Dialog „Dieser Anruf kann aufgezeichnet werden“ mit [Abbrechen] → `hangUp()` und [Zustimmen und beitreten] → `consentToRecording()`. Er erscheint auch nach „Annehmen“ (iOS: nach dem Annehmen über CallKit in der App).
+
+**Nach dem Anruf:**
+- Wer die Aufnahme gestartet hat, bekommt sie in seinen Dateien und einen Hinweis.
+- `RecordingsChanged { items }` liefert immer die ganze Liste, `recordingNotices()` den aktuellen Stand.
+- `RecordingNotice`: `{ id, token, roomName, kind, fileName, timestamp, canShare }`
+  - `kind`: `recording` | `transcript` | `summary` | `recordingFailed` | `transcriptFailed` | `summaryFailed`
+- Banner in der Gesprächsliste und im Chat des Gesprächs:
+  - „Aufnahme verfügbar · ‹Datei›“ (bzw. Transkript, Zusammenfassung) mit [In Chat teilen] (nur bei `canShare`) und [Verwerfen].
+  - Fehler mit [OK] → `dismissRecording`.
+- Läuft die App, zusätzlich eine leise Systembenachrichtigung.
+- Der Kern holt die Hinweise beim Start, bei jeder notify_push-Benachrichtigung und nach einer eigenen Aufnahme 15 min lang alle 30 s.
 
 ## MediaEngine (Plattform implementiert, Kern ruft auf)
 

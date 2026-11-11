@@ -62,6 +62,42 @@ pub enum EndReason {
     Failed { code: String, message: String },
 }
 
+/// Recording of the call (server field `callRecording`). Everybody in the call sees it;
+/// only moderators can change it ([`CallView::can_record`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CallRecording {
+    #[default]
+    Off,
+    /// Requested, the recording server is joining. "Aufnahme startet …"
+    StartingAudio,
+    StartingVideo,
+    /// Recording. "Aufnahme läuft"
+    Audio,
+    Video,
+    /// The recording server failed; can be started again. "Aufnahme fehlgeschlagen"
+    Failed,
+}
+
+impl CallRecording {
+    /// Server value: 0 none, 1 video, 2 audio, 3 video starting, 4 audio starting, 5 failed.
+    pub fn from_server(v: i64) -> Self {
+        match v {
+            1 => Self::Video,
+            2 => Self::Audio,
+            3 => Self::StartingVideo,
+            4 => Self::StartingAudio,
+            5 => Self::Failed,
+            _ => Self::Off,
+        }
+    }
+
+    /// Recording or about to (the indicator is shown).
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Off | Self::Failed)
+    }
+}
+
 /// Another participant (never ourselves).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +131,15 @@ pub struct CallView {
     pub muted: bool,
     pub participants: Vec<CallParticipant>,
     pub end_reason: Option<EndReason>,
+    /// Recording state of the call (also when somebody else started it).
+    pub recording: CallRecording,
+    /// We may start/stop a recording: the server has a recording backend, we are a
+    /// (logged-in) moderator and the call is running. Controls are shown only then.
+    pub can_record: bool,
+    /// The server requires consent to being recorded before we join the call. The core
+    /// waits (state `Connecting`); show the consent dialog, then
+    /// `consent_to_recording()` or `hang_up()`.
+    pub recording_consent_pending: bool,
 }
 
 // --- media engine (implemented by the platform) --------------------------------------
@@ -183,5 +228,8 @@ mod actor;
 mod incoming;
 mod manager;
 mod proto;
+mod recording;
+pub use recording::{RecordingNotice, RecordingNoticeKind};
+pub(crate) use recording::Recordings;
 pub(crate) use manager::{CallManager, RoomInfo};
 pub(crate) mod ws;
