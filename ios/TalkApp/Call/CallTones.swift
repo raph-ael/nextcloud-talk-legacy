@@ -1,7 +1,8 @@
 import AVFoundation
 
 /// Call tones, generated at runtime (no sound files): ringback 425 Hz 1 s on / 4 s off
-/// (European style), a short rising "connected" and a falling "ended" tone.
+/// (European style), a short rising "connected", a falling "ended" tone and a soft double
+/// beep when the call starts being recorded.
 ///
 /// Played on an own queue: preparing an audio player waits for the audio server and must
 /// never block the main thread.
@@ -21,7 +22,7 @@ final class CallTones: @unchecked Sendable {
     }()
 
     enum Tone {
-        case ringback, connected, ended
+        case ringback, connected, ended, recording
     }
 
     func play(_ tone: Tone) {
@@ -38,7 +39,7 @@ final class CallTones: @unchecked Sendable {
         if playing == tone && tone == .ringback { return }
         halt(nil)
         guard let data = Self.wav(tone), let p = try? AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue) else { return }
-        p.volume = tone == .ringback ? 0.35 : 0.5
+        p.volume = tone == .ringback ? 0.35 : (tone == .recording ? 0.25 : 0.5)
         p.numberOfLoops = tone == .ringback ? -1 : 0
         p.prepareToPlay()
         p.play()
@@ -63,6 +64,7 @@ final class CallTones: @unchecked Sendable {
         case .ringback: return [(425, 1.0), (0, 4.0)]
         case .connected: return [(660, 0.09), (0, 0.03), (880, 0.12)]
         case .ended: return [(880, 0.09), (0, 0.03), (660, 0.09), (0, 0.03), (440, 0.16)]
+        case .recording: return [(1000, 0.1), (0, 0.12), (1000, 0.1)]
         }
     }
 

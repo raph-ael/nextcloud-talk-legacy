@@ -47,12 +47,19 @@ final class SessionStore {
     private(set) var chats: [String: ChatState] = [:]
     private(set) var online = true
     private(set) var activeToken: String?
+    /// Finished call recordings (and transcripts, summaries) waiting for "teilen"/"verwerfen".
+    private(set) var recordings: [RecordingNotice] = []
+    /// Notices whose share/dismiss request is running.
+    private(set) var recordingBusy = Set<Int64>()
     /// Scene in the foreground (marking read, failure notifications).
     var foreground = true
 
     @ObservationIgnored private(set) var session: TalkSession?
     @ObservationIgnored private let bridge = EventBridge()
     @ObservationIgnored private var notifiedFailures = Set<String>()
+    /// Recording notices already known; nil until the first `recordingsChanged` of a session
+    /// (the starting point: banners, but no notifications).
+    @ObservationIgnored private var notifiedRecordings: Set<Int64>?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var lastPathSatisfied = true
     @ObservationIgnored private var lastPathKey = ""
@@ -153,6 +160,8 @@ final class SessionStore {
         user = saved.loginName
         // Cached conversation list: shown in the first frame, before any request.
         rooms = s.rooms()
+        recordings = s.recordingNotices()
+        notifiedRecordings = nil
         phase = .ready
         Task {
             do {
@@ -186,6 +195,9 @@ final class SessionStore {
         // Unsent messages belong to this account: never deliver them under another one.
         try? FileManager.default.removeItem(at: Self.dataDir)
         notifiedFailures.removeAll()
+        recordings = []
+        recordingBusy = []
+        notifiedRecordings = nil
         textDrafts.removeAll()
         media.clear()
         rooms = []
@@ -234,6 +246,44 @@ final class SessionStore {
         case .outboxChanged(let token, let items):
             updateChat(token) { $0.messages = Self.withPending($0.messages, items) }
             announceFailures(token, items)
+        case .recordingsChanged(let items):
+            recordings = items
+            // The first one after the start is the starting point; only later ids are new.
+            if let known = notifiedRecordings {
+                for n in items where !known.contains(n.id) { Notifications.recording(n) }
+            }
+            notifiedRecordings = (notifiedRecordings ?? []).union(items.map(\.id))
+        }
+    }
+
+    // MARK: - Recordings
+
+    func recordingNotices(for token: String) -> [RecordingNotice] {
+        recordings.filter { $0.token == token }
+    }
+
+    /// "In Chat teilen": the core posts the file into the conversation.
+    func shareRecording(_ n: RecordingNotice) {
+        recordingAction(n) { try await $0.shareRecording(id: n.id) }
+    }
+
+    /// "Verwerfen" / "OK".
+    func dismissRecording(_ n: RecordingNotice) {
+        recordingAction(n) { try await $0.dismissRecording(id: n.id) }
+    }
+
+    private func recordingAction(_ n: RecordingNotice, _ f: @escaping (TalkSession) async throws -> Void) {
+        guard let session, !recordingBusy.contains(n.id) else { return }
+        recordingBusy.insert(n.id)
+        Task {
+            do {
+                try await f(session)
+                Notifications.removeRecording(n.id)
+            } catch {
+                Log.call.error("recording notice \(n.id): \(error.localizedDescription, privacy: .public)")
+                Toast.show(CallController.message(error, fallback: "Hat nicht geklappt"))
+            }
+            recordingBusy.remove(n.id)
         }
     }
 

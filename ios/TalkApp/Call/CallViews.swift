@@ -110,6 +110,8 @@ struct CallScreen: View {
                     ActiveCallView(call: call)
                 }
             }
+            // The call window covers the app's own toast.
+            ToastOverlay()
         }
         .preferredColorScheme(.dark)
     }
@@ -155,6 +157,9 @@ struct ActiveCallView: View {
                     .accessibilityLabel("Zurück zum Chat")
                     .accessibilityIdentifier("call-minimize")
                     Spacer()
+                    RecordingIndicator(call: call)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
                 }
                 .padding(.horizontal, 8)
                 VStack(spacing: 6) {
@@ -181,6 +186,17 @@ struct ActiveCallView: View {
                     .padding(.bottom, 24)
             }
         }
+        .alert("Dieser Anruf kann aufgezeichnet werden", isPresented: consentAsked) {
+            Button("Abbrechen", role: .cancel) { controller.hangUp() }
+            Button("Zustimmen und beitreten") { controller.consentToRecording() }
+        } message: {
+            Text("Wenn du beitrittst, stimmst du der Aufzeichnung zu.")
+        }
+    }
+
+    /// The core waits in `connecting` until we consent or hang up.
+    private var consentAsked: Binding<Bool> {
+        Binding(get: { call.recordingConsentPending && call.state != .ended }, set: { _ in })
     }
 
     private var speaking: Bool {
@@ -188,11 +204,14 @@ struct ActiveCallView: View {
     }
 }
 
-/// Audio output · mute · (video, later) · hang up. 48 pt buttons, 20 pt apart.
+/// Audio output · mute · (video, later) · more (recording) · hang up. 48 pt buttons,
+/// 20 pt apart.
 struct CallControls: View {
     let call: CallView
     private var audio: CallAudio { .shared }
     private var controller: CallController { .shared }
+    @State private var menu = false
+    @State private var confirmStop = false
 
     var body: some View {
         let ended = call.state == .ended
@@ -205,12 +224,33 @@ struct CallControls: View {
                 id: "call-mute"
             ) { controller.toggleMute() }
             // Video goes here later (same size), the bar keeps its layout.
+            if call.canRecord {
+                CallButton(symbol: "ellipsis", label: "Mehr", id: "call-more") { menu = true }
+                    .confirmationDialog("Aufnahme", isPresented: $menu, titleVisibility: .hidden) {
+                        if recordingRuns {
+                            Button("Aufnahme beenden", role: .destructive) { confirmStop = true }
+                        } else {
+                            Button("Audio aufnehmen") { controller.startRecording(video: false) }
+                            Button("Video aufnehmen") { controller.startRecording(video: true) }
+                        }
+                    }
+            }
             CallButton(symbol: "phone.down.fill", tint: Talk.danger, label: "Auflegen", id: "call-hangup") {
                 controller.hangUp()
+            }
+            .confirmationDialog("Aufnahme beenden?", isPresented: $confirmStop, titleVisibility: .visible) {
+                Button("Aufnahme beenden", role: .destructive) { controller.stopRecording() }
             }
         }
         .disabled(ended)
         .opacity(ended ? 0.5 : 1)
+        .onChange(of: call.canRecord) { _, can in
+            if !can { menu = false }
+        }
+    }
+
+    private var recordingRuns: Bool {
+        RecordingText.isActive(call.recording) || RecordingText.isStarting(call.recording)
     }
 }
 
@@ -435,6 +475,16 @@ struct CallBar: View {
                 controller.presented = true
             } label: {
                 HStack(spacing: 6) {
+                    if RecordingText.isActive(call.recording) {
+                        HStack(spacing: 4) {
+                            RecordingDot(size: 8, pulsing: false)
+                                .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                            Text("REC").font(.system(size: 12, weight: .bold))
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Aufnahme läuft")
+                        .padding(.trailing, 4)
+                    }
                     Image(systemName: "phone.fill").font(.system(size: 12))
                     label(call).font(.system(size: 14, weight: .semibold)).monospacedDigit()
                 }

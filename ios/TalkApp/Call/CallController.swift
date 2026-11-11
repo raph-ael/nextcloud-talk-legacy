@@ -37,6 +37,8 @@ final class CallController: NSObject {
     @ObservationIgnored private var closeTask: Task<Void, Never>?
     /// When CallKit started ringing for the current incoming call.
     @ObservationIgnored private var ringingSince: Date?
+    /// The running recording of the current call was announced (toast, tone, VoiceOver).
+    @ObservationIgnored private var announcedRecording = false
     /// Debug: a mock call is shown, core events are ignored.
     @ObservationIgnored var mocking = false
 
@@ -168,6 +170,13 @@ final class CallController: NSObject {
     /// Hang up, cancel dialing or decline.
     func hangUp() {
         guard let call else { return }
+        #if DEBUG
+        if mocking {
+            self.call = nil
+            presented = false
+            return
+        }
+        #endif
         if call.state == .ended {
             close()
             return
@@ -189,6 +198,62 @@ final class CallController: NSObject {
             session.declineCall(token: call.token)
         } else {
             session.hangUp()
+        }
+    }
+
+    // MARK: Recording
+
+    /// "Audio aufnehmen" / "Video aufnehmen" (only with `canRecord`).
+    func startRecording(video: Bool) {
+        guard let session, call?.canRecord == true else { return }
+        Task {
+            do { try await session.startRecording(video: video) } catch {
+                Log.call.error("startRecording: \(error.localizedDescription, privacy: .public)")
+                Toast.show(Self.message(error, fallback: "Die Aufnahme konnte nicht gestartet werden"))
+            }
+        }
+    }
+
+    /// "Aufnahme beenden" (after the confirmation).
+    func stopRecording() {
+        guard let session else { return }
+        Task {
+            do { try await session.stopRecording() } catch {
+                Log.call.error("stopRecording: \(error.localizedDescription, privacy: .public)")
+                Toast.show(Self.message(error, fallback: "Die Aufnahme konnte nicht beendet werden"))
+            }
+        }
+    }
+
+    /// "Zustimmen und beitreten": the core joins the call it holds in `connecting`.
+    func consentToRecording() {
+        #if DEBUG
+        if mocking, let c = call {
+            var c2 = c
+            c2.recordingConsentPending = false
+            call = c2
+            return
+        }
+        #endif
+        session?.consentToRecording()
+    }
+
+    /// Toast, soft tone and VoiceOver, once per running recording (also when joining one).
+    private func announceRecording(_ c: CallView, isNewCall: Bool) {
+        if isNewCall { announcedRecording = false }
+        guard RecordingText.isActive(c.recording) else {
+            announcedRecording = false
+            return
+        }
+        guard !announcedRecording, c.state == .connected || c.state == .reconnecting else { return }
+        announcedRecording = true
+        Log.call.info("recording announced (\(String(describing: c.recording), privacy: .public))")
+        Toast.show(RecordingText.announcement)
+        UIAccessibility.post(notification: .announcement, argument: RecordingText.announcement)
+        // After the "connected" tone when both come together.
+        Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            CallTones.shared.play(.recording)
         }
     }
 
@@ -248,6 +313,7 @@ final class CallController: NSObject {
             reportedConnected = false
         }
         tones(previous: isNewCall ? nil : previous, new)
+        announceRecording(new, isNewCall: isNewCall)
         callKit(new)
         switch new.state {
         case .incoming:
@@ -468,20 +534,22 @@ final class CallController: NSObject {
     }
 
     /// Call errors reach Swift as `Server("call: <code>: <message>")` (no own case in the FFI yet).
-    static func message(_ error: Error) -> String {
+    static func message(_ error: Error, fallback: String = "Anruf nicht möglich") -> String {
         if case CoreError.Server(let detail) = error, detail.hasPrefix("call: ") {
             let parts = detail.dropFirst(6).split(separator: ":", maxSplits: 1)
             if parts.count == 2 { return parts[1].trimmingCharacters(in: .whitespaces) }
         }
         if case CoreError.Network = error { return "Keine Verbindung" }
-        return "Anruf nicht möglich"
+        return fallback
     }
 }
 
 #if DEBUG
 extension CallController {
-    /// `TALK_CALL_MOCK=dialing|ringing|connected|reconnecting|group|incoming|ended` shows
-    /// the call screen with a fake call (screenshots, layout checks). No media, no core.
+    /// `TALK_CALL_MOCK=dialing|ringing|connected|reconnecting|group|incoming|ended|consent`
+    /// shows the call screen with a fake call (screenshots, layout checks). No media, no
+    /// core. `TALK_CALL_MOCK_REC=off|startingAudio|audio|video|failed` sets its recording
+    /// state, `TALK_CALL_MOCK_CAN_RECORD=1` shows the recording controls.
     /// `TALK_AUTOCALL=<token>` calls that conversation after launch; `TALK_AUTOHANGUP=<s>`
     /// hangs up after that many seconds (automated call tests).
     func autoCallIfRequested() {
@@ -509,7 +577,17 @@ extension CallController {
         let room = SessionStore.shared.rooms.first { !$0.isGroup } ?? SessionStore.shared.rooms.first
         let names = ["Anna Berg", "Bernd Krause", "Chiara Rossi", "Daniel Ohl", "Eva Lind"]
         let group = mode == "group"
+        let env = ProcessInfo.processInfo.environment
+        let recording: CallRecording = switch env["TALK_CALL_MOCK_REC"] ?? "" {
+        case "startingAudio": .startingAudio
+        case "startingVideo": .startingVideo
+        case "audio": .audio
+        case "video": .video
+        case "failed": .failed
+        default: .off
+        }
         let state: CallState = switch mode {
+        case "consent": .connecting
         case "dialing": .dialing
         case "ringing": .ringing
         case "reconnecting": .reconnecting
@@ -528,11 +606,16 @@ extension CallController {
             callerName: room?.name ?? "Anna Berg",
             startedAt: state == .connected ? Int64(Date().timeIntervalSince1970 * 1000) - 192_000 : nil,
             muted: mode == "reconnecting", participants: participants,
-            endReason: state == .ended ? .noAnswer : nil
+            endReason: state == .ended ? .noAnswer : nil,
+            recording: recording, canRecord: env["TALK_CALL_MOCK_CAN_RECORD"] == "1",
+            recordingConsentPending: mode == "consent"
         )
         mocking = true
         call = view
-        presented = ProcessInfo.processInfo.environment["TALK_CALL_MOCK_BAR"] != "1"
+        presented = env["TALK_CALL_MOCK_BAR"] != "1"
+        if RecordingText.isActive(recording) && state == .connected {
+            Toast.show(RecordingText.announcement)
+        }
     }
 }
 #endif

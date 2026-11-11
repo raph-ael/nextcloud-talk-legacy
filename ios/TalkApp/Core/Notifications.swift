@@ -2,7 +2,8 @@ import Observation
 import SwiftUI
 import UserNotifications
 
-/// Local notifications: a failed send per conversation (tap opens it) and the app badge.
+/// Local notifications: a failed send per conversation, missed calls, finished recordings
+/// (taps open the chat) and the app badge.
 enum Notifications {
     private static let askedKey = "notifications.asked"
 
@@ -35,6 +36,22 @@ enum Notifications {
         content.threadIdentifier = "missed_call.\(token)"
         let id = "missed_call.\(token).\(Int(Date().timeIntervalSince1970))"
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    /// A finished recording (transcript, summary) while the app runs: quiet, tap opens the chat.
+    static func recording(_ n: RecordingNotice) {
+        let content = UNMutableNotificationContent()
+        content.title = RecordingText.title(n)
+        content.body = n.roomName
+        content.sound = nil
+        content.interruptionLevel = .passive
+        content.userInfo = ["token": n.token]
+        content.threadIdentifier = "recording.\(n.token)"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "recording.\(n.id)", content: content, trigger: nil))
+    }
+
+    static func removeRecording(_ id: Int64) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["recording.\(id)"])
     }
 
     static func setBadge(_ count: Int) {

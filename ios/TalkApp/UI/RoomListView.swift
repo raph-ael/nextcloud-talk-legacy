@@ -24,6 +24,12 @@ struct RoomListView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
                 }
+                if !store.recordings.isEmpty {
+                    RecordingBanners(notices: store.recordings, showRoom: true)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Talk.background)
+                }
                 if !favorites.isEmpty {
                     Section {
                         ForEach(favorites, id: \.token) { row($0, now: context.date) }

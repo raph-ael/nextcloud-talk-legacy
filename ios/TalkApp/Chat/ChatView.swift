@@ -31,6 +31,7 @@ struct ChatView: View {
 
         VStack(spacing: 0) {
             if !store.online { OfflineBanner() }
+            RecordingBanners(notices: store.recordingNotices(for: token))
             MessageList(
                 messages: messages,
                 isGroup: room?.isGroup ?? true,
