@@ -45,6 +45,12 @@ const api: TalkApi = {
   hangUp: () => ipcRenderer.invoke('talk:hangUp'),
   setCallMuted: (muted) => ipcRenderer.invoke('talk:setCallMuted', muted),
   currentCall: () => ipcRenderer.invoke('talk:currentCall'),
+  startRecording: (video) => ipcRenderer.invoke('talk:startRecording', video),
+  stopRecording: () => ipcRenderer.invoke('talk:stopRecording'),
+  consentToRecording: () => ipcRenderer.invoke('talk:consentToRecording'),
+  recordingNotices: () => ipcRenderer.invoke('talk:recordingNotices'),
+  shareRecording: (id) => ipcRenderer.invoke('talk:shareRecording', id),
+  dismissRecording: (id) => ipcRenderer.invoke('talk:dismissRecording', id),
   userAvatarUrl: (userId) => `talk-avatar://user/${encodeURIComponent(userId)}`,
   onMediaCommand: (cb) => {
     const listener = (_e: IpcRendererEvent, cmd: MediaCommand) => cb(cmd)

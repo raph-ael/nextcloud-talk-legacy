@@ -3,7 +3,8 @@
 
 import { useSyncExternalStore } from 'react'
 import type { CallView, EndReason } from '@shared/core'
-import { playConnected, playHangup, playRingback, playRingtone, stopTones } from './tones'
+import { playConnected, playHangup, playRecordingCue, playRingback, playRingtone, stopTones } from './tones'
+import { startRecordingNotices } from './recordings'
 
 /** How long the final state stays visible before the call view closes. */
 const ENDED_MS = 1500
@@ -12,16 +13,18 @@ export interface CallUiState {
   call: CallView | null
   /** The call view is hidden behind the "back to call" bar (chats stay usable). */
   minimized: boolean
-  /** Last action failed (e.g. `startCall` busy); shown briefly. */
-  error: string | null
+  /** Short message (failed action, „Dieser Anruf wird aufgezeichnet“); shown briefly. */
+  toast: string | null
 }
 
-let st: CallUiState = { call: null, minimized: false, error: null }
+let st: CallUiState = { call: null, minimized: false, toast: null }
 const listeners = new Set<() => void>()
 let endTimer: ReturnType<typeof setTimeout> | null = null
-let errorTimer: ReturnType<typeof setTimeout> | null = null
+let toastTimer: ReturnType<typeof setTimeout> | null = null
 /** Call ids that already played the connected tone (a reconnect does not play it again). */
 const greeted = new Set<string>()
+/** Call whose running recording was announced (again after the recording stopped). */
+let announcedRecording: string | null = null
 
 function set(patch: Partial<CallUiState>): void {
   st = { ...st, ...patch }
@@ -55,6 +58,7 @@ export function startCallUi(): void {
     if (c && !st.call) show(c)
   })
   window.addEventListener('keydown', onKey, true)
+  startRecordingNotices()
 }
 
 function show(next: CallView | null): void {
@@ -69,6 +73,7 @@ function show(next: CallView | null): void {
     endTimer = null
   }
   tones(prev, next)
+  announceRecording(next)
   if (next.state === 'ended' && quiet(next)) {
     // Not even a frame of the call view (an incoming bar just goes away).
     close()
@@ -128,13 +133,48 @@ function quiet(c: CallView): boolean {
   return c.direction === 'incoming' && (kind === 'declined' || kind === 'missed')
 }
 
+export function isRecording(c: CallView): boolean {
+  return c.recording === 'audio' || c.recording === 'video'
+}
+
+/**
+ * Once the recording runs (also when we join a running one): toast, a soft cue and, through
+ * the toast's live region, a screen reader announcement. Not again after a reconnect.
+ */
+function announceRecording(c: CallView): void {
+  if (c.state === 'ended') return
+  const joined = c.state === 'connected' || c.state === 'reconnecting'
+  if (isRecording(c)) {
+    if (!joined || announcedRecording === c.id) return
+    announcedRecording = c.id
+    playRecordingCue()
+    toast('Dieser Anruf wird aufgezeichnet')
+  } else if (announcedRecording === c.id && c.state === 'connected') {
+    // Stopped (or failed): a new recording is announced again.
+    announcedRecording = null
+  }
+}
+
 // --- Actions ----------------------------------------------------------------------------
 
-function fail(err: unknown): void {
+export function toast(text: string): void {
+  if (toastTimer) clearTimeout(toastTimer)
+  set({ toast: text })
+  toastTimer = setTimeout(() => set({ toast: null }), 4000)
+}
+
+/** The core's message without the IPC and error-code prefixes. */
+export function errorText(err: unknown): string {
   const msg = String((err as Error)?.message ?? err)
-  if (errorTimer) clearTimeout(errorTimer)
-  set({ error: msg.includes('busy') ? 'Es läuft bereits ein Anruf.' : `Anruf nicht möglich: ${msg}` })
-  errorTimer = setTimeout(() => set({ error: null }), 4000)
+    .replace(/^Error invoking remote method '[^']*': /, '')
+    .replace(/^Error: /, '')
+  if (msg.startsWith('NETWORK:')) return 'Keine Verbindung zum Server'
+  return msg.replace(/^[A-Z_]+: /, '').replace(/^call: [\w-]+: /, '')
+}
+
+function fail(err: unknown): void {
+  const msg = errorText(err)
+  toast(msg.includes('busy') ? 'Es läuft bereits ein Anruf.' : `Anruf nicht möglich: ${msg}`)
 }
 
 export function startCall(token: string): void {
@@ -169,6 +209,20 @@ export function toggleMute(): void {
   const c = st.call
   if (!c || c.state === 'ended' || c.state === 'incoming') return
   void window.talk.setCallMuted(!c.muted)
+}
+
+/** Only with `canRecord`; the state comes back through `callChanged`. */
+export function startRecording(video: boolean): void {
+  window.talk.startRecording(video).catch((e) => toast(errorText(e)))
+}
+
+export function stopRecording(): void {
+  window.talk.stopRecording().catch((e) => toast(errorText(e)))
+}
+
+/** „Zustimmen und beitreten“ (`recordingConsentPending`); „Abbrechen“ is `hangUp`. */
+export function consentToRecording(): void {
+  void window.talk.consentToRecording()
 }
 
 export function minimize(minimized: boolean): void {

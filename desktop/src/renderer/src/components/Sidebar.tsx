@@ -3,6 +3,7 @@ import { withAttachment, type RoomView } from '@shared/core'
 import { getState, openRoom, useStore } from '../store'
 import { listTime } from '../format'
 import { Avatar } from './Avatar'
+import { RecordingBanners } from '../call/RecordingBanners'
 
 export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, searchRef) {
   const rooms = useStore((s) => s.rooms)
@@ -67,6 +68,7 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
         />
       </div>
       {!online && <OfflineBanner />}
+      <RecordingBanners />
       <nav className="room-list" aria-label="Chats">
         {favorites.length > 0 && (
           <>

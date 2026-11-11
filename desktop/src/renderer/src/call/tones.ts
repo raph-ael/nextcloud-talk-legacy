@@ -110,3 +110,13 @@ export function playConnected(): void {
 export function playHangup(): void {
   once([659.25, 440, 329.63], 0.13, 0.18)
 }
+
+/**
+ * The call is being recorded: two soft, low notes. Plays over whatever runs (does not stop
+ * a loop), quieter than the other tones.
+ */
+export function playRecordingCue(): void {
+  const c = context()
+  const t = c.currentTime + 0.03
+  ;[587.33, 587.33].forEach((f, i) => note(c.destination, f, t + i * 0.28, 0.2, 0.07))
+}

@@ -12,6 +12,7 @@ import { ImageViewer } from './ImageViewer'
 import { MessageMenu, type MenuItem } from './MessageMenu'
 import { OfflineBanner } from './Sidebar'
 import { CallButton } from '../call/CallScreen'
+import { RecordingBanners } from '../call/RecordingBanners'
 
 /** Messages of the same author within this window form one visual group. */
 const GROUP_WINDOW_S = 3 * 60
@@ -118,6 +119,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
         </div>
       </header>
       {!online && <OfflineBanner />}
+      <RecordingBanners token={room.token} />
 
       <div className="timeline-wrap">
         <div className="timeline" ref={scroller} onScroll={onScroll}>

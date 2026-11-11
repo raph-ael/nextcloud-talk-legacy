@@ -16,8 +16,9 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFil
 import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
-import { callChanged, ensureMicrophone, installSystem } from './system'
+import { callChanged, ensureMicrophone, installSystem, recordingsChanged } from './system'
 import {
+  recordingNoticeTitle,
   withAttachment,
   type AccountInfo,
   type AppEvent,
@@ -27,6 +28,7 @@ import {
   type MediaReport,
   type CoreEvent,
   type PendingMessage,
+  type RecordingNotice,
   type ReplyPreview,
   type RoomView,
   type StagedFile,
@@ -89,6 +91,12 @@ interface NativeSession {
   declineCall(token: string): void
   hangUp(): void
   setCallMuted(muted: boolean): void
+  startRecording(video: boolean): Promise<void>
+  stopRecording(): Promise<void>
+  consentToRecording(): void
+  recordingNotices(): RecordingNotice[]
+  shareRecording(id: number): Promise<void>
+  dismissRecording(id: number): Promise<void>
   userAvatar(userId: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
   mediaReport(report: MediaReport): void
 }
@@ -216,6 +224,9 @@ function onCoreEvent(event: CoreEvent): void {
     return
   } else if (event.type === 'outboxChanged') {
     announceFailures(event.token, event.items)
+  } else if (event.type === 'recordingsChanged') {
+    notifyRecordings(event.items)
+    recordingsChanged(event.items)
   }
   send(event)
 }
@@ -225,6 +236,8 @@ function startSession(stored: StoredAccount, plainPassword?: string): void {
   rmSync(legacyRoomsCache, { force: true })
   // Dev accounts (not stored) get their own cache: never mix two accounts' messages.
   const dir = stored.secret ? coreDir : join(dataDir, 'talk-dev', stored.loginName)
+  knownNotices.clear()
+  noticesSince = Math.floor(Date.now() / 1000)
   session = new core.TalkSession(stored.server, stored.loginName, password, onCoreEvent, dir)
   session.setMediaEngine(onMediaCommand)
   sessionDir = dir
@@ -490,6 +503,28 @@ function notifyMissedCall(m: { token: string; roomName: string; callerName: stri
     send({ type: 'openRoom', token: m.token })
   })
   n.show()
+}
+
+/** Recording notices already announced. */
+const knownNotices = new Set<number>()
+/** Unix s of the sign-in: older notices (stored while the app was closed) stay quiet. */
+let noticesSince = 0
+
+/** A recording, transcript or summary is ready while the app runs: a quiet notification. */
+function notifyRecordings(items: RecordingNotice[]): void {
+  // The core sends no first (empty) list, so "the first event is old" does not hold;
+  // the server timestamp decides (a minute of slack for clock skew).
+  const fresh = items.filter((i) => !knownNotices.has(i.id) && i.timestamp >= noticesSince - 60)
+  items.forEach((i) => knownNotices.add(i.id))
+  if (!Notification.isSupported()) return
+  for (const i of fresh) {
+    const n = new Notification({ title: recordingNoticeTitle(i), body: i.fileName ? `${i.roomName} · ${i.fileName}` : i.roomName, silent: true })
+    n.on('click', () => {
+      showWindow()
+      send({ type: 'openRoom', token: i.token })
+    })
+    n.show()
+  }
 }
 
 function stopRingAttention(): void {
@@ -819,6 +854,13 @@ function registerIpc(): void {
   ipcMain.handle('talk:hangUp', () => session?.hangUp())
   ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => session?.setCallMuted(muted))
   ipcMain.handle('talk:currentCall', () => session?.currentCall() ?? null)
+  // Recording (docs/calls.md, „Aufnahme“).
+  ipcMain.handle('talk:startRecording', (_e, video: boolean) => requireSession().startRecording(video))
+  ipcMain.handle('talk:stopRecording', () => requireSession().stopRecording())
+  ipcMain.handle('talk:consentToRecording', () => session?.consentToRecording())
+  ipcMain.handle('talk:recordingNotices', () => session?.recordingNotices() ?? [])
+  ipcMain.handle('talk:shareRecording', (_e, id: number) => requireSession().shareRecording(id))
+  ipcMain.handle('talk:dismissRecording', (_e, id: number) => requireSession().dismissRecording(id))
   ipcMain.on('talk:mediaReady', (e) => {
     if (e.sender === win?.webContents) mediaEngineReady()
   })

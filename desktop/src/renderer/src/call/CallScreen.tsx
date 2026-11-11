@@ -5,7 +5,21 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import type { CallParticipant, CallView, RoomView } from '@shared/core'
 import { useStore } from '../store'
 import { Avatar } from '../components/Avatar'
-import { accept, decline, duration, hangUp, minimize, startCall, statusText, toggleMute, useCall } from './store'
+import {
+  accept,
+  consentToRecording,
+  decline,
+  duration,
+  hangUp,
+  isRecording,
+  minimize,
+  startCall,
+  startRecording,
+  statusText,
+  stopRecording,
+  toggleMute,
+  useCall,
+} from './store'
 import { chooseMicrophone, chooseSpeaker, listDevices, mediaState, subscribeMedia, type AudioDevices } from './engine'
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -15,16 +29,15 @@ const MOD = isMac ? '⌘' : 'Strg'
 export function CallLayer() {
   const call = useCall((s) => s.call)
   const minimized = useCall((s) => s.minimized)
-  const error = useCall((s) => s.error)
+  const toast = useCall((s) => s.toast)
   return (
     <>
       {call?.state === 'incoming' && <IncomingCallBar call={call} />}
       {call && call.state !== 'incoming' && !minimized && <CallScreen call={call} />}
-      {error && (
-        <div className="call-toast" role="status">
-          {error}
-        </div>
-      )}
+      {/* Always mounted: a live region only announces changes, not its own appearance. */}
+      <div className="call-toast-region" role="status" aria-live="polite">
+        {toast && <div className="call-toast">{toast}</div>}
+      </div>
     </>
   )
 }
@@ -41,6 +54,11 @@ export function ReturnToCallBar() {
         <span className="ellipsis">
           Zurück zum Anruf · <CallStatus call={call} />
         </span>
+        {call.recording !== 'off' && call.recording !== 'failed' && (
+          <span className={`call-return-rec${isRecording(call) ? '' : ' starting'}`} title={recordingText(call) ?? undefined}>
+            ● REC
+          </span>
+        )}
       </button>
       <button className="call-return-hangup" onClick={hangUp} title={`Auflegen (${MOD}+Umschalt+D)`} aria-label="Auflegen">
         <HangUpIcon size={16} />
@@ -112,6 +130,8 @@ function CallScreen({ call }: { call: CallView }) {
   const media = useSyncExternalStore(subscribeMedia, mediaState)
   const tiles = call.isGroup && call.participants.length > 0
   const ended = call.state === 'ended'
+  const [confirmStop, setConfirmStop] = useState(false)
+  const consent = call.recordingConsentPending && !ended
   return (
     <div className={`call-screen${ended ? ' ended' : ''}`} role="dialog" aria-label={`Anruf mit ${call.roomName}`}>
       <div
@@ -128,6 +148,7 @@ function CallScreen({ call }: { call: CallView }) {
             <CallStatusLine call={call} />
           </div>
         )}
+        {!ended && <RecordingIndicator call={call} />}
       </header>
 
       <main className="call-stage">
@@ -151,6 +172,7 @@ function CallScreen({ call }: { call: CallView }) {
         <DevicesButton disabled={ended} />
         {/* Reserved for the camera button once video exists. */}
         <span className="call-slot" aria-hidden />
+        {call.canRecord && !ended && <MoreButton call={call} onStop={() => setConfirmStop(true)} />}
         <button
           className={`call-ctl${call.muted ? ' active' : ''}`}
           onClick={toggleMute}
@@ -171,6 +193,147 @@ function CallScreen({ call }: { call: CallView }) {
           <HangUpIcon />
         </button>
       </footer>
+
+      {consent && (
+        <CallDialog
+          title="Dieser Anruf kann aufgezeichnet werden"
+          text="Wenn du beitrittst, stimmst du der Aufzeichnung zu."
+          cancel="Abbrechen"
+          confirm="Zustimmen und beitreten"
+          onCancel={hangUp}
+          onConfirm={consentToRecording}
+        />
+      )}
+      {confirmStop && !consent && (
+        <CallDialog
+          title="Aufnahme beenden?"
+          cancel="Abbrechen"
+          confirm="Beenden"
+          onCancel={() => setConfirmStop(false)}
+          onConfirm={() => {
+            setConfirmStop(false)
+            stopRecording()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// --- Recording (docs/calls.md, „Aufnahme“) -------------------------------------------
+
+/** Shown text of the recording state; `null`: nothing to show. */
+function recordingText(call: CallView): string | null {
+  switch (call.recording) {
+    case 'startingAudio':
+    case 'startingVideo':
+      return 'Aufnahme startet …'
+    case 'audio':
+    case 'video':
+      return 'Aufnahme läuft'
+    case 'failed':
+      // Only those who can start it again need to know.
+      return call.canRecord ? 'Aufnahme fehlgeschlagen' : null
+    default:
+      return null
+  }
+}
+
+function RecordingIndicator({ call }: { call: CallView }) {
+  const text = recordingText(call)
+  if (!text) return null
+  const kind = isRecording(call) ? 'on' : call.recording === 'failed' ? 'failed' : 'starting'
+  return (
+    <div className={`call-rec ${kind}`}>
+      <span className="call-rec-dot" aria-hidden />
+      {text}
+    </div>
+  )
+}
+
+/** „Mehr“ (⋯): start (audio/video) or stop the recording. */
+function MoreButton({ call, onStop }: { call: CallView; onStop: () => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = usePopover(open, () => setOpen(false))
+  const running = call.recording !== 'off' && call.recording !== 'failed'
+  const pick = (f: () => void) => () => {
+    setOpen(false)
+    f()
+  }
+  return (
+    <div className="call-devices" ref={ref}>
+      <button
+        className={`call-ctl${open ? ' active' : ''}`}
+        onClick={() => setOpen((o) => !o)}
+        title="Mehr"
+        aria-label="Mehr"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <MoreIcon />
+      </button>
+      {open && (
+        <div className="call-menu narrow" role="menu">
+          {running ? (
+            <button className="call-menu-item" role="menuitem" onClick={pick(onStop)}>
+              <span className="call-menu-check rec">●</span>
+              Aufnahme beenden
+            </button>
+          ) : (
+            <>
+              <button className="call-menu-item" role="menuitem" onClick={pick(() => startRecording(false))}>
+                <span className="call-menu-check rec">●</span>
+                Audio aufnehmen
+              </button>
+              <button className="call-menu-item" role="menuitem" onClick={pick(() => startRecording(true))}>
+                <span className="call-menu-check rec">●</span>
+                Video aufnehmen
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Modal question on top of the call view; Escape cancels, Enter confirms. */
+function CallDialog(p: {
+  title: string
+  text?: string
+  cancel: string
+  confirm: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef(p.onCancel)
+  cancelRef.current = p.onCancel
+  useEffect(() => {
+    // Focus once on open (the call view re-renders often).
+    confirmRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      cancelRef.current()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+  return (
+    <div className="call-dialog-backdrop">
+      <div className="call-dialog" role="alertdialog" aria-modal="true" aria-labelledby="call-dialog-title">
+        <h2 id="call-dialog-title">{p.title}</h2>
+        {p.text && <p>{p.text}</p>}
+        <div className="call-dialog-buttons">
+          <button className="call-dialog-btn" onClick={p.onCancel}>
+            {p.cancel}
+          </button>
+          <button className="call-dialog-btn primary" ref={confirmRef} onClick={p.onConfirm}>
+            {p.confirm}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -223,20 +386,7 @@ function Tile({ p }: { p: CallParticipant }) {
 
 function DevicesButton({ disabled }: { disabled: boolean }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
-    window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  const ref = usePopover(open, () => setOpen(false))
   return (
     <div className="call-devices" ref={ref}>
       <button
@@ -252,6 +402,27 @@ function DevicesButton({ disabled }: { disabled: boolean }) {
       {open && <DevicesMenu />}
     </div>
   )
+}
+
+/** Closes an open popover on a click outside or Escape. */
+function usePopover(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null)
+  const closeRef = useRef(close)
+  closeRef.current = close
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) closeRef.current()
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current()
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return ref
 }
 
 function DevicesMenu() {
@@ -353,6 +524,16 @@ function SpeakerIcon({ size }: { size?: number }) {
     <Svg size={size}>
       <path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4Z" />
       <path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" />
+    </Svg>
+  )
+}
+
+function MoreIcon() {
+  return (
+    <Svg>
+      <circle cx="6" cy="12" r="1.3" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.3" fill="currentColor" />
+      <circle cx="18" cy="12" r="1.3" fill="currentColor" />
     </Svg>
   )
 }

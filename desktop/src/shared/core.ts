@@ -166,6 +166,8 @@ export type CoreEvent =
   | { type: 'callChanged'; call: CallView | null }
   /** A call was not answered here (also one that came in during another call). */
   | { type: 'callMissed'; token: string; roomName: string; callerName: string; isGroup: boolean }
+  /** The whole list of recording notices (docs/calls.md, „Aufnahme“). */
+  | { type: 'recordingsChanged'; items: RecordingNotice[] }
 
 // --- Calls (docs/calls.md, talk-core/src/call/mod.rs) ------------------------------
 
@@ -208,6 +210,55 @@ export interface CallView {
   muted: boolean
   participants: CallParticipant[]
   endReason: EndReason | null
+  /** Recording state, live from the server (also when somebody else started it). */
+  recording: CallRecording
+  /** We may start/stop a recording (moderator, recording server, in the call). */
+  canRecord: boolean
+  /** The server wants consent before we join; the core waits in `connecting`. */
+  recordingConsentPending: boolean
+}
+
+export type CallRecording = 'off' | 'startingAudio' | 'startingVideo' | 'audio' | 'video' | 'failed'
+
+export type RecordingNoticeKind =
+  | 'recording'
+  | 'transcript'
+  | 'summary'
+  | 'recordingFailed'
+  | 'transcriptFailed'
+  | 'summaryFailed'
+
+/** A finished recording (or transcript, summary, failure) waiting for the user. */
+export interface RecordingNotice {
+  /** Pass to `shareRecording` / `dismissRecording`. */
+  id: number
+  token: string
+  roomName: string
+  kind: RecordingNoticeKind
+  /** In the user's files; empty for an upload failure. */
+  fileName: string
+  /** Unix seconds. */
+  timestamp: number
+  /** „In Chat teilen“ is possible (otherwise only dismiss). */
+  canShare: boolean
+}
+
+/** „Aufnahme verfügbar“ etc.: banner and system notification of a notice. */
+export function recordingNoticeTitle(n: RecordingNotice): string {
+  switch (n.kind) {
+    case 'recording':
+      return 'Aufnahme verfügbar'
+    case 'transcript':
+      return 'Transkript verfügbar'
+    case 'summary':
+      return 'Zusammenfassung verfügbar'
+    case 'recordingFailed':
+      return 'Aufnahme konnte nicht gespeichert werden'
+    case 'transcriptFailed':
+      return 'Transkript fehlgeschlagen'
+    case 'summaryFailed':
+      return 'Zusammenfassung fehlgeschlagen'
+  }
 }
 
 export interface IceServerConfig {
@@ -318,6 +369,16 @@ export interface TalkApi {
   hangUp(): Promise<void>
   setCallMuted(muted: boolean): Promise<void>
   currentCall(): Promise<CallView | null>
+  /** Only with `call.canRecord`; `video` records the Talk web view. */
+  startRecording(video: boolean): Promise<void>
+  stopRecording(): Promise<void>
+  /** Answer to `call.recordingConsentPending`. */
+  consentToRecording(): Promise<void>
+  recordingNotices(): Promise<RecordingNotice[]>
+  /** Posts the file into its conversation; the notice goes away. */
+  shareRecording(id: number): Promise<void>
+  /** Removes the notice (the file stays in the user's files). */
+  dismissRecording(id: number): Promise<void>
   /** Avatar of a call participant by Nextcloud user id. */
   userAvatarUrl(userId: string): string
   /** Registers the media engine; commands arrive in order. Call once, then `mediaReady`. */
