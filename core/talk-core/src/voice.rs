@@ -848,8 +848,12 @@ fn touch(p: &Path) {
 // --- decoding ------------------------------------------------------------------------
 
 /// Decodes an audio file (MP3, WAV, AAC/MP4 – the official Talk app sends AAC named
-/// `.mp3`) for its exact duration and waveform.
+/// `.mp3`) for its exact duration and waveform. Ogg/Opus (call recordings) is read
+/// without decoding, see [`analyze_ogg_opus`].
 pub fn analyze(path: &Path) -> Result<AudioInfo> {
+    if is_ogg(path) {
+        return analyze_ogg_opus(path);
+    }
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
     use symphonia::core::errors::Error as SymError;
@@ -935,9 +939,155 @@ pub fn analyze(path: &Path) -> Result<AudioInfo> {
     })
 }
 
+fn is_ogg(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && &magic == b"OggS"
+}
+
+/// Samples (48 kHz) of one Opus packet, from its TOC byte (RFC 6716 3.1).
+fn opus_packet_samples(p: &[u8]) -> u64 {
+    let Some(&toc) = p.first() else { return 0 };
+    let config = toc >> 3;
+    let frame = match config {
+        0..=11 => [480, 960, 1920, 2880][(config % 4) as usize],
+        12..=15 => [480, 960][(config % 2) as usize],
+        _ => [120, 240, 480, 960][(config % 4) as usize],
+    };
+    let frames = match toc & 3 {
+        0 => 1,
+        1 | 2 => 2,
+        _ => p.get(1).map_or(0, |b| (b & 0x3f) as u64),
+    };
+    frame * frames
+}
+
+/// Ogg/Opus (call recordings of the recording server) without an Opus decoder:
+/// - duration exactly from the granule position of the last page (minus pre-skip)
+/// - waveform from the packet sizes: Opus encodes with a variable bit rate, so quiet
+///   passages give small packets. An approximation, but the shape matches.
+pub fn analyze_ogg_opus(path: &Path) -> Result<AudioInfo> {
+    let bad = |m: &str| Error::Decode(format!("{}: {m}", path.display()));
+    let mut r = std::io::BufReader::new(
+        File::open(path).map_err(|e| Error::LocalFile(format!("{}: {e}", path.display())))?,
+    );
+    let mut serial = None;
+    let mut pre_skip = 0u64;
+    let mut last_granule = 0u64;
+    let mut packet = Vec::new();
+    let mut packets = 0u64;
+    // Bytes and samples per window.
+    let (mut win_bytes, mut win_samples) = (0u64, 0u64);
+    let window = 48 * WINDOW_MS;
+    let mut rates = Vec::new();
+    loop {
+        let mut head = [0u8; 27];
+        match r.read_exact(&mut head) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(Error::LocalFile(format!("{}: {e}", path.display()))),
+        }
+        if &head[0..4] != b"OggS" {
+            return Err(bad("broken Ogg page"));
+        }
+        let granule = u64::from_le_bytes(head[6..14].try_into().unwrap());
+        let page_serial = u32::from_le_bytes(head[14..18].try_into().unwrap());
+        let mut lacing = vec![0u8; head[26] as usize];
+        r.read_exact(&mut lacing).map_err(|_| bad("truncated page"))?;
+        let mut body = vec![0u8; lacing.iter().map(|&l| l as usize).sum()];
+        r.read_exact(&mut body).map_err(|_| bad("truncated page"))?;
+        // Only the first logical stream (the audio).
+        if *serial.get_or_insert(page_serial) != page_serial {
+            continue;
+        }
+        if granule != u64::MAX && packets > 1 {
+            last_granule = granule;
+        }
+        let mut at = 0;
+        for &l in &lacing {
+            packet.extend_from_slice(&body[at..at + l as usize]);
+            at += l as usize;
+            if l == 255 {
+                continue; // packet continues
+            }
+            match packets {
+                0 => {
+                    if !packet.starts_with(b"OpusHead") || packet.len() < 12 {
+                        return Err(bad("not Opus"));
+                    }
+                    pre_skip = u16::from_le_bytes([packet[10], packet[11]]) as u64;
+                }
+                1 => {} // OpusTags
+                _ => {
+                    win_bytes += packet.len() as u64;
+                    win_samples += opus_packet_samples(&packet);
+                    if win_samples >= window {
+                        rates.push(win_bytes as f32 / win_samples as f32);
+                        (win_bytes, win_samples) = (0, 0);
+                    }
+                }
+            }
+            packets += 1;
+            packet.clear();
+        }
+    }
+    if win_samples > 0 {
+        rates.push(win_bytes as f32 / win_samples as f32);
+    }
+    let samples = last_granule.saturating_sub(pre_skip);
+    if samples == 0 {
+        return Err(bad("no audio"));
+    }
+    // Quietest window = silence, 98th percentile = loud (ignores single bursts).
+    let mut sorted = rates.clone();
+    sorted.sort_by(f32::total_cmp);
+    let floor = sorted.first().copied().unwrap_or(0.0);
+    let peak = sorted.get(sorted.len().saturating_sub(1) * 98 / 100).copied().unwrap_or(floor);
+    let levels: Vec<u8> = rates
+        .iter()
+        .map(|&v| {
+            if peak <= floor {
+                0
+            } else {
+                (((v - floor) / (peak - floor)).clamp(0.0, 1.0) * 255.0).round() as u8
+            }
+        })
+        .collect();
+    Ok(AudioInfo {
+        duration_ms: samples * 1000 / 48_000,
+        waveform: bars(&levels, WAVEFORM_BARS),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ogg/Opus from ffmpeg (libopus): 1 s silence, 1 s tone, 1 s silence.
+    #[test]
+    fn ogg_opus_duration_and_shape() {
+        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+            eprintln!("ffmpeg missing, skipped");
+            return;
+        }
+        let d = dir("ogg");
+        let path = d.join("rec.ogg");
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg("aevalsrc='if(between(t,1,2),0.5*sin(2*PI*440*t),0)':s=48000:d=3")
+            .args(["-ac", "2", "-c:a", "libopus", "-b:a", "48k"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("ffmpeg without libopus, skipped");
+            return;
+        }
+        let info = analyze(&path).unwrap();
+        assert!((2950..=3050).contains(&info.duration_ms), "{}", info.duration_ms);
+        let w = &info.waveform;
+        let (a, b, c) = (w[10] as u32, w[50] as u32, w[90] as u32);
+        assert!(b > a + 100 && b > c + 100, "silence/tone/silence: {a} {b} {c}");
+    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("voice-test-{name}-{}", uuid::Uuid::new_v4()));
