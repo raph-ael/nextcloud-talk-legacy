@@ -36,6 +36,8 @@ export interface SystemCall {
 /** The part of a `RecordingNotice` this module needs. */
 export interface SystemRecordingNotice {
   id: number
+  /** Unix seconds (server). */
+  timestamp: number
 }
 
 /** Call actions of the session, plus the window. */
@@ -297,7 +299,9 @@ function menuBarImage(): Electron.NativeImage {
 
 // --- Recording notices ----------------------------------------------------------------
 
-let knownNotices: Set<number> | null = null
+const knownNotices = new Set<number>()
+/** Notices from before this run (a minute of clock skew allowed) are old news. */
+const startedAt = Date.now() / 1000 - 60
 
 /**
  * Feed every `recordingsChanged` event in here (main process). The quiet system notification
@@ -305,9 +309,9 @@ let knownNotices: Set<number> | null = null
  * while the app is in the background (informational: one hop, not until clicked).
  */
 export function recordingsChanged(items: SystemRecordingNotice[]): void {
-  // The first list (app start) holds old notices: nothing to announce.
-  const fresh = knownNotices ? items.filter((i) => !knownNotices!.has(i.id)) : []
-  knownNotices = new Set(items.map((i) => i.id))
+  // The core only reports changes, so the first list may already hold the new notice.
+  const fresh = items.filter((i) => !knownNotices.has(i.id) && i.timestamp >= startedAt)
+  for (const i of items) knownNotices.add(i.id)
   if (!fresh.length) return
   log('recording notices', fresh.map((i) => i.id).join(','))
   if (mac && !controls?.window()?.isFocused()) app.dock?.bounce('informational')
