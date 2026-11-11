@@ -313,8 +313,8 @@ export function recordingsChanged(items: SystemRecordingNotice[]): void {
   const fresh = items.filter((i) => !knownNotices.has(i.id) && i.timestamp >= startedAt)
   for (const i of items) knownNotices.add(i.id)
   if (!fresh.length) return
-  log('recording notices', fresh.map((i) => i.id).join(','))
-  if (mac && !controls?.window()?.isFocused()) app.dock?.bounce('informational')
+  const bounce = mac && !controls?.window()?.isFocused() ? app.dock?.bounce('informational') : null
+  log('recording notices', fresh.map((i) => i.id).join(','), 'bounce', bounce ?? 'no')
 }
 
 // --- Network --------------------------------------------------------------------------
