@@ -17,6 +17,8 @@ import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import org.sirplus.talk.MainActivity
 import org.sirplus.talk.Notifications
+import org.sirplus.talk.call.CallController.Companion.isRunning
+import org.sirplus.talk.call.CallController.Companion.isStarting
 import uniffi.talk_ffi.CallState
 import uniffi.talk_ffi.CallView
 
@@ -140,7 +142,12 @@ object CallNotifications {
             CallState.CONNECTED -> "Talk-Anruf"
             else -> ""
         }
-        b.setContentText(text)
+        val recording = when {
+            call.recording.isRunning() -> "● Aufnahme läuft"
+            call.recording.isStarting() -> "Aufnahme startet …"
+            else -> null
+        }
+        b.setContentText(if (recording != null && text.isNotEmpty()) "$recording · $text" else recording ?: text)
         call.startedAt?.takeIf { call.state == CallState.CONNECTED }?.let {
             b.setUsesChronometer(true).setWhen(it).setShowWhen(true)
         }

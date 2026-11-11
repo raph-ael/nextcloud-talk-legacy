@@ -148,6 +148,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().imePadding()) {
             if (!state.online) OfflineBanner()
+            RecordingBanners(sessions, room.token)
             Box(Modifier.weight(1f)) {
                 LazyColumn(
                     state = listState,

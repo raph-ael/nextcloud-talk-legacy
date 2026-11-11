@@ -166,6 +166,9 @@ fun RoomListScreen(sessions: SessionManager, state: UiState) {
         ) {
             LazyColumn(Modifier.fillMaxSize()) {
                 if (!state.online) item { OfflineBanner() }
+                if (query.isEmpty()) item(key = "recordings", contentType = "recordings") {
+                    RecordingBanners(sessions) { sessions.openRoom(it) }
+                }
                 if (favorites.isNotEmpty()) {
                     item(key = "h-fav", contentType = "header") { SectionHeader("Favoriten") }
                     items(favorites, key = { it.token }, contentType = { "room" }) { room ->

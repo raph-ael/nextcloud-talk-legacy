@@ -68,6 +68,9 @@ class CallTones(private val context: Context) {
     /** Short falling tone when the call ends. */
     fun playEnded() = once(sweep(listOf(660.0 to 0.12, 440.0 to 0.12, 330.0 to 0.18)))
 
+    /** Quiet two-note chime: this call is being recorded. */
+    fun playRecordingNotice() = once(recordingChime())
+
     fun stopAll() {
         stopRinging()
         stopRingback()
@@ -179,6 +182,14 @@ class CallTones(private val context: Context) {
                     0.12 * sin(2 * PI * freq * 3.01 * t) * exp(-t * 14.0)
                 out[idx] += v * attack
             }
+        }
+
+        /** Two soft struck notes (C6, E6), well below the other tones. */
+        fun recordingChime(): ShortArray {
+            val out = DoubleArray((RATE * 0.9).toInt())
+            strike(out, 0.0, 1047.0, 0.5)
+            strike(out, 0.22, 1319.0, 0.65)
+            return normalize(out, 0.12)
         }
 
         /** Consecutive short sine tones (frequency to seconds). */

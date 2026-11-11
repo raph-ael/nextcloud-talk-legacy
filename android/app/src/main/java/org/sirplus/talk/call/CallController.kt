@@ -11,6 +11,7 @@ import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import android.util.Log
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import uniffi.talk_ffi.CallDirection
+import uniffi.talk_ffi.CallRecording
 import uniffi.talk_ffi.CallState
 import uniffi.talk_ffi.CallView
 import uniffi.talk_ffi.EndReason
@@ -63,6 +65,8 @@ class CallController(
     private var ringService = false
     private var phoneMuted = false
     private var telephonyCallback: Any? = null
+    /** Call whose running recording was announced (again after it stopped and restarts). */
+    private var announcedRecording: String? = null
 
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -111,8 +115,27 @@ class CallController(
         if (call.state == CallState.CONNECTED && prev?.state != CallState.CONNECTED && prev?.state != CallState.RECONNECTING) {
             tones.playConnected()
         }
+        followRecording(call)
         audio.setInCall(call.state == CallState.CONNECTING || call.state == CallState.CONNECTED || call.state == CallState.RECONNECTING)
         if (audioActive) CallNotifications.updateOngoing(context, call)
+    }
+
+    /**
+     * Announces a running recording once per call: when it starts and when we join a call
+     * that is already recorded. Toast (TalkBack reads it out) and a quiet chime.
+     */
+    private fun followRecording(call: CallView) {
+        if (call.state == CallState.INCOMING) return
+        if (call.recording.isRunning()) {
+            if (announcedRecording == call.id) return
+            announcedRecording = call.id
+            Log.i(TAG, "recording ${call.recording}")
+            Toast.makeText(context, "Dieser Anruf wird aufgezeichnet", Toast.LENGTH_LONG).show()
+            tones.playRecordingNotice()
+        } else if (call.state == CallState.CONNECTED && announcedRecording == call.id) {
+            // Stopped (not just a reconnect): a new recording is announced again.
+            announcedRecording = null
+        }
     }
 
     private fun onIncoming(call: CallView) {
@@ -262,8 +285,13 @@ class CallController(
         }
     }
 
-    private companion object {
-        const val TAG = "TalkCall"
-        const val END_HOLD_MS = 1500L
+    companion object {
+        private const val TAG = "TalkCall"
+        private const val END_HOLD_MS = 1500L
+
+        /** Recording (not only starting): the indicator says "Aufnahme läuft". */
+        fun CallRecording.isRunning() = this == CallRecording.AUDIO || this == CallRecording.VIDEO
+
+        fun CallRecording.isStarting() = this == CallRecording.STARTING_AUDIO || this == CallRecording.STARTING_VIDEO
     }
 }

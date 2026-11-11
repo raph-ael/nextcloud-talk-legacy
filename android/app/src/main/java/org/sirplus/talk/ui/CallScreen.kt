@@ -49,6 +49,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -70,6 +71,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -85,7 +90,10 @@ import org.sirplus.talk.SessionManager
 import org.sirplus.talk.call.AudioOutput
 import org.sirplus.talk.call.AudioRoute
 import org.sirplus.talk.call.AudioRouting
+import org.sirplus.talk.call.CallController.Companion.isRunning
+import org.sirplus.talk.call.CallController.Companion.isStarting
 import org.sirplus.talk.call.CallNotifications
+import uniffi.talk_ffi.CallRecording
 import uniffi.talk_ffi.CallParticipant
 import uniffi.talk_ffi.CallState
 import uniffi.talk_ffi.CallView
@@ -94,6 +102,7 @@ import uniffi.talk_ffi.EndReason
 private val Decline = Color(0xFFE5483F)
 private val Accept = Color(0xFF2FB25B)
 private val Speaking = Color(0xFF6FD08C)
+private val RecordRed = Color(0xFFFF4D4D)
 private val WashFilter = ColorFilter.colorMatrix(
     ColorMatrix().apply {
         setToSaturation(1.8f)
@@ -248,12 +257,15 @@ private fun InCall(
     onMinimize: () -> Unit,
 ) {
     var picker by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
+    var confirmStop by remember { mutableStateOf(false) }
     val tiles = call.isGroup && call.participants.isNotEmpty() && call.state != CallState.ENDED
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) {
             IconButton(onClick = onMinimize) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zu den Chats", tint = Color.White)
             }
+            if (call.state != CallState.ENDED) RecordingIndicator(call, Modifier.align(Alignment.Center))
         }
         Spacer(Modifier.height(if (tiles) 0.dp else 40.dp))
         Header(title, { CallStatus(call) }, token, version, sessions, showAvatar = !tiles)
@@ -288,6 +300,7 @@ private fun InCall(
                 ) { if (routing.needsPicker) picker = true else onSpeaker() }
                 // Slot for the video button (video calls come later).
                 ControlButton(if (call.muted) TalkIcons.MicOff else TalkIcons.MicFilled, if (call.muted) "Stumm aus" else "Stumm", active = call.muted, onClick = onMute)
+                if (call.canRecord) ControlButton(TalkIcons.MoreHoriz, "Mehr") { more = true }
                 ControlButton(TalkIcons.CallEnd, "Auflegen", background = Decline, onClick = onHangUp)
             }
         } else {
@@ -295,6 +308,105 @@ private fun InCall(
         }
     }
     if (picker) OutputSheet(routing, onDismiss = { picker = false }) { picker = false; onOutput(it) }
+    // Rights can go away while the menu is open (e.g. no longer moderator).
+    if (more && call.canRecord && call.state != CallState.ENDED) {
+        MoreSheet(
+            call.recording,
+            onDismiss = { more = false },
+            onRecord = { video -> more = false; sessions.startRecording(video) },
+            onStop = { more = false; confirmStop = true },
+        )
+    }
+    if (confirmStop && call.canRecord && call.state != CallState.ENDED) {
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text("Aufnahme beenden?") },
+            text = { Text("Die Aufnahme wird gespeichert, du bekommst danach einen Hinweis.") },
+            confirmButton = {
+                TextButton(onClick = { confirmStop = false; sessions.stopRecording() }) { Text("Beenden") }
+            },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Abbrechen") } },
+        )
+    }
+    ConsentDialog(call, sessions, onHangUp)
+}
+
+/** "Aufnahme läuft" with a gently pulsing red dot; also while starting / after a failure. */
+@Composable
+private fun RecordingIndicator(call: CallView, modifier: Modifier = Modifier) {
+    val text = when {
+        call.recording.isRunning() -> "Aufnahme läuft"
+        call.recording.isStarting() -> "Aufnahme startet …"
+        call.recording == CallRecording.FAILED && call.canRecord -> "Aufnahme fehlgeschlagen"
+        else -> return
+    }
+    val running = call.recording.isRunning()
+    val pulse by rememberInfiniteTransition(label = "rec").animateFloat(
+        1f, 0.35f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "recPulse",
+    )
+    Row(
+        modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (call.recording != CallRecording.FAILED) {
+            Box(
+                Modifier.size(10.dp).alpha(if (running) pulse else 0.6f).clip(CircleShape)
+                    .background(if (running) RecordRed else Color.White),
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MoreSheet(recording: CallRecording, onDismiss: () -> Unit, onRecord: (video: Boolean) -> Unit, onStop: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            if (recording.isRunning() || recording.isStarting()) {
+                SheetRow(TalkIcons.RecordStop, "Aufnahme beenden", onStop)
+            } else {
+                SheetRow(TalkIcons.Record, "Audio aufnehmen") { onRecord(false) }
+                HorizontalDivider(Modifier.padding(start = 68.dp))
+                SheetRow(TalkIcons.Record, "Video aufnehmen") { onRecord(true) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null)
+        Spacer(Modifier.width(20.dp))
+        Text(label, fontSize = 16.sp)
+    }
+}
+
+/** The server wants consent to being recorded before we join (the core waits). */
+@Composable
+private fun ConsentDialog(call: CallView, sessions: SessionManager, onHangUp: () -> Unit) {
+    // Hide right after the answer; the core clears the flag shortly after.
+    var answered by remember(call.id) { mutableStateOf(false) }
+    if (!call.recordingConsentPending || answered || call.state == CallState.ENDED) return
+    AlertDialog(
+        // Back or tapping outside does not decide: one of the two buttons.
+        onDismissRequest = {},
+        title = { Text("Dieser Anruf kann aufgezeichnet werden") },
+        text = { Text("Wenn du beitrittst, kann deine Stimme in diesem Anruf aufgezeichnet werden.") },
+        confirmButton = {
+            TextButton(onClick = { answered = true; sessions.consentToRecording() }) { Text("Zustimmen und beitreten") }
+        },
+        dismissButton = { TextButton(onClick = { answered = true; onHangUp() }) { Text("Abbrechen") } },
+    )
 }
 
 @Composable
@@ -446,12 +558,21 @@ fun CallBar(call: CallView, onClick: () -> Unit) {
         CallState.RECONNECTING -> "Zurück zum Anruf · Verbindung wird neu hergestellt …"
         else -> "Zurück zum Anruf"
     }
+    val rec = call.state != CallState.ENDED && call.recording.isRunning()
     Box(
         Modifier.fillMaxWidth().background(Accept).clickable(onClick = onClick).statusBarsPadding()
             .padding(vertical = 8.dp, horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (rec) {
+                Text("● REC", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp)).background(RecordRed).padding(horizontal = 6.dp, vertical = 1.dp)
+                    .semantics { contentDescription = "Aufnahme läuft" })
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 

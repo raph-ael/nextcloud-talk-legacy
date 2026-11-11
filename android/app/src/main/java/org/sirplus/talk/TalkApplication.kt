@@ -13,6 +13,7 @@ class TalkApplication : Application() {
         uniffi.talk_ffi.initLogging(LogcatSink, if (debug) "talk_core=info,talk_core::call=debug" else "talk_core=info")
         Notifications.createChannels(this)
         org.sirplus.talk.call.CallNotifications.createChannels(this)
+        org.sirplus.talk.call.RecordingNotifications.createChannel(this)
         sessions = SessionManager(this)
     }
 }

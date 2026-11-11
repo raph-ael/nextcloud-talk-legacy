@@ -42,6 +42,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.talk_ffi.PushMessage
+import uniffi.talk_ffi.RecordingNotice
+import org.sirplus.talk.call.RecordingNotifications
 import uniffi.talk_ffi.decryptPush
 import uniffi.talk_ffi.generatePushKey
 import uniffi.talk_ffi.ClientPlatform
@@ -134,6 +136,15 @@ class SessionManager(private val context: Context) : CoreListener {
         voice.player.stop()
     }
 
+    private val _recordings = MutableStateFlow<List<RecordingNotice>>(emptyList())
+    /** Finished call recordings (transcripts, summaries, failures) waiting for the user. */
+    val recordings: StateFlow<List<RecordingNotice>> = _recordings
+    /** Notices with a share/dismiss request in flight (buttons disabled meanwhile). */
+    private val _recordingsBusy = MutableStateFlow<Set<Long>>(emptySet())
+    val recordingsBusy: StateFlow<Set<Long>> = _recordingsBusy
+    /** Notice ids of the last core list; `null` until the first one (the baseline) arrived. */
+    private var recordingsKnown: Set<Long>? = null
+
     /** Push registration of this process run (again on every start and token change). */
     private var pushJob: Job? = null
     private var pushRegistered = false
@@ -180,6 +191,7 @@ class SessionManager(private val context: Context) : CoreListener {
 
     private fun startSession(account: StoredAccount) {
         val dataDir = File(context.noBackupFilesDir, "talk").path
+        recordingsKnown = null
         val s = TalkSession(account.server, account.loginName, account.appPassword, ClientPlatform.ANDROID, this, dataDir)
         session = s
         s.setMediaEngine(media)
@@ -192,6 +204,7 @@ class SessionManager(private val context: Context) : CoreListener {
         scope.launch {
             try {
                 s.start()
+                onRecordings(s.recordingNotices())
                 registerPush()
             } catch (e: CoreException.Unauthorized) {
                 signOut(revoke = false)
@@ -249,6 +262,9 @@ class SessionManager(private val context: Context) : CoreListener {
         OutboxWorker.cancel(context)
         localPreviews.clear()
         notifiedFailures.clear()
+        _recordings.value = emptyList()
+        recordingsKnown = null
+        RecordingNotifications.clear(context)
         avatars.evictAll()
         previews.evictAll()
         _state.value = UiState(session = SessionState.LOGGED_OUT)
@@ -328,6 +344,65 @@ class SessionManager(private val context: Context) : CoreListener {
                 Toast.makeText(context, callError(e), Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    // --- call recording (docs/calls.md "Aufnahme") ----------------------------------------
+
+    /** Main thread. */
+    private fun onRecordings(items: List<RecordingNotice>, fresh: Set<Long> = emptySet()) {
+        _recordings.value = items
+        _recordingsBusy.update { busy -> busy.filterTo(mutableSetOf()) { id -> items.any { it.id == id } } }
+        RecordingNotifications.update(context, items, fresh)
+    }
+
+    fun startRecording(video: Boolean) = recordingAction("Die Aufnahme konnte nicht gestartet werden") { it.startRecording(video) }
+
+    fun stopRecording() = recordingAction("Die Aufnahme konnte nicht beendet werden") { it.stopRecording() }
+
+    /** Answer to the consent dialog: join the call although it may be recorded. */
+    fun consentToRecording() {
+        session?.consentToRecording()
+    }
+
+    /** "In Chat teilen": posts the file into its conversation. */
+    fun shareRecording(id: Long) = noticeAction(id, "Teilen nicht möglich") { it.shareRecording(id) }
+
+    /** "Verwerfen" / "OK": removes the notice (the file stays in the user's files). */
+    fun dismissRecording(id: Long) = noticeAction(id, "Verwerfen nicht möglich") { it.dismissRecording(id) }
+
+    private fun recordingAction(fallback: String, block: suspend (TalkSession) -> Unit) {
+        val s = session ?: return
+        scope.launch {
+            try {
+                block(s)
+            } catch (e: CoreException) {
+                Toast.makeText(context, coreMessage(e, fallback), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun noticeAction(id: Long, fallback: String, block: suspend (TalkSession) -> Unit) {
+        val s = session ?: return
+        if (id in _recordingsBusy.value) return
+        _recordingsBusy.update { it + id }
+        scope.launch {
+            try {
+                block(s)
+                // The core sends RecordingsChanged; drop the notice right away anyway.
+                onRecordings(_recordings.value.filter { it.id != id })
+            } catch (e: CoreException) {
+                _recordingsBusy.update { it - id }
+                Toast.makeText(context, coreMessage(e, fallback), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** The readable part of a core error: `call: <code>: <message>` carries a German text. */
+    private fun coreMessage(e: CoreException, fallback: String): String = when (e) {
+        is CoreException.Network -> "$fallback: keine Verbindung"
+        is CoreException.Server -> e.detail.takeIf { it.startsWith("call: ") }
+            ?.substringAfter(": ")?.substringAfter(": ", "")?.ifBlank { null } ?: fallback
+        else -> fallback
     }
 
     // TODO: the FFI maps the core's `Call { code, message }` to `Server`; show its text once it has its own variant.
@@ -429,6 +504,13 @@ class SessionManager(private val context: Context) : CoreListener {
             is CoreEvent.CallMissed -> CallNotifications.showMissed(
                 context, event.token, if (event.isGroup) event.roomName else event.callerName.ifBlank { event.roomName },
             )
+            is CoreEvent.RecordingsChanged -> scope.launch {
+                val ids = event.items.map { it.id }.toSet()
+                // The first list after start is the baseline: banners yes, notifications no.
+                val fresh = recordingsKnown?.let { ids - it }.orEmpty()
+                recordingsKnown = ids
+                onRecordings(event.items, fresh)
+            }
         }
     }
 
