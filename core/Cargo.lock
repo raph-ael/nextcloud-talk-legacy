@@ -3478,6 +3478,7 @@ dependencies = [
  "bytes",
  "clap",
  "futures-util",
+ "libc",
  "opus",
  "reqwest",
  "rustls",

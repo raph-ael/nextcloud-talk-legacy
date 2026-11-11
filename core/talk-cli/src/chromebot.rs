@@ -120,7 +120,20 @@ impl ChromeMedia {
         write_tone(&wav, tone_hz)?;
         let page = dir.join("bot.html");
         std::fs::write(&page, "<!doctype html><title>talk bot</title>")?;
-        let mut child = tokio::process::Command::new(chrome_binary())
+        let mut cmd = tokio::process::Command::new(chrome_binary());
+        // Chrome must not outlive us: kill_on_drop only helps when we exit cleanly.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                // We may have died between fork and prctl.
+                if libc::getppid() == 1 {
+                    libc::_exit(1);
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd
             .args([
                 "--headless=new",
                 "--remote-debugging-port=0",

@@ -186,8 +186,24 @@ enum Cmd {
     },
 }
 
+/// Descriptors we inherited (e.g. the bot-lock `flock`) stay ours: children such as the
+/// Chrome bot must not hold them, or an orphaned child keeps the lock forever.
+fn close_inherited_fds_on_exec() {
+    #[cfg(unix)]
+    for fd in 3..1024 {
+        // SAFETY: only flags of descriptors are changed, none is closed.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    close_inherited_fds_on_exec();
     let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
