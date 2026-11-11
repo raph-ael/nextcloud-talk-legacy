@@ -1,6 +1,22 @@
 package org.sirplus.talk.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -118,6 +134,11 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
     LaunchedEffect(room.token, messages.size, room.unreadMessages) {
         if (listState.firstVisibleItemIndex <= 1) sessions.markVisibleRead(room.token)
     }
+    // Arriving back at the bottom (scrolling or the jump button) sets the read marker too.
+    LaunchedEffect(listState, room.token) {
+        snapshotFlow { listState.firstVisibleItemIndex <= 1 }
+            .collect { atBottom -> if (atBottom) sessions.markVisibleRead(room.token) }
+    }
     LaunchedEffect(listState, room.token) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
             .collect { last -> if (last >= reversed.size - 40) sessions.loadOlder(room.token) }
@@ -190,6 +211,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                         }
                     }
                 }
+                JumpToEnd(listState, room.unreadMessages.toInt(), Modifier.align(Alignment.BottomEnd))
             }
             if (room.readOnly) {
                 Text(
@@ -250,6 +272,89 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
         )
         is Overlay.Viewer -> ImageViewer(sessions, o.fileId, o.initial, onClose = { overlay = null })
     }
+    }
+}
+
+/**
+ * Round floating button "Zum Ende springen" (docs/chat.md): visible once the list is more
+ * than half a screen away from the newest message, with the unread count as badge.
+ */
+@Composable
+private fun JumpToEnd(listState: LazyListState, unread: Int, modifier: Modifier) {
+    val colors = LocalTalkColors.current
+    val scope = rememberCoroutineScope()
+    val visible by remember(listState) {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val half = (info.viewportEndOffset - info.viewportStartOffset) / 2
+            val index = listState.firstVisibleItemIndex
+            val offset = listState.firstVisibleItemScrollOffset
+            if (index == 0) {
+                offset > half
+            } else {
+                // Items scrolled past are not measured any more; estimate them by the visible ones.
+                val avg = info.visibleItemsInfo.map { it.size }.average().takeIf { !it.isNaN() } ?: 0.0
+                index * avg + offset > half
+            }
+        }
+    }
+    val label = when {
+        unread == 1 -> "Zum Ende springen, 1 neue Nachricht"
+        unread > 1 -> "Zum Ende springen, $unread neue Nachrichten"
+        else -> "Zum Ende springen"
+    }
+    AnimatedVisibility(
+        visible = visible,
+        modifier = modifier.padding(end = 14.dp, bottom = 14.dp),
+        enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.6f),
+        exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.6f),
+    ) {
+        // Extra room at the top for the badge.
+        Box(Modifier.padding(top = 10.dp, start = 10.dp)) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .shadow(3.dp, CircleShape)
+                    .clip(CircleShape)
+                    .background(colors.floating)
+                    .clickable {
+                        scope.launch {
+                            // Far away: jump close without animation, then glide the rest.
+                            if (listState.firstVisibleItemIndex > 15) listState.scrollToItem(10)
+                            listState.animateScrollToItem(0)
+                        }
+                    }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = label
+                        role = Role.Button
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(TalkIcons.ChevronDown, null, tint = colors.muted, modifier = Modifier.size(26.dp))
+            }
+            if (unread > 0) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = (-10).dp)
+                        .heightIn(min = 20.dp)
+                        .widthIn(min = 20.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.accent)
+                        .clearAndSetSemantics {}
+                        .padding(horizontal = 5.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (unread > 99) "99+" else unread.toString(),
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
     }
 }
 

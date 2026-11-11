@@ -24,6 +24,8 @@ data class TalkColors(
     val muted: Color,
     val chip: Color,
     val danger: Color,
+    /** Floating surfaces (jump button), like --floating on desktop. */
+    val floating: Color,
 )
 
 private val LightTalk = TalkColors(
@@ -35,6 +37,7 @@ private val LightTalk = TalkColors(
     muted = Color(0xFF6B6B70),
     chip = Color(0xFFF1F1F3),
     danger = Color(0xFFD6342C),
+    floating = Color(0xFFFFFFFF),
 )
 
 private val DarkTalk = TalkColors(
@@ -46,6 +49,7 @@ private val DarkTalk = TalkColors(
     muted = Color(0xFF9A9AA0),
     chip = Color(0xFF232325),
     danger = Color(0xFFFF6B63),
+    floating = Color(0xFF2E2E2E),
 )
 
 /** Conversation-list typography (Signal: BodyLarge/BodyMedium with tighter line spacing). */
