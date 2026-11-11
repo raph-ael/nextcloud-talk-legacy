@@ -150,6 +150,8 @@ unsichtbar bei. Der Kern zeigt nur den Stand an und startet bzw. stoppt die Aufn
 **Nach dem Anruf:**
 - Wer die Aufnahme gestartet hat, bekommt sie in seinen Dateien und einen Hinweis.
 - `RecordingsChanged { items }` liefert immer die ganze Liste, `recordingNotices()` den aktuellen Stand.
+  - Das erste Event nach dem Start ist der Ausgangsstand und kommt immer, auch leer. Dafür keine Systembenachrichtigung zeigen (der Banner aber schon).
+  - Ids, die später dazukommen, sind neu: dann die Systembenachrichtigung.
 - `RecordingNotice`: `{ id, token, roomName, kind, fileName, timestamp, canShare }`
   - `kind`: `recording` | `transcript` | `summary` | `recordingFailed` | `transcriptFailed` | `summaryFailed`
 - Banner in der Gesprächsliste und im Chat des Gesprächs:

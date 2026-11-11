@@ -89,7 +89,9 @@ struct Stored {
 
 #[derive(Default)]
 pub(crate) struct Recordings {
-    items: Mutex<Vec<Stored>>,
+    /// `None` until the first notifications response: that one is always emitted (also
+    /// empty), so platforms know what was there before and what is new.
+    items: Mutex<Option<Vec<Stored>>>,
     /// Poll for notices until then (a recording of ours ended).
     poll_until: Mutex<Option<Instant>>,
 }
@@ -189,19 +191,20 @@ impl Recordings {
     fn update(&self, list: &[Value]) -> bool {
         let new = parse_notices(list);
         let mut items = self.items.lock().unwrap();
-        if *items == new {
+        if items.as_ref() == Some(&new) {
             return false;
         }
-        *items = new;
+        *items = Some(new);
         true
     }
 
     fn notices(&self) -> Vec<RecordingNotice> {
-        self.items.lock().unwrap().iter().map(|s| s.notice.clone()).collect()
+        self.items.lock().unwrap().iter().flatten().map(|s| s.notice.clone()).collect()
     }
 
     fn take(&self, id: i64) -> Option<Stored> {
         let mut items = self.items.lock().unwrap();
+        let items = items.as_mut()?;
         let i = items.iter().position(|s| s.notice.id == id)?;
         Some(items.remove(i))
     }
@@ -259,7 +262,7 @@ impl Engine {
     /// Posts the file of a notice into its conversation ("In Chat teilen"); the notice
     /// is removed.
     pub async fn share_recording(&self, id: i64) -> Result<()> {
-        let item = self.recordings.items.lock().unwrap().iter().find(|s| s.notice.id == id).cloned();
+        let item = self.recordings.items.lock().unwrap().iter().flatten().find(|s| s.notice.id == id).cloned();
         let Some(Stored { share: Some(a), .. }) = item else {
             return Err(Error::Call { code: "recording-notice".into(), message: "Nicht mehr verfügbar".into() });
         };
@@ -278,7 +281,7 @@ impl Engine {
         };
         if let Err(e) = r {
             if !matches!(e, Error::NotFound) {
-                self.recordings.items.lock().unwrap().push(item);
+                self.recordings.items.lock().unwrap().get_or_insert_with(Vec::new).push(item);
                 return Err(e);
             }
         }
@@ -379,6 +382,15 @@ mod tests {
         assert_eq!(r.share.as_ref().unwrap().method, "POST");
         assert_eq!(r.dismiss.as_ref().unwrap().method, "DELETE");
         assert!(!n[4].notice.can_share && n[4].dismiss.is_none());
+    }
+
+    #[test]
+    fn first_list_is_always_reported() {
+        let r = Recordings::default();
+        assert!(r.update(&[]), "first (empty) list is the baseline");
+        assert!(!r.update(&[]));
+        assert!(r.update(&[stored("a.ogg", "recording", true)]));
+        assert!(!r.update(&[stored("a.ogg", "recording", true)]));
     }
 
     #[test]
