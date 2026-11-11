@@ -41,6 +41,7 @@ final class CoreLog: LogSink, @unchecked Sendable {
 #if DEBUG
 import Foundation
 import OSLog
+import UserNotifications
 
 /// Debug builds with `TALK_LOG_DUMP=1`: the app's own log entries (subsystem
 /// org.sirplus.talk) are written to Documents/talk.log after each call, so device tests can
@@ -64,6 +65,20 @@ enum LogDump {
             try? text.write(to: url, atomically: true, encoding: .utf8)
         }
         if sync { run() } else { DispatchQueue.global(qos: .utility).async(execute: run) }
+    }
+
+    /// At launch: what Notification Center shows (checks the NotifyExt texts on the device).
+    @MainActor static func deliveredNotifications() async {
+        guard enabled else { return }
+        let center = UNUserNotificationCenter.current()
+        let auth = await center.notificationSettings().authorizationStatus.rawValue
+        let delivered = await center.deliveredNotifications()
+        Log.push.info("notifications: auth \(auth, privacy: .public), \(delivered.count, privacy: .public) delivered")
+        for n in delivered {
+            let c = n.request.content
+            Log.push.info("delivered: title '\(c.title, privacy: .public)' body '\(c.body, privacy: .public)' thread \(c.threadIdentifier.isEmpty ? "-" : "set", privacy: .public) nid \(String(describing: c.userInfo["nid"] ?? "-"), privacy: .public)")
+        }
+        write()
     }
 }
 #endif

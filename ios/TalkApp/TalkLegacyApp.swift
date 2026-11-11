@@ -87,6 +87,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         DebugEnv.persist()
         Heartbeat.start()
         Task { @MainActor in
+            await LogDump.deliveredNotifications()
             try? await Task.sleep(for: .seconds(2))
             CallController.shared.showMockIfRequested()
             CallController.shared.autoCallIfRequested()
