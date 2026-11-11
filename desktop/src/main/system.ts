@@ -1,6 +1,6 @@
 // System integration for calls that is not part of the call UI: microphone permission,
 // keeping the computer awake, network changes, and on macOS the dock, the menu bar icon and
-// the incoming-call notification with buttons.
+// the incoming-call notification with buttons, plus the recording state in the menu bar.
 import {
   app,
   dialog,
@@ -29,6 +29,13 @@ export interface SystemCall {
   callerName: string
   startedAt?: number | null
   muted: boolean
+  /** Server-side call recording (docs/calls.md, „Aufnahme“). */
+  recording?: 'off' | 'startingAudio' | 'startingVideo' | 'audio' | 'video' | 'failed'
+}
+
+/** The part of a `RecordingNotice` this module needs. */
+export interface SystemRecordingNotice {
+  id: number
 }
 
 /** Call actions of the session, plus the window. */
@@ -109,9 +116,12 @@ export function callChanged(call: SystemCall | null): void {
 
   if (ringing && ringNoteFor !== current!.id) startRinging(current!)
   else if (!ringing && ringNoteFor) stopRinging()
+  if (recordingLabel(prev) !== recordingLabel(current)) log('recording', current?.recording ?? 'off')
 
   if (mac) {
-    if (prev?.state !== current?.state || prev?.muted !== current?.muted) updateMenus()
+    if (prev?.state !== current?.state || prev?.muted !== current?.muted || recordingLabel(prev) !== recordingLabel(current)) {
+      updateMenus()
+    }
     updateTimer()
   }
 }
@@ -188,8 +198,10 @@ function callItems(): MenuItemConstructorOptions[] {
       { label: 'Ablehnen', click: () => ctl.declineCall(c.token) },
     ]
   }
+  const rec = recordingLabel(c)
   return [
     { label: `Anruf: ${c.roomName}`, enabled: false },
+    ...(rec ? [{ label: rec, enabled: false }] : []),
     { label: 'Zurück zum Anruf', click: () => ctl.showWindow() },
     { label: 'Stumm', type: 'checkbox', checked: c.muted, click: () => ctl.setCallMuted(!c.muted) },
     { label: 'Auflegen', click: () => ctl.hangUp() },
@@ -210,9 +222,26 @@ function updateMenus(): void {
   )
 }
 
-/** Call duration next to the menu bar icon, like the green pill of a phone call. */
+/** Menu line for the recording state (null: nothing to show), as in docs/calls.md. */
+function recordingLabel(c: SystemCall | null): string | null {
+  switch (c?.recording) {
+    case 'audio':
+    case 'video':
+      return '● Aufnahme läuft'
+    case 'startingAudio':
+    case 'startingVideo':
+      return 'Aufnahme startet …'
+    default:
+      return null
+  }
+}
+
+/**
+ * Call duration next to the menu bar icon, like the green pill of a phone call; "● REC"
+ * in front while the call is recorded (the menu bar is monochrome, the dot carries it).
+ */
 function updateTimer(): void {
-  const startedAt = current?.state === 'connected' ? current.startedAt : null
+  const startedAt = current?.state === 'connected' || current?.state === 'reconnecting' ? current.startedAt : null
   if (!startedAt) {
     if (timer) clearInterval(timer)
     timer = null
@@ -223,7 +252,8 @@ function updateTimer(): void {
     const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
     const p = (n: number) => String(n).padStart(2, '0')
     const text = s >= 3600 ? `${Math.floor(s / 3600)}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}` : `${Math.floor(s / 60)}:${p(s % 60)}`
-    tray?.setTitle(` ${text}`, { fontType: 'monospacedDigit' })
+    const rec = current?.recording === 'audio' || current?.recording === 'video' ? ' ● REC' : ''
+    tray?.setTitle(`${rec} ${text}`, { fontType: 'monospacedDigit' })
   }
   tick()
   timer ??= setInterval(tick, 1000)
@@ -263,6 +293,24 @@ function menuBarImage(): Electron.NativeImage {
   }
   image.setTemplateImage(true)
   return image
+}
+
+// --- Recording notices ----------------------------------------------------------------
+
+let knownNotices: Set<number> | null = null
+
+/**
+ * Feed every `recordingsChanged` event in here (main process). The quiet system notification
+ * comes from index.ts on every platform; on macOS a new notice also bounces the dock once
+ * while the app is in the background (informational: one hop, not until clicked).
+ */
+export function recordingsChanged(items: SystemRecordingNotice[]): void {
+  // The first list (app start) holds old notices: nothing to announce.
+  const fresh = knownNotices ? items.filter((i) => !knownNotices!.has(i.id)) : []
+  knownNotices = new Set(items.map((i) => i.id))
+  if (!fresh.length) return
+  log('recording notices', fresh.map((i) => i.id).join(','))
+  if (mac && !controls?.window()?.isFocused()) app.dock?.bounce('informational')
 }
 
 // --- Network --------------------------------------------------------------------------
@@ -309,10 +357,12 @@ export function installSystem(c: SystemControls): void {
   watchNetwork(() => c.networkChanged())
   // After sleep the sockets are dead; also covers waking with another network.
   powerMonitor.on('resume', () => {
-    log('resume')
+    log('resume', current?.state ?? 'no call', current?.recording ?? '')
     c.networkChanged()
   })
-  powerMonitor.on('suspend', () => log('suspend', current?.state ?? 'no call'))
+  // A recording runs on the server and goes on while we sleep; after waking the call
+  // reconnects and the recording state comes back from the server.
+  powerMonitor.on('suspend', () => log('suspend', current?.state ?? 'no call', current?.recording ?? ''))
   app.on('before-quit', () => log('quit', current?.state ?? 'no call'))
   if (!mac) return
   tray = new Tray(menuBarImage())
