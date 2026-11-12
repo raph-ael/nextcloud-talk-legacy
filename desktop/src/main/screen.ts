@@ -4,6 +4,7 @@
 // renderer skips its picker and the portal asks instead.
 import { app, desktopCapturer, ipcMain, session, webContents, type BrowserWindow } from 'electron'
 import type { ScreenSource } from '@shared/core'
+import { ensureScreenCapture } from './system'
 
 /** A picked source is used by the next getDisplayMedia within this time, or not at all. */
 const PICK_MS = 15_000
@@ -27,8 +28,13 @@ let pick: { id: string | null; at: number } | null = null
 export function installScreenShare(window: () => BrowserWindow | null): void {
   const own = (wc: Electron.WebContents | undefined) => !!wc && wc === window()?.webContents
 
-  ipcMain.handle('talk:screenSources', async (e): Promise<ScreenSource[] | null> => {
+  ipcMain.handle('talk:screenSources', async (e): Promise<ScreenSource[] | null | false> => {
     if (!own(e.sender) || waylandPortal()) return null
+    // macOS: without „Bildschirmaufnahme“ the list holds only the wallpaper; explain instead.
+    const allowed = await ensureScreenCapture(() =>
+      desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } }),
+    )
+    if (!allowed) return false
     const self = window()?.getMediaSourceId()
     const list = await desktopCapturer.getSources({
       types: ['screen', 'window'],

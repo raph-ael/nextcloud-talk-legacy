@@ -119,6 +119,41 @@ export async function ensureCamera(): Promise<boolean> {
   return false
 }
 
+// --- Screen recording -----------------------------------------------------------------
+const SCREEN_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+let screenAsked = false
+
+/**
+ * Makes sure we may record the screen before the picker opens (docs/calls.md
+ * „Bildschirmfreigabe“). macOS has no prompt to wait for: the first capture attempt lists Talk
+ * under „Aufnahme von Bildschirm & Systemaudio“ (and may show the system's own prompt), a grant
+ * only takes effect after a restart. So without the grant: register once, explain with a link
+ * into System Settings and the restart, return false. Elsewhere there is nothing to ask.
+ */
+export async function ensureScreenCapture(register: () => Promise<unknown>): Promise<boolean> {
+  if (!mac) return true
+  const status = systemPreferences.getMediaAccessStatus('screen')
+  if (status === 'granted') return true
+  log('screen', status)
+  if (!screenAsked) {
+    screenAsked = true
+    await register().catch(() => undefined)
+  }
+  const win = controls?.window()
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    message: 'Bildschirmaufnahme erlauben',
+    detail:
+      'Zum Teilen des Bildschirms braucht Sirplus Talk die Bildschirmaufnahme. Erlaube sie unter Systemeinstellungen › Datenschutz & Sicherheit › Aufnahme von Bildschirm & Systemaudio und starte Sirplus Talk danach neu.',
+    buttons: ['Systemeinstellungen öffnen', 'Abbrechen'],
+    defaultId: 0,
+    cancelId: 1,
+  }
+  const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+  if (response === 0) void shell.openExternal(SCREEN_SETTINGS)
+  return false
+}
+
 // --- Call state -----------------------------------------------------------------------
 
 /** One line per system action, so device logs show what happened around a call. */

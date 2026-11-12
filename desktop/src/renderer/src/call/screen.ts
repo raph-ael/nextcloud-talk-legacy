@@ -66,7 +66,7 @@ export async function openScreenShare(): Promise<void> {
   if (st.stream || st.picker || st.starting) return
   const my = ++gen
   set({ starting: true })
-  let sources: ScreenSource[] | null
+  let sources: ScreenSource[] | null | false
   try {
     sources = await window.talk.screenSources()
   } catch (err) {
@@ -76,6 +76,8 @@ export async function openScreenShare(): Promise<void> {
     return
   }
   if (my !== gen) return
+  // macOS without „Bildschirmaufnahme“: main showed the way to System Settings.
+  if (sources === false) return set({ starting: false })
   if (sources === null) return capture(null, my)
   set({ starting: false, picker: sources })
 }

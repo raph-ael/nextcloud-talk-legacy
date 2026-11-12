@@ -413,9 +413,10 @@ export interface TalkApi {
   setCameraEnabled(on: boolean): Promise<boolean>
   /**
    * What can be shared, with thumbnails, for the own picker; `null`: the system shows its
-   * own dialog instead (Linux/Wayland portal), `getDisplayMedia` right away.
+   * own dialog instead (Linux/Wayland portal), `getDisplayMedia` right away; `false`: the
+   * system does not allow screen recording (macOS), main already explained it.
    */
-  screenSources(): Promise<ScreenSource[] | null>
+  screenSources(): Promise<ScreenSource[] | null | false>
   /** The source the next `getDisplayMedia` captures (`null`: the system dialog). */
   chooseScreen(sourceId: string | null): Promise<void>
   /** Screen sharing on/off in the running call: after `getDisplayMedia`, see `ScreenSource`. */
