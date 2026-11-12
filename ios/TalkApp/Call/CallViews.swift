@@ -1,6 +1,7 @@
 import AVKit
 import SwiftUI
 import UIKit
+import WebRTC
 
 /// Call screens after Signal-iOS (patterns and sizes only): full screen in its own window
 /// above the app, so camera or photo sheets never hide it.
@@ -138,12 +139,32 @@ struct CallBackdrop: View {
 struct ActiveCallView: View {
     let call: CallView
     private var controller: CallController { .shared }
+    private var video: CallVideo { .shared }
 
     var body: some View {
         let room = SessionStore.shared.room(call.token)
+        // 1:1: the other side's video fills the stage while it runs.
+        let stage = call.isGroup ? nil : call.participants.lazy.compactMap { video.track(for: $0) }.first
         ZStack {
             Color(hex: 0x121212).ignoresSafeArea()
-            if !call.isGroup { CallBackdrop(call: call) }
+            if let stage {
+                VideoView(track: stage)
+                    .ignoresSafeArea()
+                    .accessibilityElement()
+                    .accessibilityLabel("Video")
+                    .accessibilityIdentifier("call-remote-video")
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 200)
+                    Spacer()
+                    LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 220)
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+            } else if !call.isGroup {
+                CallBackdrop(call: call)
+            }
             VStack(spacing: 0) {
                 HStack {
                     Button {
@@ -176,7 +197,7 @@ struct ActiveCallView: View {
                 Spacer(minLength: 24)
                 if call.isGroup {
                     CallTiles(call: call)
-                } else {
+                } else if stage == nil {
                     Avatar(name: call.roomName, size: 160, token: call.token, version: room?.avatarVersion ?? "")
                         .overlay(Circle().stroke(Color.white.opacity(speaking ? 0.9 : 0), lineWidth: 3).padding(-6))
                         .animation(.easeOut(duration: 0.2), value: speaking)
@@ -185,7 +206,16 @@ struct ActiveCallView: View {
                 CallControls(call: call)
                     .padding(.bottom, 24)
             }
+            if let own = video.local, controller.wantCamera {
+                LocalPreview(track: own, mirrored: video.localFront)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 24 + 48 + 20)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: stage != nil)
+        .animation(.easeOut(duration: 0.2), value: video.local != nil && controller.wantCamera)
         .alert("Dieser Anruf kann aufgezeichnet werden", isPresented: consentAsked) {
             Button("Abbrechen", role: .cancel) { controller.hangUp() }
             Button("Zustimmen und beitreten") { controller.consentToRecording() }
@@ -204,8 +234,8 @@ struct ActiveCallView: View {
     }
 }
 
-/// Audio output · mute · (video, later) · more (recording) · hang up. 48 pt buttons,
-/// 20 pt apart.
+/// Audio output · camera · more (recording) · mute · hang up (docs/calls.md "Video").
+/// 48 pt buttons, 20 pt apart.
 struct CallControls: View {
     let call: CallView
     private var audio: CallAudio { .shared }
@@ -217,13 +247,14 @@ struct CallControls: View {
         let ended = call.state == .ended
         HStack(spacing: 20) {
             AudioOutputButton()
+            // Crossed out while off; white while on.
             CallButton(
-                symbol: call.muted ? "mic.slash.fill" : "mic.fill",
-                active: call.muted,
-                label: call.muted ? "Stummschaltung aufheben" : "Stummschalten",
-                id: "call-mute"
-            ) { controller.toggleMute() }
-            // Video goes here later (same size), the bar keeps its layout.
+                symbol: controller.wantCamera ? "video.fill" : "video.slash.fill",
+                active: controller.wantCamera,
+                label: controller.wantCamera ? "Kamera ausschalten" : "Kamera einschalten",
+                id: "call-camera"
+            ) { controller.toggleCamera() }
+            .disabled(call.state == .incoming)
             if call.canRecord {
                 CallButton(symbol: "ellipsis", label: "Mehr", id: "call-more") { menu = true }
                     .confirmationDialog("Aufnahme", isPresented: $menu, titleVisibility: .hidden) {
@@ -235,6 +266,12 @@ struct CallControls: View {
                         }
                     }
             }
+            CallButton(
+                symbol: call.muted ? "mic.slash.fill" : "mic.fill",
+                active: call.muted,
+                label: call.muted ? "Stummschaltung aufheben" : "Stummschalten",
+                id: "call-mute"
+            ) { controller.toggleMute() }
             CallButton(symbol: "phone.down.fill", tint: Talk.danger, label: "Auflegen", id: "call-hangup") {
                 controller.hangUp()
             }
@@ -344,48 +381,109 @@ struct CallTile: View {
     let large: Bool
     @State private var image: UIImage?
     @Environment(\.colorScheme) private var scheme
+    private var video: CallVideo { .shared }
 
     var body: some View {
         let p = participant
-        VStack(spacing: 8) {
-            ZStack {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
-                } else {
-                    Format.color(for: p.name)
-                    Text(Format.initials(p.name))
-                        .font(.system(size: (large ? 96 : 64) * 0.4, weight: .semibold))
-                        .foregroundStyle(.white)
+        let track = video.track(for: p)
+        ZStack {
+            if let track {
+                // Video instead of the avatar; name and mute icon stay at the bottom.
+                VideoView(track: track)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("call-tile-video")
+                VStack {
+                    Spacer()
+                    HStack(spacing: 4) {
+                        if p.muted { Image(systemName: "mic.slash.fill").font(.system(size: 11)) }
+                        Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.45), in: Capsule())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
                 }
-            }
-            .frame(width: large ? 96 : 64, height: large ? 96 : 64)
-            .clipShape(Circle())
-            HStack(spacing: 4) {
-                if p.muted {
-                    Image(systemName: "mic.slash.fill").font(.system(size: 12))
+            } else {
+                VStack(spacing: 8) {
+                    ZStack {
+                        if let image {
+                            Image(uiImage: image).resizable().scaledToFill()
+                        } else {
+                            Format.color(for: p.name)
+                            Text(Format.initials(p.name))
+                                .font(.system(size: (large ? 96 : 64) * 0.4, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(width: large ? 96 : 64, height: large ? 96 : 64)
+                    .clipShape(Circle())
+                    HStack(spacing: 4) {
+                        if p.muted {
+                            Image(systemName: "mic.slash.fill").font(.system(size: 12))
+                        }
+                        Text(p.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    if !p.connected {
+                        Text("Verbinde …").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
+                    }
                 }
-                Text(p.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
-            }
-            .foregroundStyle(.white)
-            if !p.connected {
-                Text("Verbinde …").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
             }
         }
         .frame(maxWidth: .infinity)
         .frame(height: large ? 220 : 150)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.white, lineWidth: p.speaking && p.connected ? 3 : 0)
         )
         .opacity(p.connected ? 1 : 0.55)
         .animation(.easeOut(duration: 0.2), value: p.speaking)
+        .animation(.easeOut(duration: 0.2), value: track != nil)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("call-tile")
         .task(id: p.userId) {
             guard !p.userId.isEmpty else { return }
             image = await CallAvatars.shared.image(p.userId, dark: scheme == .dark)
         }
+    }
+}
+
+/// Own camera, small in the bottom-right corner (mirrored for the front camera), with
+/// "Kamera wechseln".
+struct LocalPreview: View {
+    let track: RTCVideoTrack
+    let mirrored: Bool
+    private var controller: CallController { .shared }
+
+    var body: some View {
+        VideoView(track: track)
+            .scaleEffect(x: mirrored ? -1 : 1, y: 1)
+            .frame(width: 96, height: 128)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.25), lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+            .overlay(alignment: .bottomTrailing) {
+                Button {
+                    controller.switchCamera()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.camera")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.black.opacity(0.45), in: Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Kamera wechseln")
+                .accessibilityIdentifier("call-switch-camera")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Eigene Kamera")
+            .accessibilityIdentifier("call-local-preview")
     }
 }
 

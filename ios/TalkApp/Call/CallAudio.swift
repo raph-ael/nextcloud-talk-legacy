@@ -6,6 +6,7 @@ import WebRTC
 /// Audio session of a call, like Signal:
 /// - earpiece: `.playAndRecord` + `.voiceChat`, proximity sensor on
 /// - speaker: `.playAndRecord` + `.videoChat` (+ speaker override)
+/// - own camera on: `.videoChat`, speaker unless a headset is connected, no proximity sensor
 /// - Bluetooth (HFP/A2DP), headphones and car audio through the system route picker.
 ///
 /// WebRTC runs with `useManualAudio`: its audio unit starts only when the core has sent
@@ -36,6 +37,8 @@ final class CallAudio {
     @ObservationIgnored private var started = false
     @ObservationIgnored private var activated = false
     @ObservationIgnored private var wantSpeaker = false
+    /// Our camera is on (docs/calls.md "Video", mobile).
+    @ObservationIgnored private var video = false
     /// Without CallKit (simulator) the app activates the session itself.
     @ObservationIgnored var selfManaged = false
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -98,6 +101,7 @@ final class CallAudio {
         guard inCall else { return }
         inCall = false
         wantSpeaker = false
+        video = false
         UIDevice.current.isProximityMonitoringEnabled = false
         output = .receiver
     }
@@ -134,13 +138,23 @@ final class CallAudio {
         applyOutput()
     }
 
+    /// Camera switched on or off: on goes to the speaker unless a headset is connected; off
+    /// keeps the current output.
+    func setVideo(_ on: Bool) {
+        guard inCall, on != video else { return }
+        video = on
+        if on && Self.externalOutput(AVAudioSession.sharedInstance().currentRoute) == nil { wantSpeaker = true }
+        configure()
+        applyOutput()
+    }
+
     private func configure() {
         let rtc = RTCAudioSession.sharedInstance()
         rtc.lockForConfiguration()
         defer { rtc.unlockForConfiguration() }
         do {
             try rtc.setCategory(.playAndRecord, with: [.allowBluetoothHFP, .allowBluetoothA2DP])
-            try rtc.setMode(wantSpeaker ? .videoChat : .voiceChat)
+            try rtc.setMode(wantSpeaker || video ? .videoChat : .voiceChat)
         } catch {
             Log.call.error("audio category: \(error.localizedDescription, privacy: .public)")
         }
@@ -184,7 +198,7 @@ final class CallAudio {
         let externalInputs: Set<AVAudioSession.Port> = [.bluetoothHFP, .headsetMic, .usbAudio, .carAudio]
         hasExternal = Self.externalOutput(route) != nil
             || (s.availableInputs ?? []).contains { externalInputs.contains($0.portType) }
-        UIDevice.current.isProximityMonitoringEnabled = inCall && output == .receiver
+        UIDevice.current.isProximityMonitoringEnabled = inCall && output == .receiver && !video
     }
 
     private static func externalOutput(_ route: AVAudioSessionRouteDescription) -> String? {

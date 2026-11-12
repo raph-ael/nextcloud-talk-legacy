@@ -1,18 +1,22 @@
 import Foundation
 import WebRTC
 
-/// The core's `MediaEngine` on libwebrtc (docs/calls.md, rules 1–12). Audio only.
+/// The core's `MediaEngine` on libwebrtc (docs/calls.md, rules 1–12 and "Video").
 ///
 /// - Every command runs on the peer's own serial chain; an asynchronous step (offer, answer,
 ///   descriptions, candidates) finishes before the next command of that peer starts.
 /// - Unknown or closed peer ids are ignored and never reported.
-/// - One microphone track is shared by all sending peers (publisher, mesh).
+/// - One microphone track and one camera track are shared by all sending peers (publisher,
+///   mesh). Every peer has an audio and a video transceiver from the start; the camera is
+///   switched by setting the video sender's track, without renegotiation.
 final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
     /// Reports go here (weak: the session owns the engine through the core).
     weak var session: TalkSession?
     /// `startAudio` / `stopAudio`, on the main actor.
     var onStartAudio: ((String) -> Void)?
     var onStopAudio: ((String) -> Void)?
+    /// The camera failed or was taken away (message for the user), on the main actor.
+    var onCameraFailed: ((String) -> Void)?
 
     private let lock = NSLock()
     private var peers: [String: Peer] = [:]
@@ -20,6 +24,10 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
     private var localTrack: RTCAudioTrack?
     private var levelTimer: DispatchSourceTimer?
     private let levelQueue = DispatchQueue(label: "talk.call.levels", qos: .utility)
+    /// Camera wanted by the core, and the open camera. Opened and closed on `cameraQueue`.
+    private var cameraWanted = false
+    private var camera: CallCamera?
+    private let cameraQueue = DispatchQueue(label: "talk.call.camera", qos: .userInitiated)
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -101,7 +109,11 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
             guard let pc = peer.pc else { return done() }
             let desc = RTCSessionDescription(type: sdpType == .offer ? .offer : .answer, sdp: sdp)
             pc.setRemoteDescription(desc) { error in
-                if let error { self?.fail(peer, "setRemoteDescription: \(error.localizedDescription)") }
+                if let error {
+                    self?.fail(peer, "setRemoteDescription: \(error.localizedDescription)")
+                } else if sdpType == .offer, peer.kind == .mesh {
+                    self?.adoptRemoteOffer(peer, pc)
+                }
                 done()
             }
         }
@@ -133,6 +145,7 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
             peer.pc = nil
             done()
         }
+        DispatchQueue.main.async { CallVideo.shared.removeRemote(peerId) }
         if empty { stopLevels() }
     }
 
@@ -144,8 +157,31 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
         track?.isEnabled = enabled
     }
 
-    /// Video (docs/calls.md "Video"): not implemented yet, the camera stays off.
-    func setCameraEnabled(enabled: Bool) {}
+    /// Opens the camera and attaches its track to every sending peer, or detaches and closes
+    /// it (the camera light goes off). Repeated by the core after each new sending peer.
+    func setCameraEnabled(enabled: Bool) {
+        lock.lock()
+        cameraWanted = enabled
+        lock.unlock()
+        cameraQueue.async { [weak self] in self?.syncCamera() }
+    }
+
+    /// "Kamera wechseln": front ↔ back, same track.
+    func switchCamera() {
+        cameraQueue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let cam = self.camera
+            self.lock.unlock()
+            guard let cam else { return }
+            if let error = cam.switchCamera() {
+                self.cameraFailed(error)
+            } else {
+                let track = cam.track, front = cam.front
+                DispatchQueue.main.async { CallVideo.shared.setLocal(track, front: front) }
+            }
+        }
+    }
 
     func startAudio(callId: String) {
         DispatchQueue.main.async { [weak self] in self?.onStartAudio?(callId) }
@@ -157,7 +193,10 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
         peers.removeAll()
         let track = localTrack
         localTrack = nil
+        cameraWanted = false
         lock.unlock()
+        cameraQueue.async { [weak self] in self?.syncCamera() }
+        DispatchQueue.main.async { CallVideo.shared.clear() }
         // The core closes its peers before; anything left must not keep the microphone.
         for peer in rest {
             peer.closed = true
@@ -216,21 +255,146 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
             return
         }
         peer.pc = pc
-        let initOpts = RTCRtpTransceiverInit()
         switch peer.kind {
         case .publisher:
-            initOpts.direction = .sendOnly
-            initOpts.streamIds = ["talk"]
-            pc.addTransceiver(with: microphoneTrack(), init: initOpts)
+            addSendingTransceivers(pc, direction: .sendOnly)
         case .subscriber:
-            // The MCU's offer brings the receiving transceiver itself; nothing to add.
+            // The MCU's offer brings the receiving transceivers itself; nothing to add.
             break
         case .mesh:
-            initOpts.direction = .sendRecv
-            initOpts.streamIds = ["talk"]
-            pc.addTransceiver(with: microphoneTrack(), init: initOpts)
+            addSendingTransceivers(pc, direction: .sendRecv)
         }
         Log.call.info("peer \(peer.id, privacy: .public) \(String(describing: peer.kind), privacy: .public) created")
+    }
+
+    /// Audio (microphone) and video (camera, if on) for a sending peer.
+    private func addSendingTransceivers(_ pc: RTCPeerConnection, direction: RTCRtpTransceiverDirection) {
+        let audio = RTCRtpTransceiverInit()
+        audio.direction = direction
+        audio.streamIds = ["talk"]
+        pc.addTransceiver(with: microphoneTrack(), init: audio)
+        let video = RTCRtpTransceiverInit()
+        video.direction = direction
+        video.streamIds = ["talk"]
+        lock.lock()
+        let cam = camera?.track
+        lock.unlock()
+        if let cam { pc.addTransceiver(with: cam, init: video) } else { pc.addTransceiver(of: .video, init: video) }
+    }
+
+    /// Mesh, the other side offered: libwebrtc never reuses transceivers made with
+    /// `addTransceiver` for a remote offer, it creates receive-only ones. Those become
+    /// send+receive with our tracks; ours stay unused and are stopped (they would add
+    /// extra m-lines to a later offer).
+    private func adoptRemoteOffer(_ peer: Peer, _ pc: RTCPeerConnection) {
+        lock.lock()
+        let cam = camera?.track
+        lock.unlock()
+        for t in pc.transceivers where !t.isStopped {
+            if t.mid.isEmpty {
+                t.stopInternal()
+                continue
+            }
+            guard t.direction == .recvOnly else { continue }
+            var error: NSError?
+            t.setDirection(.sendRecv, error: &error)
+            t.sender.streamIds = ["talk"]
+            t.sender.track = t.mediaType == .audio ? microphoneTrack() : cam
+        }
+    }
+
+    /// Mobile video quality: at most 600 kbit/s and 24 fps, balanced degradation.
+    private func tuneVideoSenders(_ pc: RTCPeerConnection) {
+        for t in pc.transceivers where t.mediaType == .video && !t.isStopped {
+            guard t.direction == .sendOnly || t.direction == .sendRecv else { continue }
+            let params = t.sender.parameters
+            guard !params.encodings.isEmpty else { continue }
+            for e in params.encodings {
+                e.maxBitrateBps = 600_000
+                e.maxFramerate = 24
+            }
+            params.degradationPreference = NSNumber(value: RTCDegradationPreference.balanced.rawValue)
+            t.sender.parameters = params
+        }
+    }
+
+    // MARK: Camera
+
+    /// Brings the camera to `cameraWanted` (on `cameraQueue`).
+    private func syncCamera() {
+        lock.lock()
+        let wanted = cameraWanted
+        var cam = camera
+        lock.unlock()
+        if wanted {
+            if cam == nil {
+                let c = CallCamera(factory: Self.factory)
+                if let error = c.start(front: true) {
+                    cameraFailed(error)
+                    return
+                }
+                c.onInterrupted = { [weak self] message in
+                    self?.cameraQueue.async { self?.cameraFailed(message) }
+                }
+                lock.lock()
+                camera = c
+                lock.unlock()
+                cam = c
+                let front = c.front
+                DispatchQueue.main.async { CallVideo.shared.setLocal(c.track, front: front) }
+            }
+            attachCamera(cam?.track)
+        } else if let cam {
+            lock.lock()
+            camera = nil
+            lock.unlock()
+            attachCamera(nil)
+            cam.stop()
+            DispatchQueue.main.async { CallVideo.shared.setLocal(nil, front: true) }
+        }
+    }
+
+    /// No camera, no permission, taken by another app: off, and the core is told.
+    private func cameraFailed(_ message: String) {
+        lock.lock()
+        let wasWanted = cameraWanted
+        cameraWanted = false
+        let cam = camera
+        camera = nil
+        lock.unlock()
+        Log.call.error("camera failed: \(message, privacy: .public)")
+        attachCamera(nil)
+        cam?.stop()
+        DispatchQueue.main.async { CallVideo.shared.setLocal(nil, front: true) }
+        guard wasWanted else { return }
+        session?.mediaCameraState(on: false)
+        DispatchQueue.main.async { [weak self] in self?.onCameraFailed?(message) }
+    }
+
+    /// Sets the track on the video sender of every publisher and mesh peer, in each peer's
+    /// command order (after its `createPeer`).
+    private func attachCamera(_ track: RTCVideoTrack?) {
+        lock.lock()
+        let sending = peers.values.filter { $0.kind != .subscriber }
+        lock.unlock()
+        for peer in sending {
+            peer.enqueue { done in
+                if let pc = peer.pc, !peer.closed {
+                    for t in pc.transceivers where t.mediaType == .video && !t.isStopped {
+                        guard t.direction == .sendOnly || t.direction == .sendRecv else { continue }
+                        if t.sender.track !== track { t.sender.track = track }
+                    }
+                }
+                done()
+            }
+        }
+    }
+
+    fileprivate func remoteVideo(_ peer: Peer, _ track: RTCVideoTrack) {
+        guard !peer.closed else { return }
+        let id = peer.id
+        Log.call.info("peer \(id, privacy: .public): remote video track")
+        DispatchQueue.main.async { CallVideo.shared.setRemote(id, track) }
     }
 
     private func setLocal(_ peer: Peer, _ pc: RTCPeerConnection, _ sdp: RTCSessionDescription, type: SdpType, done: @escaping () -> Void) {
@@ -239,6 +403,7 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
             if let error {
                 self.fail(peer, "setLocalDescription: \(error.localizedDescription)")
             } else if !peer.closed {
+                if peer.kind != .subscriber { self.tuneVideoSenders(pc) }
                 self.session?.mediaLocalDescription(peerId: peer.id, sdpType: type, sdp: sdp.sdp)
             }
             done()
@@ -427,4 +592,23 @@ private final class Peer: NSObject, RTCPeerConnectionDelegate, @unchecked Sendab
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         engine?.candidate(self, candidate)
     }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+        if let video = rtpReceiver.track as? RTCVideoTrack { engine?.remoteVideo(self, video) }
+    }
 }
+
+#if DEBUG
+extension WebRTCMediaEngine {
+    nonisolated(unsafe) private static var mockCapturers: [FakeVideoCapturer] = []
+
+    /// A moving test picture for `TALK_CALL_MOCK` (no call, no peers).
+    static func mockTrack(front: Bool) -> RTCVideoTrack {
+        let source = factory.videoSource()
+        let capturer = FakeVideoCapturer(delegate: source)
+        capturer.start(front: front)
+        mockCapturers.append(capturer)
+        return factory.videoTrack(with: source, trackId: "mock-\(mockCapturers.count)")
+    }
+}
+#endif

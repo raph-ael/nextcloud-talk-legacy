@@ -19,7 +19,11 @@ final class CallController: NSObject {
     }
     /// The full-screen call view is shown (else only the in-app bar).
     var presented = false {
-        didSet { if oldValue != presented { CallWindow.shared.sync() } }
+        didSet {
+            guard oldValue != presented else { return }
+            CallWindow.shared.sync()
+            applyCamera()
+        }
     }
 
     /// CallKit is used on devices; the simulator has no working CallKit audio.
@@ -41,6 +45,15 @@ final class CallController: NSObject {
     @ObservationIgnored private var announcedRecording = false
     /// Debug: a mock call is shown, core events are ignored.
     @ObservationIgnored var mocking = false
+    /// The user switched the camera on (docs/calls.md "Video"). It runs only while the call
+    /// screen is shown and the app is in the foreground; otherwise it is paused, which the
+    /// others see as "video off".
+    private(set) var wantCamera = false
+    /// What the core was last told (`setCameraEnabled`).
+    @ObservationIgnored private var sentCamera = false
+    @ObservationIgnored private var foreground = true
+    @ObservationIgnored private var reportedVideo = false
+    @ObservationIgnored private var keepsScreenOn = false
 
     private var session: TalkSession? { SessionStore.shared.session }
 
@@ -60,6 +73,19 @@ final class CallController: NSObject {
         useCallKit = true
         #endif
         super.init()
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.foreground = false
+                self?.applyCamera()
+            }
+        }
+        nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.foreground = true
+                self?.applyCamera()
+            }
+        }
         CallAudio.shared.selfManaged = !useCallKit
         if useCallKit {
             let p = CXProvider(configuration: Self.configuration())
@@ -72,7 +98,7 @@ final class CallController: NSObject {
         let c = CXProviderConfiguration()
         c.maximumCallGroups = 1
         c.maximumCallsPerCallGroup = 1
-        c.supportsVideo = false
+        c.supportsVideo = true
         c.supportedHandleTypes = [.generic]
         c.includesCallsInRecents = true
         c.iconTemplateImageData = CallKitIcon.png()
@@ -201,6 +227,95 @@ final class CallController: NSObject {
         }
     }
 
+    // MARK: Camera
+
+    /// "Kamera einschalten" / "Kamera ausschalten". Asks for the camera permission the first time.
+    func toggleCamera() {
+        guard let call, call.state != .ended, call.state != .incoming else { return }
+        #if DEBUG
+        if mocking {
+            wantCamera.toggle()
+            CallVideo.shared.setLocal(wantCamera ? WebRTCMediaEngine.mockTrack(front: true) : nil, front: true)
+            return
+        }
+        #endif
+        if wantCamera {
+            wantCamera = false
+            applyCamera()
+            return
+        }
+        #if !(DEBUG && targetEnvironment(simulator))
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            break
+        case .notDetermined:
+            Task {
+                guard await AVCaptureDevice.requestAccess(for: .video) else {
+                    Toast.show("Kamera in den Einstellungen erlauben, um sie im Anruf zu nutzen.")
+                    return
+                }
+                guard self.call?.id == call.id else { return }
+                self.wantCamera = true
+                self.applyCamera()
+            }
+            return
+        default:
+            Toast.show("Kamera in den Einstellungen erlauben, um sie im Anruf zu nutzen.")
+            return
+        }
+        #endif
+        wantCamera = true
+        applyCamera()
+    }
+
+    /// "Kamera wechseln" (front ↔ back) on the own preview.
+    func switchCamera() {
+        #if DEBUG
+        if mocking {
+            let front = !CallVideo.shared.localFront
+            CallVideo.shared.setLocal(WebRTCMediaEngine.mockTrack(front: front), front: front)
+            return
+        }
+        #endif
+        SessionStore.shared.callMedia.switchCamera()
+    }
+
+    /// The engine could not open the camera or lost it: off, with the reason.
+    func cameraFailed(_ message: String) {
+        guard wantCamera else { return }
+        wantCamera = false
+        sentCamera = false
+        applyCamera()
+        Toast.show(message)
+    }
+
+    /// Tells the core whether the camera runs (wanted, call screen shown, app in the
+    /// foreground) and follows up audio, screen lock and CallKit.
+    private func applyCamera() {
+        guard !mocking else { return }
+        let active = call.map { $0.state != .ended && $0.state != .incoming } ?? false
+        if !active { wantCamera = false }
+        let run = wantCamera && presented && foreground
+        if run != sentCamera, let session, call != nil {
+            sentCamera = run
+            Log.call.info("camera \(run ? "on" : "off", privacy: .public) (wanted \(self.wantCamera), shown \(self.presented), foreground \(self.foreground))")
+            session.setCameraEnabled(on: run)
+        }
+        if active { CallAudio.shared.setVideo(wantCamera) }
+        // The screen stays on while video runs (own or from the others).
+        let screenOn = active && (wantCamera || call?.participants.contains { $0.video } == true)
+        if screenOn != keepsScreenOn {
+            keepsScreenOn = screenOn
+            UIApplication.shared.isIdleTimerDisabled = screenOn
+        }
+        if active, wantCamera != reportedVideo, useCallKit, let uuid, let provider {
+            reportedVideo = wantCamera
+            let u = CXCallUpdate()
+            u.hasVideo = wantCamera
+            provider.reportCall(with: uuid, updated: u)
+        }
+    }
+
     // MARK: Recording
 
     /// "Audio aufnehmen" / "Video aufnehmen" (only with `canRecord`).
@@ -294,6 +409,9 @@ final class CallController: NSObject {
                 presented = false
             }
             finishCallKit()
+            wantCamera = false
+            sentCamera = false
+            applyCamera()
             return
         }
         if new.state != .ended { closeTask?.cancel() }
@@ -311,10 +429,15 @@ final class CallController: NSObject {
         if isNewCall {
             reportedConnecting = false
             reportedConnected = false
+            // Every call starts without camera, also when answering.
+            wantCamera = false
+            sentCamera = false
+            reportedVideo = false
         }
         tones(previous: isNewCall ? nil : previous, new)
         announceRecording(new, isNewCall: isNewCall)
         callKit(new)
+        applyCamera()
         switch new.state {
         case .incoming:
             if !useCallKit { presented = true }
@@ -550,6 +673,8 @@ extension CallController {
     /// shows the call screen with a fake call (screenshots, layout checks). No media, no
     /// core. `TALK_CALL_MOCK_REC=off|startingAudio|audio|video|failed` sets its recording
     /// state, `TALK_CALL_MOCK_CAN_RECORD=1` shows the recording controls.
+    /// `TALK_CALL_MOCK_VIDEO=1` gives the others a moving test picture (in a group every
+    /// participant but the last two) and switches our camera on (own preview).
     /// `TALK_AUTOCALL=<token>` calls that conversation after launch; `TALK_AUTOHANGUP=<s>`
     /// hangs up after that many seconds (automated call tests).
     func autoCallIfRequested() {
@@ -595,17 +720,27 @@ extension CallController {
         case "ended": .ended
         default: .connected
         }
+        let video = env["TALK_CALL_MOCK_VIDEO"] == "1"
         let participants = group
             ? names.enumerated().map { i, n in
-                CallParticipant(sessionId: "s\(i)", userId: "", name: n, muted: i == 2, speaking: i == 1, connected: i != 4, video: false, peerId: nil)
+                CallParticipant(sessionId: "s\(i)", userId: "", name: n, muted: i == 2, speaking: i == 1, connected: i != 4,
+                                video: video && i < 3, peerId: video && i < 3 ? "mock\(i)" : nil)
             }
-            : [CallParticipant(sessionId: "s0", userId: "", name: room?.name ?? "Anna", muted: false, speaking: true, connected: true, video: false, peerId: nil)]
+            : [CallParticipant(sessionId: "s0", userId: "", name: room?.name ?? "Anna", muted: false, speaking: true, connected: true,
+                               video: video, peerId: video ? "mock0" : nil)]
+        if video {
+            for p in participants {
+                if let id = p.peerId { CallVideo.shared.setRemote(id, WebRTCMediaEngine.mockTrack(front: p.sessionId != "s1")) }
+            }
+            CallVideo.shared.setLocal(WebRTCMediaEngine.mockTrack(front: true), front: true)
+            wantCamera = true
+        }
         let view = CallView(
             id: UUID().uuidString, token: room?.token ?? "mock", roomName: group ? "Projektgruppe" : (room?.name ?? "Anna Berg"),
             isGroup: group, direction: state == .incoming ? .incoming : .outgoing, state: state,
             callerName: room?.name ?? "Anna Berg",
             startedAt: state == .connected ? Int64(Date().timeIntervalSince1970 * 1000) - 192_000 : nil,
-            muted: mode == "reconnecting", cameraOn: false, participants: participants,
+            muted: mode == "reconnecting", cameraOn: video, participants: participants,
             endReason: state == .ended ? .noAnswer : nil,
             recording: recording, canRecord: env["TALK_CALL_MOCK_CAN_RECORD"] == "1",
             recordingConsentPending: mode == "consent"

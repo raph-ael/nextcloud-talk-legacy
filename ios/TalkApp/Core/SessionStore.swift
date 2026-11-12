@@ -155,6 +155,7 @@ final class SessionStore {
         callMedia.session = s
         callMedia.onStartAudio = { _ in CallAudio.shared.startAudio() }
         callMedia.onStopAudio = { _ in CallAudio.shared.stopAudio() }
+        callMedia.onCameraFailed = { CallController.shared.cameraFailed($0) }
         s.setMediaEngine(media: callMedia)
         server = saved.server
         user = saved.loginName

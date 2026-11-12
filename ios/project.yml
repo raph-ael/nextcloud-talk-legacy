@@ -74,7 +74,7 @@ targets:
         # Shared with TalkNotify: the push device key.
         TalkKeychainGroup: $(AppIdentifierPrefix)org.sirplus.talk.shared
         NSMicrophoneUsageDescription: Für Anrufe und zum Aufnehmen von Sprachnachrichten.
-        NSCameraUsageDescription: Zum Aufnehmen und Senden von Fotos.
+        NSCameraUsageDescription: Zum Aufnehmen und Senden von Fotos und für Videoanrufe.
         NSPhotoLibraryUsageDescription: Zum Senden von Fotos aus deiner Mediathek.
         # audio: voice messages keep playing with the screen locked, calls keep their audio;
         # voip: incoming calls via PushKit; processing: the outbox finishes sending after
