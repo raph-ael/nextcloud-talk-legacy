@@ -312,6 +312,8 @@ export type AppEvent =
   | { type: 'openRoom'; token: string }
   /** Keyboard shortcut or notification action of the incoming-call bar. */
   | { type: 'callAction'; action: 'accept' | 'decline' }
+  /** The window entered or left fullscreen (our button, green button, F11, window menu). */
+  | { type: 'windowFullscreen'; on: boolean }
 
 export type TalkEvent = CoreEvent | AppEvent
 
@@ -376,6 +378,9 @@ export interface TalkApi {
   declineCall(token: string): Promise<void>
   hangUp(): Promise<void>
   setCallMuted(muted: boolean): Promise<void>
+  /** Window fullscreen (call view); changes come back as `windowFullscreen` events. */
+  setFullScreen(on: boolean): Promise<void>
+  isFullScreen(): Promise<boolean>
   /** Camera on/off in the running call; false when the system refused the camera (macOS). */
   setCameraEnabled(on: boolean): Promise<boolean>
   currentCall(): Promise<CallView | null>

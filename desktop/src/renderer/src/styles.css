@@ -1954,7 +1954,8 @@ a.file-row:hover .file-name {
   left: 50%;
   transform: translateX(-50%);
   width: 300px;
-  max-height: 60vh;
+  /* Up to the header: bottom of the menu sits about 90 px above the window edge. */
+  max-height: calc(100vh - 160px);
   overflow-y: auto;
   padding: 6px;
   border-radius: 12px;
@@ -2028,7 +2029,7 @@ a.file-row:hover .file-name {
 }
 .call-menu-preview {
   display: block;
-  width: calc(100% - 20px);
+  width: 192px;
   aspect-ratio: 16 / 9;
   margin: 4px 10px 6px;
   border-radius: 8px;

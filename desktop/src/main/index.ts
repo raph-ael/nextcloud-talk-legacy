@@ -705,6 +705,9 @@ function createWindow(): void {
   })
   win.once('ready-to-show', () => win?.show())
   win.on('focus', () => win?.flashFrame(false))
+  // However it was entered (call view, green button, F11, menu): the call view shows it.
+  win.on('enter-full-screen', () => send({ type: 'windowFullscreen', on: true } satisfies AppEvent))
+  win.on('leave-full-screen', () => send({ type: 'windowFullscreen', on: false } satisfies AppEvent))
   win.on('close', (e) => {
     // Keeps running in the tray so calls can ring (and a running call keeps its media).
     // macOS: always, like every Mac app – Cmd+Q quits, the dock icon brings it back.
@@ -863,6 +866,8 @@ function registerIpc(): void {
   ipcMain.handle('talk:declineCall', (_e, token: string) => session?.declineCall(token))
   ipcMain.handle('talk:hangUp', () => session?.hangUp())
   ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => session?.setCallMuted(muted))
+  ipcMain.handle('talk:setFullScreen', (_e, on: boolean) => win?.setFullScreen(on))
+  ipcMain.handle('talk:isFullScreen', () => win?.isFullScreen() ?? false)
   // macOS asks for the camera on the first switch-on; refused, it stays off (the dialog explains).
   ipcMain.handle('talk:setCameraEnabled', async (_e, on: boolean) => {
     if (on && !(await ensureCamera())) return false

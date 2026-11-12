@@ -517,28 +517,60 @@ function Notice({ problem, onRetry }: { problem: DeviceProblem; onRetry: () => v
 
 // --- Fullscreen (button, double click on the stage, Esc) --------------------------------
 
-/** The whole window (toasts and menus stay visible), like the window menu's „Vollbild“. */
+/**
+ * The window's own fullscreen (not the HTML one): the same state as the green button on the
+ * Mac, F11 and the window menu, so the button and Esc always match what is on screen.
+ */
+let windowFull = false
+const fullListeners = new Set<() => void>()
+let fullStarted = false
+
+function watchFullscreen(): void {
+  if (fullStarted) return
+  fullStarted = true
+  const set = (on: boolean) => {
+    if (on === windowFull) return
+    windowFull = on
+    fullListeners.forEach((l) => l())
+  }
+  window.talk.onEvent((e) => e.type === 'windowFullscreen' && set(e.on))
+  void window.talk.isFullScreen().then(set)
+}
+
+// From the start, so the state is known before the first call view opens.
+watchFullscreen()
+
 function toggleFullscreen(): void {
-  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
-  else void document.documentElement.requestFullscreen().catch(() => undefined)
+  void window.talk.setFullScreen(!windowFull)
 }
 
 function useFullscreen(): boolean {
-  const [full, setFull] = useState(() => !!document.fullscreenElement)
+  watchFullscreen()
+  const full = useSyncExternalStore(
+    (l) => {
+      fullListeners.add(l)
+      return () => fullListeners.delete(l)
+    },
+    () => windowFull,
+  )
+  // Entered while the call view was open: left again when it goes (ended, minimized). A
+  // window that was fullscreen before stays so.
+  const entered = useRef(false)
+  const before = useRef(full)
   useEffect(() => {
-    const onChange = () => setFull(!!document.fullscreenElement)
+    if (full && !before.current) entered.current = true
+    before.current = full
+  }, [full])
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // A menu or dialog closes first.
-      if (e.key !== 'Escape' || !document.fullscreenElement || document.querySelector('.call-menu, .call-dialog')) return
-      void document.exitFullscreen().catch(() => undefined)
+      if (e.key !== 'Escape' || !windowFull || document.querySelector('.call-menu, .call-dialog')) return
+      void window.talk.setFullScreen(false)
     }
-    document.addEventListener('fullscreenchange', onChange)
     window.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('fullscreenchange', onChange)
       window.removeEventListener('keydown', onKey)
-      // The call view goes (ended, minimized): the window leaves fullscreen with it.
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+      if (entered.current && windowFull) void window.talk.setFullScreen(false)
     }
   }, [])
   return full
