@@ -376,6 +376,8 @@ export interface TalkApi {
   declineCall(token: string): Promise<void>
   hangUp(): Promise<void>
   setCallMuted(muted: boolean): Promise<void>
+  /** Camera on/off in the running call; false when the system refused the camera (macOS). */
+  setCameraEnabled(on: boolean): Promise<boolean>
   currentCall(): Promise<CallView | null>
   /** Only with `call.canRecord`; `video` records the Talk web view. */
   startRecording(video: boolean): Promise<void>

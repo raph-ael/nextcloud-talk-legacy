@@ -44,6 +44,7 @@ const api: TalkApi = {
   declineCall: (token) => ipcRenderer.invoke('talk:declineCall', token),
   hangUp: () => ipcRenderer.invoke('talk:hangUp'),
   setCallMuted: (muted) => ipcRenderer.invoke('talk:setCallMuted', muted),
+  setCameraEnabled: (on) => ipcRenderer.invoke('talk:setCameraEnabled', on),
   currentCall: () => ipcRenderer.invoke('talk:currentCall'),
   startRecording: (video) => ipcRenderer.invoke('talk:startRecording', video),
   stopRecording: () => ipcRenderer.invoke('talk:stopRecording'),

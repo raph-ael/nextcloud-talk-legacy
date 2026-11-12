@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react'
 import type { CallView, EndReason } from '@shared/core'
 import { playConnected, playHangup, playRecordingCue, playRingback, playRingtone, stopTones } from './tones'
 import { startRecordingNotices } from './recordings'
+import { setDeviceNotice } from './devices'
 
 /** How long the final state stays visible before the call view closes. */
 const ENDED_MS = 1500
@@ -59,6 +60,7 @@ export function startCallUi(): void {
   })
   window.addEventListener('keydown', onKey, true)
   startRecordingNotices()
+  setDeviceNotice(toast)
 }
 
 function show(next: CallView | null): void {
@@ -211,6 +213,13 @@ export function toggleMute(): void {
   void window.talk.setCallMuted(!c.muted)
 }
 
+/** Camera on/off (docs/calls.md „Video“); the state comes back as `cameraOn`. */
+export function toggleCamera(): void {
+  const c = st.call
+  if (!c || c.state === 'ended' || c.state === 'incoming') return
+  window.talk.setCameraEnabled(!c.cameraOn).catch((e) => toast(errorText(e)))
+}
+
 /** Only with `canRecord`; the state comes back through `callChanged`. */
 export function startRecording(video: boolean): void {
   window.talk.startRecording(video).catch((e) => toast(errorText(e)))
@@ -229,7 +238,10 @@ export function minimize(minimized: boolean): void {
   if (st.call) set({ minimized })
 }
 
-/** Like Signal Desktop: Ctrl+Shift+A accept, Ctrl+Shift+D decline/hang up, Ctrl+Shift+M mute. */
+/**
+ * Like Signal Desktop: Ctrl+Shift+A accept, Ctrl+Shift+D decline/hang up, Ctrl+Shift+M mute,
+ * Ctrl+Shift+V camera (⌘ on the Mac).
+ */
 function onKey(e: KeyboardEvent): void {
   if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return
   const c = st.call
@@ -240,7 +252,9 @@ function onKey(e: KeyboardEvent): void {
     if (c.state === 'incoming') decline()
     else hangUp()
   } else if (key === 'm') toggleMute()
-  else return
+  else if (key === 'v' && c.state !== 'incoming' && c.state !== 'ended') {
+    if (!e.repeat) toggleCamera()
+  } else return
   e.preventDefault()
   e.stopPropagation()
 }

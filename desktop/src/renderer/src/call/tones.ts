@@ -2,7 +2,7 @@
 // 425 Hz, 1 s on / 4 s off), connected and hang-up. Loops are scheduled far ahead on the audio
 // clock, so a hidden (throttled) window cannot stretch the rhythm.
 
-import { applySink, speakerId } from './engine'
+import { applySink, speakerId } from './devices'
 
 let ctx: AudioContext | null = null
 let sink = ''
@@ -119,4 +119,11 @@ export function playRecordingCue(): void {
   const c = context()
   const t = c.currentTime + 0.03
   ;[587.33, 587.33].forEach((f, i) => note(c.destination, f, t + i * 0.28, 0.2, 0.07))
+}
+
+/** Device menu: a short, friendly chime on the chosen speaker. */
+export function playTestTone(): void {
+  const c = context()
+  const t = c.currentTime + 0.03
+  ;[523.25, 659.25, 783.99, 1046.5].forEach((f, i) => note(c.destination, f, t + i * 0.12, 0.3, 0.12, 0.1))
 }

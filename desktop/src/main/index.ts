@@ -16,7 +16,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFil
 import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
-import { callChanged, ensureMicrophone, installSystem, recordingsChanged } from './system'
+import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged } from './system'
 import {
   recordingNoticeTitle,
   withAttachment,
@@ -91,6 +91,7 @@ interface NativeSession {
   declineCall(token: string): void
   hangUp(): void
   setCallMuted(muted: boolean): void
+  setCameraEnabled(on: boolean): void
   startRecording(video: boolean): Promise<void>
   stopRecording(): Promise<void>
   consentToRecording(): void
@@ -402,6 +403,7 @@ const openPeers = new Set<string>()
 /** `startAudio` without `stopAudio` yet: replayed to a reloaded renderer. */
 let audioCallId: string | null = null
 let micEnabled = true
+let cameraEnabled = false
 /** The call shown last (state drives ringing attention and close-to-tray). */
 let call: CallView | null = null
 let ringNotification: Notification | null = null
@@ -418,10 +420,16 @@ function onMediaCommand(cmd: MediaCommand): void {
       audioCallId = cmd.callId
       break
     case 'stopAudio':
-      if (audioCallId === cmd.callId) audioCallId = null
+      if (audioCallId === cmd.callId) {
+        audioCallId = null
+        cameraEnabled = false
+      }
       break
     case 'setMicrophoneEnabled':
       micEnabled = cmd.enabled
+      break
+    case 'setCameraEnabled':
+      cameraEnabled = cmd.enabled
       break
   }
   // A single channel keeps the core's order; queued commands go out first.
@@ -447,6 +455,8 @@ function mediaEngineReady(): void {
   const replay: MediaCommand[] = []
   if (audioCallId && !mediaQueue.some((c) => c.cmd === 'startAudio')) {
     replay.push({ cmd: 'startAudio', callId: audioCallId }, { cmd: 'setMicrophoneEnabled', enabled: micEnabled })
+    // No ensureCamera here: it was granted when switched on (no dialog without a click).
+    if (cameraEnabled && !mediaQueue.some((c) => c.cmd === 'setCameraEnabled')) replay.push({ cmd: 'setCameraEnabled', enabled: true })
   }
   const pending = [...replay, ...mediaQueue]
   mediaQueue = []
@@ -853,6 +863,12 @@ function registerIpc(): void {
   ipcMain.handle('talk:declineCall', (_e, token: string) => session?.declineCall(token))
   ipcMain.handle('talk:hangUp', () => session?.hangUp())
   ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => session?.setCallMuted(muted))
+  // macOS asks for the camera on the first switch-on; refused, it stays off (the dialog explains).
+  ipcMain.handle('talk:setCameraEnabled', async (_e, on: boolean) => {
+    if (on && !(await ensureCamera())) return false
+    session?.setCameraEnabled(on)
+    return true
+  })
   ipcMain.handle('talk:currentCall', () => session?.currentCall() ?? null)
   // Recording (docs/calls.md, „Aufnahme“).
   ipcMain.handle('talk:startRecording', (_e, video: boolean) => requireSession().startRecording(video))
@@ -1078,12 +1094,13 @@ if (!app.requestSingleInstanceLock()) {
     registerAvatarProtocol()
     registerMediaProtocol()
     createTray()
-    // Microphone (voice messages) for our window only; nothing else asks for permissions.
+    // Microphone and camera (calls, voice messages) for our window only; nothing else asks
+    // for permissions.
     electronSession.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
       const own = wc === win?.webContents
       if (permission === 'media') {
         const types = (details as { mediaTypes?: string[] }).mediaTypes ?? []
-        callback(own && types.length > 0 && types.every((t) => t === 'audio'))
+        callback(own && types.length > 0 && types.every((t) => t === 'audio' || t === 'video'))
       } else {
         callback(own && (permission === 'clipboard-sanitized-write' || permission === 'fullscreen'))
       }

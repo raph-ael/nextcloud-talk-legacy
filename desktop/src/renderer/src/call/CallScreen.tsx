@@ -1,7 +1,8 @@
 // Call UI in the main window, after Signal Desktop: incoming-call bar on top, full call view
-// (1:1 big avatar, group tiles), control bar, "back to call" bar while minimized.
+// (1:1 big avatar or their video, group tiles), own camera preview, control bar, "back to
+// call" bar while minimized, device menu like Google Meet.
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import type { CallParticipant, CallView, RoomView } from '@shared/core'
 import { useStore } from '../store'
 import { Avatar } from '../components/Avatar'
@@ -17,10 +18,27 @@ import {
   startRecording,
   statusText,
   stopRecording,
+  toggleCamera,
   toggleMute,
   useCall,
 } from './store'
-import { chooseMicrophone, chooseSpeaker, listDevices, mediaState, subscribeMedia, type AudioDevices } from './engine'
+import { useRemoteVideo } from './engine'
+import {
+  chooseCamera,
+  chooseMicrophone,
+  cameraText,
+  chooseSpeaker,
+  currentTrack,
+  listDevices,
+  mediaState,
+  openCameraPreview,
+  retryCamera,
+  retryMicrophone,
+  subscribeMedia,
+  type DeviceProblem,
+  type Devices,
+} from './devices'
+import { playTestTone } from './tones'
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
 const MOD = isMac ? '⌘' : 'Strg'
@@ -132,8 +150,19 @@ function CallScreen({ call }: { call: CallView }) {
   const ended = call.state === 'ended'
   const [confirmStop, setConfirmStop] = useState(false)
   const consent = call.recordingConsentPending && !ended
+  // 1:1: the other side's video fills the stage while it shows pictures.
+  const other = tiles ? null : (call.participants.find((p) => p.video) ?? call.participants[0] ?? null)
+  const otherStream = useRemoteVideo(other?.video ? other.peerId : null)
+  const [otherRef, otherLive] = useVideoLive(otherStream)
+  const soloVideo = !tiles && otherLive && !ended
+  const full = useFullscreen()
+  const self = call.cameraOn && !ended ? media.camera : null
   return (
-    <div className={`call-screen${ended ? ' ended' : ''}`} role="dialog" aria-label={`Anruf mit ${call.roomName}`}>
+    <div
+      className={`call-screen${ended ? ' ended' : ''}${soloVideo ? ' solo-video' : ''}`}
+      role="dialog"
+      aria-label={`Anruf mit ${call.roomName}`}
+    >
       <div
         className="call-backdrop"
         style={{ backgroundImage: `url("${window.talk.avatarUrl(call.token, room?.avatarVersion ?? '')}")` }}
@@ -142,16 +171,29 @@ function CallScreen({ call }: { call: CallView }) {
         <button className="call-icon-btn" onClick={() => minimize(true)} title="Zu den Chats" aria-label="Anruf verkleinern">
           <MinimizeIcon />
         </button>
-        {tiles && (
+        {(tiles || soloVideo) && (
           <div className="call-top-title">
             <strong className="ellipsis">{call.roomName}</strong>
             <CallStatusLine call={call} />
           </div>
         )}
-        {!ended && <RecordingIndicator call={call} />}
+        <div className="call-top-end">
+          {!ended && <RecordingIndicator call={call} />}
+          <button
+            className="call-icon-btn"
+            onClick={toggleFullscreen}
+            title={full ? 'Vollbild beenden (Esc)' : 'Vollbild'}
+            aria-label={full ? 'Vollbild beenden' : 'Vollbild'}
+          >
+            {full ? <ExitFullscreenIcon /> : <FullscreenIcon />}
+          </button>
+        </div>
       </header>
 
-      <main className="call-stage">
+      <main className="call-stage" onDoubleClick={(e) => (e.target as HTMLElement).closest('button') || toggleFullscreen()}>
+        {otherStream && !tiles && (
+          <video ref={otherRef} className={`call-stage-video${soloVideo ? ' live' : ''}`} autoPlay muted playsInline />
+        )}
         {tiles ? (
           <div className={`call-tiles n${Math.min(call.participants.length, 9)}`}>
             {call.participants.map((p) => (
@@ -159,19 +201,36 @@ function CallScreen({ call }: { call: CallView }) {
             ))}
           </div>
         ) : (
-          <div className="call-solo">
-            <Avatar name={call.roomName} token={call.token} version={room?.avatarVersion} size={112} />
-            <h1 className="ellipsis">{call.roomName}</h1>
-            <CallStatusLine call={call} />
+          !soloVideo && (
+            <div className="call-solo">
+              <Avatar name={call.roomName} token={call.token} version={room?.avatarVersion} size={112} />
+              <h1 className="ellipsis">{call.roomName}</h1>
+              <CallStatusLine call={call} />
+            </div>
+          )
+        )}
+        {self && <SelfView stream={self} speaking={media.selfSpeaking && !call.muted} />}
+        {!ended && (media.micError || media.camError) && (
+          <div className="call-notices">
+            {media.micError && <Notice problem={media.micError} onRetry={retryMicrophone} />}
+            {media.camError && <Notice problem={media.camError} onRetry={retryCamera} />}
           </div>
         )}
-        {media.micError && !ended && <div className="call-notice">{media.micError}</div>}
       </main>
 
       <footer className="call-controls">
         <DevicesButton disabled={ended} />
-        {/* Reserved for the camera button once video exists. */}
-        <span className="call-slot" aria-hidden />
+        <button
+          // Off is the normal state (every call starts without camera): crossed out, not highlighted.
+          className="call-ctl"
+          onClick={toggleCamera}
+          disabled={ended}
+          title={`${call.cameraOn ? 'Kamera ausschalten' : 'Kamera einschalten'} (${MOD}+Umschalt+V)`}
+          aria-label={call.cameraOn ? 'Kamera ausschalten' : 'Kamera einschalten'}
+          aria-pressed={call.cameraOn}
+        >
+          {call.cameraOn ? <CameraIcon /> : <CameraOffIcon />}
+        </button>
         {call.canRecord && !ended && <MoreButton call={call} onStop={() => setConfirmStop(true)} />}
         <button
           className={`call-ctl${call.muted ? ' active' : ''}`}
@@ -366,9 +425,14 @@ function useNow(running: boolean): number {
 }
 
 function Tile({ p }: { p: CallParticipant }) {
+  const stream = useRemoteVideo(p.video ? p.peerId : null)
+  const [ref, live] = useVideoLive(stream)
   return (
-    <div className={`call-tile${p.speaking && !p.muted ? ' speaking' : ''}${p.connected ? '' : ' waiting'}`}>
-      <Avatar name={p.name} userId={p.userId || undefined} size={72} />
+    <div
+      className={`call-tile${p.speaking && !p.muted ? ' speaking' : ''}${p.connected ? '' : ' waiting'}${live ? ' has-video' : ''}`}
+    >
+      {stream && <video ref={ref} className={`call-video${live ? ' live' : ''}`} autoPlay muted playsInline />}
+      {!live && <Avatar name={p.name} userId={p.userId || undefined} size={72} />}
       <div className="call-tile-name">
         {p.muted && (
           <span className="call-tile-muted" title="Stummgeschaltet">
@@ -382,6 +446,104 @@ function Tile({ p }: { p: CallParticipant }) {
   )
 }
 
+// --- Video ------------------------------------------------------------------------------
+
+/** No picture for this long: the avatar again (docs/calls.md „Video“). */
+const FRAME_TIMEOUT_MS = 2000
+
+/**
+ * Plays `stream` in the returned video element; `live` while pictures arrive (the track is
+ * not muted and the last frame is under 2 s old). The element stays mounted (and decoding)
+ * while hidden, so the switch back is immediate.
+ */
+function useVideoLive(stream: MediaStream | null): [RefObject<HTMLVideoElement | null>, boolean] {
+  const ref = useRef<HTMLVideoElement>(null)
+  const [live, setLive] = useState(false)
+  useEffect(() => {
+    const v = ref.current
+    const track = stream?.getVideoTracks()[0]
+    if (!v || !stream || !track) {
+      setLive(false)
+      return
+    }
+    v.srcObject = stream
+    void v.play().catch(() => undefined)
+    let last = 0
+    let handle = 0
+    let stopped = false
+    const onFrame = () => {
+      last = performance.now()
+      if (!stopped) handle = v.requestVideoFrameCallback(onFrame)
+    }
+    handle = v.requestVideoFrameCallback(onFrame)
+    const check = () => setLive(!track.muted && track.readyState === 'live' && performance.now() - last < FRAME_TIMEOUT_MS)
+    const timer = setInterval(check, 250)
+    track.addEventListener('mute', check)
+    track.addEventListener('unmute', check)
+    return () => {
+      stopped = true
+      v.cancelVideoFrameCallback(handle)
+      clearInterval(timer)
+      track.removeEventListener('mute', check)
+      track.removeEventListener('unmute', check)
+      v.srcObject = null
+    }
+  }, [stream])
+  return [ref, live]
+}
+
+/** Own camera, bottom right, mirrored like a mirror; speaking frame from our level. */
+function SelfView({ stream, speaking }: { stream: MediaStream; speaking: boolean }) {
+  const [ref] = useVideoLive(stream)
+  return (
+    <div className={`call-self${speaking ? ' speaking' : ''}`} aria-label="Eigene Kamera">
+      <video ref={ref} className="call-video live mirrored" autoPlay muted playsInline />
+    </div>
+  )
+}
+
+function Notice({ problem, onRetry }: { problem: DeviceProblem; onRetry: () => void }) {
+  return (
+    <div className="call-notice" role="alert">
+      {problem.text}
+      {problem.retry && (
+        <button className="call-notice-btn" onClick={onRetry}>
+          Erneut versuchen
+        </button>
+      )}
+    </div>
+  )
+}
+
+// --- Fullscreen (button, double click on the stage, Esc) --------------------------------
+
+/** The whole window (toasts and menus stay visible), like the window menu's „Vollbild“. */
+function toggleFullscreen(): void {
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+  else void document.documentElement.requestFullscreen().catch(() => undefined)
+}
+
+function useFullscreen(): boolean {
+  const [full, setFull] = useState(() => !!document.fullscreenElement)
+  useEffect(() => {
+    const onChange = () => setFull(!!document.fullscreenElement)
+    const onKey = (e: KeyboardEvent) => {
+      // A menu or dialog closes first.
+      if (e.key !== 'Escape' || !document.fullscreenElement || document.querySelector('.call-menu, .call-dialog')) return
+      void document.exitFullscreen().catch(() => undefined)
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange)
+      window.removeEventListener('keydown', onKey)
+      // The call view goes (ended, minimized): the window leaves fullscreen with it.
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+    }
+  }, [])
+  return full
+}
+
 // --- Devices ----------------------------------------------------------------------------
 
 function DevicesButton({ disabled }: { disabled: boolean }) {
@@ -393,8 +555,8 @@ function DevicesButton({ disabled }: { disabled: boolean }) {
         className={`call-ctl${open ? ' active' : ''}`}
         onClick={() => setOpen((o) => !o)}
         disabled={disabled}
-        title="Mikrofon und Lautsprecher"
-        aria-label="Mikrofon und Lautsprecher"
+        title="Mikrofon, Lautsprecher und Kamera"
+        aria-label="Mikrofon, Lautsprecher und Kamera"
         aria-expanded={open}
       >
         <SpeakerIcon />
@@ -427,7 +589,7 @@ function usePopover(open: boolean, close: () => void) {
 
 function DevicesMenu() {
   const media = useSyncExternalStore(subscribeMedia, mediaState)
-  const [devices, setDevices] = useState<AudioDevices | null>(null)
+  const [devices, setDevices] = useState<Devices | null>(null)
   useEffect(() => {
     let live = true
     const load = () =>
@@ -441,7 +603,13 @@ function DevicesMenu() {
       navigator.mediaDevices.removeEventListener('devicechange', load)
     }
   }, [])
-  const section = (title: string, list: MediaDeviceInfo[] | undefined, current: string, choose: (id: string) => void) => (
+  const section = (
+    title: string,
+    list: MediaDeviceInfo[] | undefined,
+    current: string,
+    choose: (id: string) => void,
+    extra: ReactNode,
+  ) => (
     <div className="call-menu-section" role="group" aria-label={title}>
       <div className="call-menu-title">{title}</div>
       {[{ deviceId: '', label: 'Systemstandard' }, ...(list ?? [])].map((d, i) => (
@@ -456,14 +624,107 @@ function DevicesMenu() {
           <span className="ellipsis">{d.label || `Gerät ${i}`}</span>
         </button>
       ))}
+      {extra}
     </div>
   )
   return (
     <div className="call-menu" role="menu">
-      {section('Mikrofon', devices?.microphones, media.microphoneId, chooseMicrophone)}
-      {section('Lautsprecher', devices?.speakers, media.speakerId, chooseSpeaker)}
+      {section('Mikrofon', devices?.microphones, media.microphoneId, chooseMicrophone, <MicLevel />)}
+      {section(
+        'Lautsprecher',
+        devices?.speakers,
+        media.speakerId,
+        chooseSpeaker,
+        <button className="call-menu-action" onClick={playTestTone}>
+          <SpeakerIcon size={16} />
+          Testton abspielen
+        </button>,
+      )}
+      {section('Kamera', devices?.cameras, media.cameraId, chooseCamera, <CameraPreview />)}
     </div>
   )
+}
+
+/** Live level of the microphone the call sends (silent while muted). */
+function MicLevel() {
+  useSyncExternalStore(subscribeMedia, mediaState)
+  const track = currentTrack('audio')
+  const bar = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!track) return
+    const ctx = new AudioContext()
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 512
+    ctx.createMediaStreamSource(new MediaStream([track])).connect(analyser)
+    const data = new Float32Array(analyser.fftSize)
+    let raf = 0
+    const tick = () => {
+      analyser.getFloatTimeDomainData(data)
+      let sum = 0
+      for (const x of data) sum += x * x
+      // RMS on a speech-friendly scale (about -50…0 dBFS).
+      const db = 20 * Math.log10(Math.sqrt(sum / data.length) || 1e-6)
+      const level = Math.min(1, Math.max(0, (db + 50) / 50))
+      if (bar.current) bar.current.style.transform = `scaleX(${level})`
+      raf = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => {
+      cancelAnimationFrame(raf)
+      void ctx.close()
+    }
+  }, [track])
+  if (!track) return null
+  return (
+    <div className="call-meter" aria-hidden>
+      <div className="call-meter-bar" ref={bar} />
+    </div>
+  )
+}
+
+/**
+ * The running camera; while it is off a preview only on request (the camera light should
+ * not go on just because the menu opened).
+ */
+function CameraPreview() {
+  const media = useSyncExternalStore(subscribeMedia, mediaState)
+  const [wanted, setWanted] = useState(false)
+  const [preview, setPreview] = useState<MediaStream | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const running = media.camera
+  useEffect(() => {
+    if (running || !wanted) return
+    let live = true
+    let stream: MediaStream | null = null
+    setError(null)
+    openCameraPreview(media.cameraId)
+      .then((s) => {
+        if (live) {
+          stream = s
+          setPreview(s)
+        } else s.getTracks().forEach((t) => t.stop())
+      })
+      .catch((err) => live && setError(cameraText(err)))
+    return () => {
+      live = false
+      stream?.getTracks().forEach((t) => t.stop())
+      setPreview(null)
+    }
+  }, [running, wanted, media.cameraId])
+  const stream = running ?? preview
+  const [ref] = useVideoLive(stream)
+  if (!stream) {
+    return (
+      <>
+        {error && <div className="call-menu-error">{error}</div>}
+        <button className="call-menu-action" onClick={() => setWanted(true)} disabled={wanted && !error}>
+          <CameraIcon size={16} />
+          Vorschau anzeigen
+        </button>
+      </>
+    )
+  }
+  return <video ref={ref} className="call-menu-preview mirrored" autoPlay muted playsInline />
 }
 
 // --- Icons (own drawings) ---------------------------------------------------------------
@@ -534,6 +795,40 @@ function MoreIcon() {
       <circle cx="6" cy="12" r="1.3" fill="currentColor" />
       <circle cx="12" cy="12" r="1.3" fill="currentColor" />
       <circle cx="18" cy="12" r="1.3" fill="currentColor" />
+    </Svg>
+  )
+}
+
+function CameraIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="3" y="6.5" width="12.5" height="11" rx="2.5" />
+      <path d="M15.5 10.5l5-3v9l-5-3" />
+    </Svg>
+  )
+}
+
+function CameraOffIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="3" y="6.5" width="12.5" height="11" rx="2.5" />
+      <path d="M15.5 10.5l5-3v9l-5-3M3 3.5l17 17" />
+    </Svg>
+  )
+}
+
+function FullscreenIcon() {
+  return (
+    <Svg size={20}>
+      <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" />
+    </Svg>
+  )
+}
+
+function ExitFullscreenIcon() {
+  return (
+    <Svg size={20}>
+      <path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" />
     </Svg>
   )
 }

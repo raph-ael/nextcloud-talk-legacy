@@ -8,6 +8,7 @@ import { useSyncExternalStore } from 'react'
 import { VOICE_MAX_MS, type AudioInfo, type VoiceDraft } from '@shared/core'
 import workletUrl from './voice-worklet.js?url'
 import { getState, showQueued, toReply, type UiMessage } from './store'
+import { openMicrophone } from './call/devices'
 
 /** Show a hint this long before the one-hour limit. */
 const WARN_BEFORE_MS = 5 * 60 * 1000
@@ -90,9 +91,8 @@ export async function startRecording(token: string): Promise<void> {
   let stream: MediaStream | null = null
   let ctx: AudioContext | null = null
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    })
+    // The microphone chosen for calls, through the device queue.
+    stream = await openMicrophone({ channelCount: 1 })
     ctx = new AudioContext({ sampleRate: 48000 })
     await ctx.audioWorklet.addModule(workletUrl)
     await window.talk.voiceStart(token, ctx.sampleRate)

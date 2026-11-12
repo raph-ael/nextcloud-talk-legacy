@@ -1,14 +1,30 @@
 // Media engine of calls (docs/calls.md, "MediaEngine"): Chromium's WebRTC behind the core's
 // commands. The core (main process) decides everything about the protocol; this file only
-// runs peer connections, the microphone and the speaker output.
+// runs peer connections and their audio and video; the devices (microphone, camera, speaker)
+// are devices.ts.
 
+import { useSyncExternalStore } from 'react'
 import type { IceCandidateInit, IceServerConfig, MediaCommand, PeerKind, PeerState } from '@shared/core'
 import { stopPlayback, stopToDraft } from '../voice'
+import {
+  addOutput,
+  callStarted,
+  callStopped,
+  currentTrack,
+  deviceSnapshot,
+  removeOutput,
+  selfLevel,
+  setCameraEnabled,
+  setMicrophoneEnabled,
+  setTrackSink,
+  watchDevices,
+  type DeviceKind,
+} from './devices'
 
 /** Level reports to the core (speaking indicator), like the other platforms. */
 const LEVEL_MS = 300
-const MIC_KEY = 'callMicrophone'
-const SPEAKER_KEY = 'callSpeaker'
+/** docs/calls.md „Qualität“, desktop. */
+const VIDEO_MAX_BITRATE = 1_500_000
 
 interface Peer {
   id: string
@@ -19,8 +35,8 @@ interface Peer {
   closed: boolean
   /** Remote candidates that came before the remote description. */
   early: RTCIceCandidateInit[]
-  /** Our microphone on publisher/mesh connections. */
-  sender: RTCRtpSender | null
+  /** Our microphone and camera on publisher/mesh connections. */
+  senders: Record<DeviceKind, RTCRtpSender | null>
   /** Playback of the received audio (subscriber/mesh). */
   audio: HTMLAudioElement | null
   reported: PeerState | null
@@ -29,53 +45,28 @@ interface Peer {
 const peers = new Map<string, Peer>()
 /** `startAudio` came and no `stopAudio` yet. */
 let audioCall: string | null = null
-let mic: MediaStreamTrack | null = null
-/** The microphone request in flight (only one at a time). */
-let micRequest: Promise<void> | null = null
-let micEnabled = true
 let levelTimer: ReturnType<typeof setInterval> | null = null
 
-// --- UI state (microphone problems, devices) -----------------------------------------
+// --- Received video (one stream per peer; the call view shows it on the person's tile) ----
 
-export interface MediaState {
-  /** Why there is no microphone (shown in the call view); null when it works. */
-  micError: string | null
-  microphoneId: string
-  speakerId: string
+const videos = new Map<string, MediaStream>()
+const videoListeners = new Set<() => void>()
+
+function setVideo(peerId: string, stream: MediaStream | null): void {
+  if (stream) videos.set(peerId, stream)
+  else if (!videos.delete(peerId)) return
+  videoListeners.forEach((l) => l())
 }
 
-let ms: MediaState = { micError: null, microphoneId: stored(MIC_KEY), speakerId: stored(SPEAKER_KEY) }
-const listeners = new Set<() => void>()
-
-function setMedia(patch: Partial<MediaState>): void {
-  ms = { ...ms, ...patch }
-  listeners.forEach((l) => l())
-}
-
-export function mediaState(): MediaState {
-  return ms
-}
-
-export function subscribeMedia(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function stored(key: string): string {
-  try {
-    return localStorage.getItem(key) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-function store(key: string, value: string): void {
-  try {
-    if (value) localStorage.setItem(key, value)
-    else localStorage.removeItem(key)
-  } catch {
-    // Per-device convenience only.
-  }
+/** The video arriving on `peerId` (CallParticipant.peerId), if any. */
+export function useRemoteVideo(peerId: string | null): MediaStream | null {
+  return useSyncExternalStore(
+    (l) => {
+      videoListeners.add(l)
+      return () => videoListeners.delete(l)
+    },
+    () => (peerId ? (videos.get(peerId) ?? null) : null),
+  )
 }
 
 // --- Commands ---------------------------------------------------------------------------
@@ -86,16 +77,9 @@ let started = false
 export function startMediaEngine(): void {
   if (started) return
   started = true
+  setTrackSink(attach)
+  watchDevices()
   window.talk.onMediaCommand(handle)
-  // Bluetooth devices (AirPods) come and go in several steps: act once it is quiet.
-  let deviceTimer: ReturnType<typeof setTimeout> | null = null
-  navigator.mediaDevices.addEventListener('devicechange', () => {
-    if (deviceTimer) clearTimeout(deviceTimer)
-    deviceTimer = setTimeout(() => {
-      deviceTimer = null
-      void devicesChanged()
-    }, 600)
-  })
   window.talk.mediaReady()
 }
 
@@ -115,12 +99,9 @@ function handle(c: MediaCommand): void {
     case 'closePeer':
       return closePeer(c.peerId)
     case 'setMicrophoneEnabled':
-      micEnabled = c.enabled
-      if (mic) mic.enabled = c.enabled
-      return
+      return setMicrophoneEnabled(c.enabled)
     case 'setCameraEnabled':
-      // Video (docs/calls.md "Video"): not implemented yet, the camera stays off.
-      return
+      return setCameraEnabled(c.enabled)
     case 'startAudio':
       return startAudio(c.callId)
     case 'stopAudio':
@@ -161,13 +142,28 @@ function createPeer(peerId: string, kind: PeerKind, iceServers: IceServerConfig[
     window.talk.mediaReport({ type: 'peerError', peerId, message: `createPeer: ${(err as Error).message}` })
     return
   }
-  const p: Peer = { id: peerId, kind, pc, chain: Promise.resolve(), closed: false, early: [], sender: null, audio: null, reported: null }
+  const p: Peer = {
+    id: peerId,
+    kind,
+    pc,
+    chain: Promise.resolve(),
+    closed: false,
+    early: [],
+    senders: { audio: null, video: null },
+    audio: null,
+    reported: null,
+  }
   peers.set(peerId, p)
   if (kind !== 'subscriber') {
-    // Audio only; video transceivers come later. The track follows when the mic is ready.
-    const t = pc.addTransceiver('audio', { direction: kind === 'publisher' ? 'sendonly' : 'sendrecv' })
-    p.sender = t.sender
-    if (mic) void t.sender.replaceTrack(mic)
+    // Audio and video from the start (docs/calls.md „Video“): the camera is only a track on
+    // the video sender, switching it never renegotiates. Tracks follow when the devices are ready.
+    const direction = kind === 'publisher' ? 'sendonly' : 'sendrecv'
+    p.senders.audio = pc.addTransceiver('audio', { direction }).sender
+    p.senders.video = pc.addTransceiver('video', { direction, sendEncodings: [{ maxBitrate: VIDEO_MAX_BITRATE }] }).sender
+    for (const k of ['audio', 'video'] as const) {
+      const track = currentTrack(k)
+      if (track) putTrack(p, k, track)
+    }
   }
   pc.onicecandidate = (e) => {
     // The end of candidates (null / empty) is not reported.
@@ -181,14 +177,19 @@ function createPeer(peerId: string, kind: PeerKind, iceServers: IceServerConfig[
   pc.onconnectionstatechange = () => reportState(p)
   pc.oniceconnectionstatechange = () => reportState(p)
   pc.ontrack = (e) => {
-    if (p.closed || e.track.kind !== 'audio') return
-    const stream = e.streams[0] ?? new MediaStream([e.track])
+    if (p.closed) return
+    if (e.track.kind === 'video') {
+      // Own stream per peer: the audio element must not play it, the tile shows it.
+      setVideo(p.id, new MediaStream([e.track]))
+      return
+    }
+    if (e.track.kind !== 'audio') return
     if (!p.audio) {
       p.audio = new Audio()
       p.audio.autoplay = true
-      void applySink(p.audio, ms.speakerId)
+      addOutput(p.audio)
     }
-    p.audio.srcObject = stream
+    p.audio.srcObject = new MediaStream([e.track])
     void p.audio.play().catch(() => undefined)
   }
   startLevels()
@@ -237,10 +238,28 @@ async function setRemote(p: Peer, type: 'offer' | 'answer', sdp: string): Promis
   if (type === 'offer' && p.kind === 'subscriber') {
     // Receive only: never send anything to the MCU on a subscriber.
     for (const t of p.pc.getTransceivers()) if (t.direction !== 'stopped') t.direction = 'recvonly'
-  }
+  } else if (type === 'offer' && p.kind === 'mesh') adoptOffered(p)
   const early = p.early
   p.early = []
   for (const c of early) await addIce(p, c)
+}
+
+/**
+ * Mesh, the other side offered: an offer only reuses transceivers made by addTrack, ours
+ * (addTransceiver) stay unused. Send on the offered ones instead and drop ours.
+ */
+function adoptOffered(p: Peer): void {
+  for (const k of ['audio', 'video'] as const) {
+    const offered = p.pc.getTransceivers().find((t) => t.mid !== null && t.receiver.track.kind === k && t.direction !== 'stopped')
+    const own = p.senders[k]
+    if (!offered || offered.sender === own) continue
+    offered.direction = 'sendrecv'
+    p.senders[k] = offered.sender
+    const track = currentTrack(k)
+    if (track) putTrack(p, k, track)
+    const unused = p.pc.getTransceivers().find((t) => t.sender === own)
+    if (unused && unused.mid === null) unused.stop()
+  }
 }
 
 async function addCandidate(p: Peer, c: IceCandidateInit): Promise<void> {
@@ -271,191 +290,50 @@ function closePeer(peerId: string): void {
   if (p.audio) {
     p.audio.pause()
     p.audio.srcObject = null
+    removeOutput(p.audio)
   }
+  setVideo(peerId, null)
   if (peers.size === 0) stopLevels()
 }
 
-// --- Audio ------------------------------------------------------------------------------
+// --- Audio and video tracks ------------------------------------------------------------
 
 function startAudio(callId: string): void {
   audioCall = callId
   // A call takes the audio: voice messages stop (a recording stays as draft).
   stopPlayback()
   void stopToDraft()
-  void acquireMic()
+  callStarted()
 }
 
 function stopAudio(callId: string): void {
   if (audioCall !== callId) return
   audioCall = null
-  releaseMic()
-  setMedia({ micError: null })
+  // Microphone and camera go (docs/calls.md: stopAudio also frees the camera).
+  callStopped()
 }
 
-function micConstraints(deviceId: string): MediaStreamConstraints {
-  return {
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-      ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
-    },
-    video: false,
-  }
+/** A new microphone/camera track (or none) for every sending peer. */
+function attach(kind: DeviceKind, track: MediaStreamTrack | null): void {
+  for (const p of peers.values()) if (!p.closed) putTrack(p, kind, track)
 }
 
-/** Opens the microphone (the chosen one, else the default) and puts it on every sender. */
-function acquireMic(): Promise<void> {
-  if (micRequest) return micRequest
-  const call = audioCall
-  micRequest = (async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(micConstraints(ms.microphoneId))
-      const track = stream.getAudioTracks()[0]
-      if (!track) throw new Error('Kein Mikrofon gefunden')
-      if (audioCall !== call || !audioCall) {
-        track.stop()
-        return
-      }
-      useTrack(track)
-      setMedia({ micError: null })
-    } catch (err) {
-      const name = (err as DOMException)?.name
-      const text =
-        name === 'NotAllowedError'
-          ? 'Kein Zugriff auf das Mikrofon'
-          : name === 'NotFoundError'
-            ? 'Kein Mikrofon gefunden'
-            : `Mikrofon nicht verfügbar (${(err as Error).message})`
-      console.warn('microphone:', err)
-      if (audioCall === call) setMedia({ micError: text })
-    } finally {
-      micRequest = null
-    }
-  })()
-  return micRequest
+function putTrack(p: Peer, kind: DeviceKind, track: MediaStreamTrack | null): void {
+  const sender = p.senders[kind]
+  if (!sender || sender.track === track) return
+  void sender
+    .replaceTrack(track)
+    .then(() => (kind === 'video' && track ? tuneVideo(sender) : undefined))
+    .catch((err) => console.warn(`peer ${p.id}: ${kind} track:`, (err as Error).message))
 }
 
-function useTrack(track: MediaStreamTrack): void {
-  const old = mic
-  mic = track
-  track.enabled = micEnabled
-  // Unplugged mid-call: fall back to another microphone.
-  track.onended = () => {
-    if (mic === track && audioCall) {
-      mic = null
-      void acquireMic()
-    }
-  }
-  for (const p of peers.values()) if (p.sender && !p.closed) void p.sender.replaceTrack(track).catch(() => undefined)
-  old?.stop()
-}
-
-function releaseMic(): void {
-  const old = mic
-  mic = null
-  for (const p of peers.values()) if (p.sender && !p.closed) void p.sender.replaceTrack(null).catch(() => undefined)
-  old?.stop()
-}
-
-// --- Devices ----------------------------------------------------------------------------
-
-/**
- * Devices came or went (AirPods, headset, USB microphone) or the system default changed.
- * Chromium keeps an open microphone on the device it started with, so follow the default
- * (or fall back from a vanished pick) with a fresh capture and `replaceTrack`.
- */
-async function devicesChanged(): Promise<void> {
-  if (!audioCall) return
-  // A microphone was plugged in after none worked, or the chosen one came back.
-  if (!mic || mic.readyState === 'ended') return acquireMic()
-  let all: MediaDeviceInfo[]
-  try {
-    all = await navigator.mediaDevices.enumerateDevices()
-  } catch {
-    return
-  }
-  const inputs = all.filter((d) => d.kind === 'audioinput')
-  const outputs = all.filter((d) => d.kind === 'audiooutput')
-  const live = mic.getSettings()
-  const picked = ms.microphoneId
-  if (picked && inputs.some((d) => d.deviceId === picked)) {
-    if (live.deviceId !== picked) {
-      console.info('[devices] chosen microphone is back')
-      void acquireMic()
-    }
-  } else if (picked && live.deviceId === picked) {
-    console.info('[devices] chosen microphone gone, using the default')
-    void acquireMic()
-  } else {
-    // Following the default (nothing chosen, or the choice is gone). macOS, Windows and
-    // PulseAudio list it as 'default' with the real device's groupId: another groupId than
-    // the live track means the default moved (AirPods connected, system setting changed).
-    const def = inputs.find((d) => d.deviceId === 'default')
-    if (def?.groupId && live.groupId && def.groupId !== live.groupId) {
-      console.info('[devices] default microphone changed')
-      void acquireMic()
-    }
-  }
-  // Speaker: a vanished pick plays on the default; it comes back when the device does.
-  if (ms.speakerId) {
-    const sink = outputs.some((d) => d.deviceId === ms.speakerId) ? ms.speakerId : ''
-    for (const p of peers.values()) if (p.audio) void applySink(p.audio, sink)
-  }
-}
-
-export interface AudioDevices {
-  microphones: MediaDeviceInfo[]
-  speakers: MediaDeviceInfo[]
-}
-
-export async function listDevices(): Promise<AudioDevices> {
-  const all = await navigator.mediaDevices.enumerateDevices()
-  const real = (d: MediaDeviceInfo) => d.deviceId !== 'default' && d.deviceId !== 'communications' && d.deviceId !== ''
-  return {
-    microphones: all.filter((d) => d.kind === 'audioinput' && real(d)),
-    speakers: all.filter((d) => d.kind === 'audiooutput' && real(d)),
-  }
-}
-
-/** '' is the system default. Switches a running call at once (no renegotiation). */
-export function chooseMicrophone(deviceId: string): void {
-  store(MIC_KEY, deviceId)
-  setMedia({ microphoneId: deviceId })
-  if (!audioCall) return
-  void (async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(micConstraints(deviceId))
-      const track = stream.getAudioTracks()[0]
-      if (track && audioCall) useTrack(track)
-      else track?.stop()
-    } catch (err) {
-      console.warn('switching microphone failed:', err)
-    }
-  })()
-}
-
-export function chooseSpeaker(deviceId: string): void {
-  store(SPEAKER_KEY, deviceId)
-  setMedia({ speakerId: deviceId })
-  for (const p of peers.values()) if (p.audio) void applySink(p.audio, deviceId)
-}
-
-/** Output device for call audio and call tones ('' = system default). */
-export function speakerId(): string {
-  return ms.speakerId
-}
-
-export async function applySink(el: HTMLMediaElement | AudioContext, deviceId: string): Promise<void> {
-  const target = el as unknown as { setSinkId?: (id: string) => Promise<void> }
-  if (!target.setSinkId) return
-  try {
-    await target.setSinkId(deviceId)
-  } catch (err) {
-    // Device gone: the system default plays.
-    console.warn('output device:', (err as Error).message)
-    if (deviceId) await target.setSinkId('').catch(() => undefined)
-  }
+/** At most 1.5 Mbit/s, and under load fewer frames and pixels alike. */
+async function tuneVideo(sender: RTCRtpSender): Promise<void> {
+  const params = sender.getParameters() as RTCRtpSendParameters & { degradationPreference?: string }
+  if (params.encodings.length === 0) return
+  params.encodings.forEach((e) => (e.maxBitrate = VIDEO_MAX_BITRATE))
+  params.degradationPreference = 'balanced'
+  await sender.setParameters(params).catch((err) => console.warn('video parameters:', (err as Error).message))
 }
 
 // --- Levels -----------------------------------------------------------------------------
@@ -485,7 +363,9 @@ async function reportLevels(): Promise<void> {
       } catch {
         return
       }
-      if (!p.closed) window.talk.mediaReport({ type: 'audioLevel', peerId: p.id, level })
+      if (p.closed) return
+      if (p.kind === 'publisher') selfLevel(level)
+      window.talk.mediaReport({ type: 'audioLevel', peerId: p.id, level })
     }),
   )
 }
@@ -495,8 +375,8 @@ async function reportLevels(): Promise<void> {
 async function snapshot(): Promise<unknown> {
   return {
     audioCall,
-    mic: mic ? { label: mic.label, enabled: mic.enabled, state: mic.readyState } : null,
-    micError: ms.micError,
+    ...deviceSnapshot(),
+    videos: [...videos.keys()],
     peers: await Promise.all(
       [...peers.values()].map(async (p) => {
         const out: Record<string, unknown> = {
@@ -517,6 +397,16 @@ async function snapshot(): Promise<unknown> {
             out.inLevel = s.audioLevel
           }
           if (s.type === 'media-source' && s.kind === 'audio') out.micLevel = s.audioLevel
+          if (s.type === 'outbound-rtp' && s.kind === 'video') {
+            out.videoBytesSent = s.bytesSent
+            out.videoSent = `${s.frameWidth ?? 0}x${s.frameHeight ?? 0}@${s.framesPerSecond ?? 0}`
+            out.videoLimit = s.qualityLimitationReason
+          }
+          if (s.type === 'inbound-rtp' && s.kind === 'video') {
+            out.videoBytesReceived = s.bytesReceived
+            out.framesDecoded = s.framesDecoded
+            out.videoReceived = `${s.frameWidth ?? 0}x${s.frameHeight ?? 0}`
+          }
           if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') {
             const local = stats.get(s.localCandidateId as string) as Record<string, unknown> | undefined
             const remote = stats.get(s.remoteCandidateId as string) as Record<string, unknown> | undefined
@@ -530,3 +420,5 @@ async function snapshot(): Promise<unknown> {
 }
 
 ;(window as unknown as { __talkMedia: () => Promise<unknown> }).__talkMedia = snapshot
+// Device tests reach the live tracks (ended, unplugged) without real hardware.
+;(window as unknown as { __talkTrack: typeof currentTrack }).__talkTrack = currentTrack
