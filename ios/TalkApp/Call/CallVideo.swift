@@ -42,8 +42,12 @@ final class CallCamera: @unchecked Sendable {
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
             return "Kamera in den Einstellungen erlauben, um sie im Anruf zu nutzen."
         }
-        let devices = RTCCameraVideoCapturer.captureDevices()
-        guard let device = devices.first(where: { $0.position == (front ? .front : .back) }) ?? devices.first else {
+        // Explicitly the wide-angle camera of the wanted side: phones also list ultra-wide,
+        // tele and depth cameras, which can deliver black frames.
+        let wanted: AVCaptureDevice.Position = front ? .front : .back
+        let devices = RTCCameraVideoCapturer.captureDevices().filter { $0.deviceType == .builtInWideAngleCamera }
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: wanted)
+            ?? devices.first(where: { $0.position == wanted }) ?? devices.first else {
             return "Keine Kamera gefunden"
         }
         self.front = device.position != .back
