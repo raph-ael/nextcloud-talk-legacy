@@ -199,6 +199,17 @@ export interface CallParticipant {
   peerId: string | null
 }
 
+/** Something to share (desktopCapturer source); the own Talk window is never one. */
+export interface ScreenSource {
+  id: string
+  kind: 'screen' | 'window'
+  name: string
+  /** JPEG data URL, about 320×180. */
+  thumbnail: string
+  /** App icon of a window (PNG data URL), if known. */
+  icon: string | null
+}
+
 /** A screen shared by another participant (docs/calls.md „Bildschirmfreigabe“). */
 export interface CallScreen {
   /** Session of the participant sharing it. */
@@ -400,6 +411,15 @@ export interface TalkApi {
   isFullScreen(): Promise<boolean>
   /** Camera on/off in the running call; false when the system refused the camera (macOS). */
   setCameraEnabled(on: boolean): Promise<boolean>
+  /**
+   * What can be shared, with thumbnails, for the own picker; `null`: the system shows its
+   * own dialog instead (Linux/Wayland portal), `getDisplayMedia` right away.
+   */
+  screenSources(): Promise<ScreenSource[] | null>
+  /** The source the next `getDisplayMedia` captures (`null`: the system dialog). */
+  chooseScreen(sourceId: string | null): Promise<void>
+  /** Screen sharing on/off in the running call: after `getDisplayMedia`, see `ScreenSource`. */
+  setScreenShare(on: boolean): Promise<void>
   currentCall(): Promise<CallView | null>
   /** Only with `call.canRecord`; `video` records the Talk web view. */
   startRecording(video: boolean): Promise<void>

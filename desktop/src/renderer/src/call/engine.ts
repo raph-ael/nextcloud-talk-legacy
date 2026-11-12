@@ -1,7 +1,7 @@
 // Media engine of calls (docs/calls.md, "MediaEngine"): Chromium's WebRTC behind the core's
 // commands. The core (main process) decides everything about the protocol; this file only
 // runs peer connections and their audio and video; the devices (microphone, camera, speaker)
-// are devices.ts.
+// are devices.ts, the own screen share is screen.ts.
 
 import { useSyncExternalStore } from 'react'
 import type { IceCandidateInit, IceServerConfig, MediaCommand, PeerKind, PeerState } from '@shared/core'
@@ -20,11 +20,17 @@ import {
   watchDevices,
   type DeviceKind,
 } from './devices'
+import { currentScreen, screenSnapshot, setScreenSink, stopScreenTrack } from './screen'
 
 /** Level reports to the core (speaking indicator), like the other platforms. */
 const LEVEL_MS = 300
 /** docs/calls.md „Qualität“, desktop. */
 const VIDEO_MAX_BITRATE = 1_500_000
+/** docs/calls.md „Bildschirmfreigabe“, „Qualität“. */
+const SCREEN_MAX_BITRATE = 2_500_000
+const SCREEN_MAX_FPS = 30
+
+const isScreen = (kind: PeerKind) => kind === 'screenPublisher' || kind === 'screenSubscriber'
 
 interface Peer {
   id: string
@@ -37,6 +43,8 @@ interface Peer {
   early: RTCIceCandidateInit[]
   /** Our microphone and camera on publisher/mesh connections. */
   senders: Record<DeviceKind, RTCRtpSender | null>
+  /** Our screen on a screenPublisher connection (never the camera or microphone). */
+  screen: RTCRtpSender | null
   /** Playback of the received audio (subscriber/mesh). */
   audio: HTMLAudioElement | null
   reported: PeerState | null
@@ -78,6 +86,7 @@ export function startMediaEngine(): void {
   if (started) return
   started = true
   setTrackSink(attach)
+  setScreenSink(attachScreen)
   watchDevices()
   window.talk.onMediaCommand(handle)
   window.talk.mediaReady()
@@ -105,7 +114,7 @@ function handle(c: MediaCommand): void {
     case 'startAudio':
       return startAudio(c.callId)
     case 'stopScreen':
-      break
+      return stopScreenTrack()
     case 'stopAudio':
       return stopAudio(c.callId)
   }
@@ -152,12 +161,22 @@ function createPeer(peerId: string, kind: PeerKind, iceServers: IceServerConfig[
     closed: false,
     early: [],
     senders: { audio: null, video: null },
+    screen: null,
     audio: null,
     reported: null,
   }
   peers.set(peerId, p)
-  // Screens (docs/calls.md „Bildschirmfreigabe“): placeholder, received like a subscription.
-  if (kind === 'publisher' || kind === 'mesh') {
+  if (kind === 'screenPublisher') {
+    // Only the picture, send only (docs/calls.md „Bildschirmfreigabe“); VP8 first.
+    const t = pc.addTransceiver('video', {
+      direction: 'sendonly',
+      sendEncodings: [{ maxBitrate: SCREEN_MAX_BITRATE, maxFramerate: SCREEN_MAX_FPS }],
+    })
+    preferVp8(t)
+    p.screen = t.sender
+    const track = currentScreen()
+    if (track) putScreen(p, track)
+  } else if (kind === 'publisher' || kind === 'mesh') {
     // Audio and video from the start (docs/calls.md „Video“): the camera is only a track on
     // the video sender, switching it never renegotiates. Tracks follow when the devices are ready.
     const direction = kind === 'publisher' ? 'sendonly' : 'sendrecv'
@@ -196,6 +215,18 @@ function createPeer(peerId: string, kind: PeerKind, iceServers: IceServerConfig[
     void p.audio.play().catch(() => undefined)
   }
   startLevels()
+}
+
+function preferVp8(t: RTCRtpTransceiver): void {
+  const codecs = RTCRtpSender.getCapabilities('video')?.codecs
+  if (!codecs) return
+  const vp8 = codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8')
+  if (vp8.length === 0) return
+  try {
+    t.setCodecPreferences([...vp8, ...codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/vp8')])
+  } catch (err) {
+    console.warn('screen codecs:', (err as Error).message)
+  }
 }
 
 /** connectionState, with `failed` from either it or the ICE state (rule 7). */
@@ -312,13 +343,40 @@ function startAudio(callId: string): void {
 function stopAudio(callId: string): void {
   if (audioCall !== callId) return
   audioCall = null
-  // Microphone and camera go (docs/calls.md: stopAudio also frees the camera).
+  // Microphone and camera go (docs/calls.md: stopAudio also frees the camera), and the screen.
   callStopped()
+  stopScreenTrack()
 }
 
 /** A new microphone/camera track (or none) for every sending peer. */
 function attach(kind: DeviceKind, track: MediaStreamTrack | null): void {
   for (const p of peers.values()) if (!p.closed) putTrack(p, kind, track)
+}
+
+/** The screen track (or none) for every screenPublisher peer. */
+function attachScreen(track: MediaStreamTrack | null): void {
+  for (const p of peers.values()) if (!p.closed) putScreen(p, track)
+}
+
+function putScreen(p: Peer, track: MediaStreamTrack | null): void {
+  const sender = p.screen
+  if (!sender || sender.track === track) return
+  void sender
+    .replaceTrack(track)
+    .then(() => (track ? tuneScreen(sender) : undefined))
+    .catch((err) => console.warn(`peer ${p.id}: screen track:`, (err as Error).message))
+}
+
+/** Text stays sharp: under load fewer frames, never fewer pixels. */
+async function tuneScreen(sender: RTCRtpSender): Promise<void> {
+  const params = sender.getParameters() as RTCRtpSendParameters & { degradationPreference?: string }
+  if (params.encodings.length === 0) return
+  params.encodings.forEach((e) => {
+    e.maxBitrate = SCREEN_MAX_BITRATE
+    e.maxFramerate = SCREEN_MAX_FPS
+  })
+  params.degradationPreference = 'maintain-resolution'
+  await sender.setParameters(params).catch((err) => console.warn('screen parameters:', (err as Error).message))
 }
 
 function putTrack(p: Peer, kind: DeviceKind, track: MediaStreamTrack | null): void {
@@ -354,7 +412,8 @@ function stopLevels(): void {
 async function reportLevels(): Promise<void> {
   await Promise.all(
     [...peers.values()].map(async (p) => {
-      if (p.closed || p.reported !== 'connected') return
+      // A screen's level never counts as speaking (docs/calls.md „Bildschirmfreigabe“).
+      if (p.closed || p.reported !== 'connected' || isScreen(p.kind)) return
       // Publisher: our microphone; subscriber/mesh: what arrives.
       const wanted = p.kind === 'publisher' ? 'media-source' : 'inbound-rtp'
       let level = 0
@@ -380,6 +439,7 @@ async function snapshot(): Promise<unknown> {
     audioCall,
     ...deviceSnapshot(),
     videos: [...videos.keys()],
+    screen: screenSnapshot(),
     peers: await Promise.all(
       [...peers.values()].map(async (p) => {
         const out: Record<string, unknown> = {
@@ -404,6 +464,7 @@ async function snapshot(): Promise<unknown> {
             out.videoBytesSent = s.bytesSent
             out.videoSent = `${s.frameWidth ?? 0}x${s.frameHeight ?? 0}@${s.framesPerSecond ?? 0}`
             out.videoLimit = s.qualityLimitationReason
+            out.videoCodec = (stats.get(s.codecId as string) as { mimeType?: string } | undefined)?.mimeType
           }
           if (s.type === 'inbound-rtp' && s.kind === 'video') {
             out.videoBytesReceived = s.bytesReceived

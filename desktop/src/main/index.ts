@@ -17,6 +17,7 @@ import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged } from './system'
+import { installScreenShare } from './screen'
 import {
   recordingNoticeTitle,
   withAttachment,
@@ -92,6 +93,7 @@ interface NativeSession {
   hangUp(): void
   setCallMuted(muted: boolean): void
   setCameraEnabled(on: boolean): void
+  setScreenShare(on: boolean): void
   startRecording(video: boolean): Promise<void>
   stopRecording(): Promise<void>
   consentToRecording(): void
@@ -448,6 +450,8 @@ function mediaEngineLost(): void {
     openPeers.delete(peerId)
     session?.mediaReport({ type: 'peerState', peerId, state: 'failed' })
   }
+  // The screen track went with the renderer; a reload does not bring the share back.
+  if (session?.currentCall()?.screenSharing) session.mediaReport({ type: 'screenState', on: false })
 }
 
 function mediaEngineReady(): void {
@@ -874,6 +878,7 @@ function registerIpc(): void {
     session?.setCameraEnabled(on)
     return true
   })
+  ipcMain.handle('talk:setScreenShare', (_e, on: boolean) => session?.setScreenShare(on))
   ipcMain.handle('talk:currentCall', () => session?.currentCall() ?? null)
   // Recording (docs/calls.md, „Aufnahme“).
   ipcMain.handle('talk:startRecording', (_e, video: boolean) => requireSession().startRecording(video))
@@ -1098,14 +1103,18 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc()
     registerAvatarProtocol()
     registerMediaProtocol()
+    installScreenShare(() => win)
     createTray()
-    // Microphone and camera (calls, voice messages) for our window only; nothing else asks
-    // for permissions.
+    // Microphone and camera (calls, voice messages) and the screen (only the picture; which
+    // one decides the display-media handler in screen.ts) for our window only; nothing else
+    // asks for permissions.
     electronSession.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
       const own = wc === win?.webContents
+      const types = (details as { mediaTypes?: string[] }).mediaTypes ?? []
       if (permission === 'media') {
-        const types = (details as { mediaTypes?: string[] }).mediaTypes ?? []
         callback(own && types.length > 0 && types.every((t) => t === 'audio' || t === 'video'))
+      } else if (permission === 'display-capture') {
+        callback(own && types.length > 0 && types.every((t) => t === 'video'))
       } else {
         callback(own && (permission === 'clipboard-sanitized-write' || permission === 'fullscreen'))
       }

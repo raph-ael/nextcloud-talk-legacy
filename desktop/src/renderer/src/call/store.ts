@@ -6,6 +6,7 @@ import type { CallView, EndReason } from '@shared/core'
 import { playConnected, playHangup, playRecordingCue, playRingback, playRingtone, stopTones } from './tones'
 import { startRecordingNotices } from './recordings'
 import { setDeviceNotice } from './devices'
+import { cancelScreenPicker, openScreenShare, screenState, setScreenNotice, stopScreenShare, stopScreenTrack } from './screen'
 
 /** How long the final state stays visible before the call view closes. */
 const ENDED_MS = 1500
@@ -61,6 +62,7 @@ export function startCallUi(): void {
   window.addEventListener('keydown', onKey, true)
   startRecordingNotices()
   setDeviceNotice(toast)
+  setScreenNotice(toast)
 }
 
 function show(next: CallView | null): void {
@@ -76,6 +78,8 @@ function show(next: CallView | null): void {
   }
   tones(prev, next)
   announceRecording(next)
+  // Over: an open picker or a pending system dialog goes with it (the core stops the track).
+  if (next.state === 'ended') stopScreenTrack()
   if (next.state === 'ended' && quiet(next)) {
     // Not even a frame of the call view (an incoming bar just goes away).
     close()
@@ -91,6 +95,7 @@ function show(next: CallView | null): void {
 }
 
 function close(): void {
+  stopScreenTrack()
   if (endTimer) clearTimeout(endTimer)
   endTimer = null
   stopTones()
@@ -220,6 +225,18 @@ export function toggleCamera(): void {
   window.talk.setCameraEnabled(!c.cameraOn).catch((e) => toast(errorText(e)))
 }
 
+/** „Bildschirm teilen“ / „Teilen beenden“ (docs/calls.md „Bildschirmfreigabe“). */
+export function toggleScreenShare(): void {
+  const c = st.call
+  if (!c || c.state === 'ended' || c.state === 'incoming') return
+  const own = screenState()
+  if (own.picker) cancelScreenPicker()
+  else if (c.screenSharing || own.stream) stopScreenShare()
+  else if (own.starting) return
+  else if (!c.canShareScreen) toast('In dieser Unterhaltung darfst du deinen Bildschirm nicht teilen.')
+  else void openScreenShare()
+}
+
 /** Only with `canRecord`; the state comes back through `callChanged`. */
 export function startRecording(video: boolean): void {
   window.talk.startRecording(video).catch((e) => toast(errorText(e)))
@@ -240,7 +257,7 @@ export function minimize(minimized: boolean): void {
 
 /**
  * Like Signal Desktop: Ctrl+Shift+A accept, Ctrl+Shift+D decline/hang up, Ctrl+Shift+M mute,
- * Ctrl+Shift+V camera (⌘ on the Mac).
+ * Ctrl+Shift+V camera, Ctrl+Shift+E screen share (⌘ on the Mac).
  */
 function onKey(e: KeyboardEvent): void {
   if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return
@@ -254,6 +271,8 @@ function onKey(e: KeyboardEvent): void {
   } else if (key === 'm') toggleMute()
   else if (key === 'v' && c.state !== 'incoming' && c.state !== 'ended') {
     if (!e.repeat) toggleCamera()
+  } else if (key === 'e' && c.state !== 'incoming' && c.state !== 'ended') {
+    if (!e.repeat) toggleScreenShare()
   } else return
   e.preventDefault()
   e.stopPropagation()

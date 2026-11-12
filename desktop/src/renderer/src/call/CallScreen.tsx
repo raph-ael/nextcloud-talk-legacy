@@ -1,9 +1,10 @@
 // Call UI in the main window, after Signal Desktop: incoming-call bar on top, full call view
 // (1:1 big avatar or their video, group tiles), own camera preview, control bar, "back to
-// call" bar while minimized, device menu like Google Meet.
+// call" bar while minimized, device menu like Google Meet; screen sharing like Meet (picker
+// with thumbnails, presentation view with the participants beside it).
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
-import type { CallParticipant, CallView, RoomView } from '@shared/core'
+import type { CallParticipant, CallScreen as SharedScreen, CallView, RoomView, ScreenSource } from '@shared/core'
 import { useStore } from '../store'
 import { Avatar } from '../components/Avatar'
 import {
@@ -20,8 +21,10 @@ import {
   stopRecording,
   toggleCamera,
   toggleMute,
+  toggleScreenShare,
   useCall,
 } from './store'
+import { cancelScreenPicker, refreshScreenSources, shareScreen, stopScreenShare, useScreenShare } from './screen'
 import { useRemoteVideo } from './engine'
 import {
   chooseCamera,
@@ -157,9 +160,21 @@ function CallScreen({ call }: { call: CallView }) {
   const soloVideo = !tiles && otherLive && !ended
   const full = useFullscreen()
   const self = call.cameraOn && !ended ? media.camera : null
+  // Screens (docs/calls.md „Bildschirmfreigabe“): the newest on the stage, or the one picked
+  // in the rail until it ends.
+  const own = useScreenShare()
+  const ownScreen = ended ? null : own.stream
+  const sharing = call.screenSharing || !!own.stream
+  const screens = ended ? [] : call.screens
+  const [picked, setPicked] = useState<string | null>(null)
+  const shown = screens.find((s) => s.sessionId === picked) ?? screens[0] ?? null
+  useEffect(() => {
+    if (picked && !screens.some((s) => s.sessionId === picked)) setPicked(null)
+  }, [screens, picked])
+  const presenting = shown !== null
   return (
     <div
-      className={`call-screen${ended ? ' ended' : ''}${soloVideo ? ' solo-video' : ''}`}
+      className={`call-screen${ended ? ' ended' : ''}${soloVideo && !presenting ? ' solo-video' : ''}${presenting ? ' presenting' : ''}`}
       role="dialog"
       aria-label={`Anruf mit ${call.roomName}`}
     >
@@ -171,7 +186,7 @@ function CallScreen({ call }: { call: CallView }) {
         <button className="call-icon-btn" onClick={() => minimize(true)} title="Zu den Chats" aria-label="Anruf verkleinern">
           <MinimizeIcon />
         </button>
-        {(tiles || soloVideo) && (
+        {(tiles || soloVideo || presenting) && (
           <div className="call-top-title">
             <strong className="ellipsis">{call.roomName}</strong>
             <CallStatusLine call={call} />
@@ -190,10 +205,32 @@ function CallScreen({ call }: { call: CallView }) {
         </div>
       </header>
 
-      <main className="call-stage" onDoubleClick={(e) => (e.target as HTMLElement).closest('button') || toggleFullscreen()}>
+      <main
+        className={`call-stage${presenting ? ' presenting' : ''}`}
+        onDoubleClick={(e) => (e.target as HTMLElement).closest('button') || toggleFullscreen()}
+      >
+        {/* Stays mounted while a screen is shown, so the picture is back right after. */}
         {otherStream && !tiles && (
-          <video ref={otherRef} className={`call-stage-video${soloVideo ? ' live' : ''}`} autoPlay muted playsInline />
+          <video ref={otherRef} className={`call-stage-video${soloVideo && !presenting ? ' live' : ''}`} autoPlay muted playsInline />
         )}
+        {shown ? (
+          <div className="call-present">
+            <ScreenStage key={shown.peerId} screen={shown} />
+            <aside className="call-rail" aria-label="Teilnehmer">
+              {screens
+                .filter((s) => s !== shown)
+                .map((s) => (
+                  <ScreenTile key={s.peerId} screen={s} onPick={() => setPicked(s.sessionId)} />
+                ))}
+              {ownScreen && <OwnScreenTile stream={ownScreen} />}
+              {call.participants.map((p) => (
+                <Tile key={p.sessionId} p={p} small />
+              ))}
+              {self && <SelfView stream={self} speaking={media.selfSpeaking && !call.muted} inRail />}
+            </aside>
+          </div>
+        ) : (
+          <>
         {tiles ? (
           <div className={`call-tiles n${Math.min(call.participants.length, 9)}`}>
             {call.participants.map((p) => (
@@ -209,9 +246,21 @@ function CallScreen({ call }: { call: CallView }) {
             </div>
           )
         )}
-        {self && <SelfView stream={self} speaking={media.selfSpeaking && !call.muted} />}
-        {!ended && (media.micError || media.camError) && (
+            {self && <SelfView stream={self} speaking={media.selfSpeaking && !call.muted} />}
+            {ownScreen && <OwnScreenTile stream={ownScreen} floating />}
+          </>
+        )}
+        {!ended && (media.micError || media.camError || sharing) && (
           <div className="call-notices">
+            {sharing && (
+              <div className="call-notice info" role="status">
+                <ShareScreenIcon size={16} />
+                Du teilst deinen Bildschirm
+                <button className="call-notice-btn" onClick={stopScreenShare}>
+                  Beenden
+                </button>
+              </div>
+            )}
             {media.micError && <Notice problem={media.micError} onRetry={retryMicrophone} />}
             {media.camError && <Notice problem={media.camError} onRetry={retryCamera} />}
           </div>
@@ -230,6 +279,23 @@ function CallScreen({ call }: { call: CallView }) {
           aria-pressed={call.cameraOn}
         >
           {call.cameraOn ? <CameraIcon /> : <CameraOffIcon />}
+        </button>
+        <button
+          className={`call-ctl${sharing ? ' active' : ''}${call.canShareScreen || sharing ? '' : ' unavailable'}`}
+          onClick={toggleScreenShare}
+          disabled={ended}
+          aria-disabled={!call.canShareScreen && !sharing}
+          title={
+            sharing
+              ? `Teilen beenden (${MOD}+Umschalt+E)`
+              : call.canShareScreen
+                ? `Bildschirm teilen (${MOD}+Umschalt+E)`
+                : 'Bildschirm teilen ist in dieser Unterhaltung nicht erlaubt'
+          }
+          aria-label={sharing ? 'Teilen beenden' : 'Bildschirm teilen'}
+          aria-pressed={sharing}
+        >
+          {sharing ? <StopShareIcon /> : <ShareScreenIcon />}
         </button>
         {call.canRecord && !ended && <MoreButton call={call} onStop={() => setConfirmStop(true)} />}
         <button
@@ -253,6 +319,7 @@ function CallScreen({ call }: { call: CallView }) {
         </button>
       </footer>
 
+      {own.picker && !ended && <ScreenPicker sources={own.picker} />}
       {consent && (
         <CallDialog
           title="Dieser Anruf kann aufgezeichnet werden"
@@ -424,15 +491,16 @@ function useNow(running: boolean): number {
   return now
 }
 
-function Tile({ p }: { p: CallParticipant }) {
+/** A participant; `small` in the rail beside a shared screen. */
+function Tile({ p, small }: { p: CallParticipant; small?: boolean }) {
   const stream = useRemoteVideo(p.video ? p.peerId : null)
   const [ref, live] = useVideoLive(stream)
   return (
     <div
-      className={`call-tile${p.speaking && !p.muted ? ' speaking' : ''}${p.connected ? '' : ' waiting'}${live ? ' has-video' : ''}`}
+      className={`call-tile${small ? ' small' : ''}${p.speaking && !p.muted ? ' speaking' : ''}${p.connected ? '' : ' waiting'}${live ? ' has-video' : ''}`}
     >
       {stream && <video ref={ref} className={`call-video${live ? ' live' : ''}`} autoPlay muted playsInline />}
-      {!live && <Avatar name={p.name} userId={p.userId || undefined} size={72} />}
+      {!live && <Avatar name={p.name} userId={p.userId || undefined} size={small ? 44 : 72} />}
       <div className="call-tile-name">
         {p.muted && (
           <span className="call-tile-muted" title="Stummgeschaltet">
@@ -456,7 +524,7 @@ const FRAME_TIMEOUT_MS = 2000
  * not muted and the last frame is under 2 s old). The element stays mounted (and decoding)
  * while hidden, so the switch back is immediate.
  */
-function useVideoLive(stream: MediaStream | null): [RefObject<HTMLVideoElement | null>, boolean] {
+function useVideoLive(stream: MediaStream | null, still = false): [RefObject<HTMLVideoElement | null>, boolean] {
   const ref = useRef<HTMLVideoElement>(null)
   const [live, setLive] = useState(false)
   useEffect(() => {
@@ -476,7 +544,13 @@ function useVideoLive(stream: MediaStream | null): [RefObject<HTMLVideoElement |
       if (!stopped) handle = v.requestVideoFrameCallback(onFrame)
     }
     handle = v.requestVideoFrameCallback(onFrame)
-    const check = () => setLive(!track.muted && track.readyState === 'live' && performance.now() - last < FRAME_TIMEOUT_MS)
+    // A screen sends nothing while it does not change: live from its first picture on.
+    const check = () =>
+      setLive(
+        still
+          ? last > 0 && track.readyState === 'live'
+          : !track.muted && track.readyState === 'live' && performance.now() - last < FRAME_TIMEOUT_MS,
+      )
     const timer = setInterval(check, 250)
     track.addEventListener('mute', check)
     track.addEventListener('unmute', check)
@@ -488,16 +562,150 @@ function useVideoLive(stream: MediaStream | null): [RefObject<HTMLVideoElement |
       track.removeEventListener('unmute', check)
       v.srcObject = null
     }
-  }, [stream])
+  }, [stream, still])
   return [ref, live]
 }
 
-/** Own camera, bottom right, mirrored like a mirror; speaking frame from our level. */
-function SelfView({ stream, speaking }: { stream: MediaStream; speaking: boolean }) {
+/**
+ * Own camera, bottom right (or a tile in the rail beside a screen), mirrored like a mirror;
+ * speaking frame from our level.
+ */
+function SelfView({ stream, speaking, inRail }: { stream: MediaStream; speaking: boolean; inRail?: boolean }) {
   const [ref] = useVideoLive(stream)
   return (
-    <div className={`call-self${speaking ? ' speaking' : ''}`} aria-label="Eigene Kamera">
+    <div className={`call-self${inRail ? ' in-rail' : ''}${speaking ? ' speaking' : ''}`} aria-label="Eigene Kamera">
       <video ref={ref} className="call-video live mirrored" autoPlay muted playsInline />
+      {inRail && <div className="call-tile-name on-video">Du</div>}
+    </div>
+  )
+}
+
+// --- Screens (docs/calls.md „Bildschirmfreigabe“) -----------------------------------------
+
+/** The shared screen on the stage: whole, letterboxed on black, never cropped. */
+function ScreenStage({ screen }: { screen: SharedScreen }) {
+  const stream = useRemoteVideo(screen.peerId)
+  const [ref, live] = useVideoLive(stream, true)
+  return (
+    <div className="call-present-stage" aria-label={`Bildschirm von ${screen.name}`}>
+      {stream && <video ref={ref} className={`call-screen-video${live ? ' live' : ''}`} autoPlay muted playsInline />}
+      {!live && <div className="call-present-wait">Bildschirm wird geladen …</div>}
+      <div className="call-present-label ellipsis">
+        <ShareScreenIcon size={14} />
+        Bildschirm von {screen.name}
+      </div>
+    </div>
+  )
+}
+
+/** Another shared screen in the rail: a click puts it on the stage. */
+function ScreenTile({ screen, onPick }: { screen: SharedScreen; onPick: () => void }) {
+  const stream = useRemoteVideo(screen.peerId)
+  const [ref, live] = useVideoLive(stream, true)
+  return (
+    <button className="call-tile small screen has-video" onClick={onPick} title={`Bildschirm von ${screen.name} groß anzeigen`}>
+      {stream && <video ref={ref} className={`call-screen-video${live ? ' live' : ''}`} autoPlay muted playsInline />}
+      <div className="call-tile-name">
+        <ShareScreenIcon size={14} />
+        <span className="ellipsis">Bildschirm von {screen.name}</span>
+      </div>
+    </button>
+  )
+}
+
+/** What we share: only ever small (no hall of mirrors). */
+function OwnScreenTile({ stream, floating }: { stream: MediaStream; floating?: boolean }) {
+  const [ref, live] = useVideoLive(stream, true)
+  return (
+    <div className={`call-tile small screen has-video${floating ? ' floating' : ''}`} aria-label="Dein Bildschirm">
+      <video ref={ref} className={`call-screen-video${live ? ' live' : ''}`} autoPlay muted playsInline />
+      <div className="call-tile-name">
+        <ShareScreenIcon size={14} />
+        <span className="ellipsis">Dein Bildschirm</span>
+      </div>
+    </div>
+  )
+}
+
+/** Thumbnails refresh this often while the picker is open. */
+const PICKER_REFRESH_MS = 2000
+
+/** Like Meet: tabs „Ganzer Bildschirm“ / „Fenster“, thumbnails, Abbrechen / Teilen. */
+function ScreenPicker({ sources }: { sources: ScreenSource[] }) {
+  const [tab, setTab] = useState<'screen' | 'window'>('screen')
+  const [selected, setSelected] = useState<string | null>(null)
+  const list = sources.filter((s) => s.kind === tab)
+  const chosen = list.some((s) => s.id === selected) ? selected : null
+  const share = () => chosen && shareScreen(chosen)
+  const shareRef = useRef(share)
+  shareRef.current = share
+  useEffect(() => {
+    const t = setInterval(() => void refreshScreenSources(), PICKER_REFRESH_MS)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        cancelScreenPicker()
+      } else if (e.key === 'Enter' && (e.target as HTMLElement).closest?.('.call-picker-item')) {
+        e.preventDefault()
+        shareRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [])
+  const tabButton = (kind: 'screen' | 'window', label: string) => (
+    <button
+      className={`call-picker-tab${tab === kind ? ' on' : ''}`}
+      role="tab"
+      aria-selected={tab === kind}
+      onClick={() => {
+        setTab(kind)
+        setSelected(null)
+      }}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <div className="call-dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && cancelScreenPicker()}>
+      <div className="call-dialog call-picker" role="dialog" aria-modal="true" aria-labelledby="call-picker-title">
+        <h2 id="call-picker-title">Bildschirm teilen</h2>
+        <p>Die anderen sehen, was du auswählst. Ton wird nicht übertragen.</p>
+        <div className="call-picker-tabs" role="tablist">
+          {tabButton('screen', 'Ganzer Bildschirm')}
+          {tabButton('window', 'Fenster')}
+        </div>
+        <div className="call-picker-grid" role="listbox" aria-label={tab === 'screen' ? 'Bildschirme' : 'Fenster'}>
+          {list.length === 0 && <div className="call-picker-empty">{tab === 'screen' ? 'Kein Bildschirm gefunden' : 'Keine Fenster gefunden'}</div>}
+          {list.map((s, i) => (
+            <button
+              key={s.id}
+              className={`call-picker-item${chosen === s.id ? ' on' : ''}`}
+              role="option"
+              aria-selected={chosen === s.id}
+              onClick={() => setSelected(s.id)}
+              onDoubleClick={() => shareScreen(s.id)}
+            >
+              <span className="call-picker-thumb">{s.thumbnail && <img src={s.thumbnail} alt="" draggable={false} />}</span>
+              <span className="call-picker-name">
+                {s.icon && <img src={s.icon} alt="" width={16} height={16} />}
+                <span className="ellipsis">{s.kind === 'screen' && list.length > 1 ? `Bildschirm ${i + 1}` : s.name}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="call-dialog-buttons">
+          <button className="call-dialog-btn" onClick={cancelScreenPicker}>
+            Abbrechen
+          </button>
+          <button className="call-dialog-btn primary" onClick={share} disabled={!chosen}>
+            Teilen
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -846,6 +1054,24 @@ function CameraOffIcon({ size }: { size?: number }) {
     <Svg size={size}>
       <rect x="3" y="6.5" width="12.5" height="11" rx="2.5" />
       <path d="M15.5 10.5l5-3v9l-5-3M3 3.5l17 17" />
+    </Svg>
+  )
+}
+
+function ShareScreenIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="3" y="4.5" width="18" height="12" rx="2" />
+      <path d="M8.5 20h7M12 16.5V20M12 13.5v-6M9.2 10.2 12 7.5l2.8 2.7" />
+    </Svg>
+  )
+}
+
+function StopShareIcon({ size }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="3" y="4.5" width="18" height="12" rx="2" />
+      <path d="M8.5 20h7M12 16.5V20M9.5 8l5 5M14.5 8l-5 5" />
     </Svg>
   )
 }
