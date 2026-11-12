@@ -88,6 +88,37 @@ export async function ensureMicrophone(purpose: 'call' | 'voice'): Promise<boole
   return false
 }
 
+// --- Camera ---------------------------------------------------------------------------
+
+const CAMERA_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera'
+
+/**
+ * Makes sure we may use the camera before it is switched on in a call. Same pattern as the
+ * microphone: on macOS ask once (system prompt), explain a refusal with a link into System
+ * Settings and return false, so the camera stays off. Elsewhere Chromium decides.
+ */
+export async function ensureCamera(): Promise<boolean> {
+  if (!mac) return true
+  if (!app.isPackaged && app.commandLine.hasSwitch('use-fake-device-for-media-stream')) return true
+  const status = systemPreferences.getMediaAccessStatus('camera')
+  if (status === 'granted') return true
+  log('camera', status)
+  if (status === 'not-determined' && (await systemPreferences.askForMediaAccess('camera'))) return true
+  const win = controls?.window()
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    message: 'Kein Zugriff auf die Kamera',
+    detail:
+      'Für Videoanrufe braucht Sirplus Talk die Kamera. Erlaube es unter Systemeinstellungen › Datenschutz & Sicherheit › Kamera.',
+    buttons: ['Systemeinstellungen öffnen', 'Abbrechen'],
+    defaultId: 0,
+    cancelId: 1,
+  }
+  const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+  if (response === 0) void shell.openExternal(CAMERA_SETTINGS)
+  return false
+}
+
 // --- Call state -----------------------------------------------------------------------
 
 /** One line per system action, so device logs show what happened around a call. */
