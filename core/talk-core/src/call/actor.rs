@@ -666,6 +666,15 @@ impl Actor {
         }
         // After the first join a rejoin must never ring anybody again.
         self.silent = true;
+        // After a rejoin we are a new session for the others, but they are no newcomers
+        // to us: tell them our state (they assume camera on with flag 7, mic on).
+        let targets: Vec<String> = self.others.keys().cloned().collect();
+        for t in targets {
+            if self.muted {
+                self.send(proto::mute(&t, true)).await;
+            }
+            self.send(proto::video(&t, self.camera_on)).await;
+        }
         if self.in_call_since.is_none() {
             self.in_call_since = Some(Instant::now());
         }
