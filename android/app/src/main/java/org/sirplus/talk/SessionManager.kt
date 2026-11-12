@@ -32,6 +32,7 @@ import uniffi.talk_ffi.CallView
 import uniffi.talk_ffi.PeerState
 import uniffi.talk_ffi.SdpType
 import org.sirplus.talk.call.CallActions
+import org.sirplus.talk.call.CallVideo
 import org.sirplus.talk.call.CallController
 import org.sirplus.talk.call.CallNotifications
 import org.sirplus.talk.call.MediaReports
@@ -151,6 +152,9 @@ class SessionManager(private val context: Context) : CoreListener {
 
     /** WebRTC for the core; one per process, handed to every session. */
     private val media = WebRtcMediaEngine(context, MediaReportsImpl(), calls)
+
+    /** Video of the running call (received per peer, our camera). */
+    val callVideo: CallVideo get() = media
 
     init {
         val account = store.load()
@@ -434,6 +438,10 @@ class SessionManager(private val context: Context) : CoreListener {
         override fun setMuted(muted: Boolean) {
             session?.setCallMuted(muted)
         }
+
+        override fun setCamera(on: Boolean) {
+            session?.setCameraEnabled(on)
+        }
     }
 
     private inner class MediaReportsImpl : MediaReports {
@@ -455,6 +463,11 @@ class SessionManager(private val context: Context) : CoreListener {
 
         override fun audioLevel(peerId: String, level: Float) {
             session?.mediaAudioLevel(peerId, level)
+        }
+
+        override fun cameraFailed(reason: String) {
+            session?.mediaCameraState(false)
+            scope.launch(Dispatchers.Main) { Toast.makeText(context, reason, Toast.LENGTH_LONG).show() }
         }
     }
 

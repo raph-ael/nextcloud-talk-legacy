@@ -35,6 +35,7 @@ interface CallActions {
     fun decline(token: String)
     fun hangUp()
     fun setMuted(muted: Boolean)
+    fun setCamera(on: Boolean)
 }
 
 /**
@@ -67,6 +68,8 @@ class CallController(
     private var telephonyCallback: Any? = null
     /** Call whose running recording was announced (again after it stopped and restarts). */
     private var announcedRecording: String? = null
+    /** Call whose camera we paused because the call screen went away (resumed on return). */
+    private var cameraPausedFor: String? = null
 
     init {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -87,6 +90,7 @@ class CallController(
             stopRingService()
             CallNotifications.cancelIncoming(context)
             if (_ui.value?.state != CallState.ENDED) _ui.value = null
+            cameraPausedFor = null
             if (audioActive) {
                 Log.w(TAG, "call gone without stopAudio: releasing audio")
                 releaseAudio()
@@ -94,6 +98,7 @@ class CallController(
             return
         }
         if (call.state == CallState.ENDED) {
+            cameraPausedFor = null
             if (prev?.state != CallState.ENDED) onEnded(call, prev)
             return
         }
@@ -117,6 +122,8 @@ class CallController(
         }
         followRecording(call)
         audio.setInCall(call.state == CallState.CONNECTING || call.state == CallState.CONNECTED || call.state == CallState.RECONNECTING)
+        // Paused (call screen hidden) still counts: the speaker stays.
+        audio.setVideo(call.cameraOn || cameraPausedFor == call.id)
         if (audioActive) CallNotifications.updateOngoing(context, call)
     }
 
@@ -198,6 +205,30 @@ class CallController(
     fun setMuted(muted: Boolean) {
         phoneMuted = false
         actions.setMuted(muted)
+    }
+
+    fun setCamera(on: Boolean) {
+        cameraPausedFor = null
+        actions.setCamera(on)
+    }
+
+    /** The call screen left the foreground: the others see "video off" until it returns. */
+    fun pauseCamera() {
+        val call = last ?: return
+        if (!call.cameraOn || call.state == CallState.ENDED) return
+        Log.i(TAG, "call screen hidden: pausing camera")
+        cameraPausedFor = call.id
+        actions.setCamera(false)
+    }
+
+    /** Back in the call screen: the camera runs again if we paused it. */
+    fun resumeCamera() {
+        val id = cameraPausedFor ?: return
+        cameraPausedFor = null
+        val call = last ?: return
+        if (call.id != id || call.state == CallState.ENDED || call.state == CallState.INCOMING) return
+        Log.i(TAG, "call screen back: resuming camera")
+        actions.setCamera(true)
     }
 
     // --- CallAudioHost (core thread) ----------------------------------------------

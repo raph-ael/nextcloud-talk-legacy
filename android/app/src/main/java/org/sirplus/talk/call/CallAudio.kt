@@ -60,6 +60,8 @@ class CallAudio(private val context: Context) {
     private var inCall = false
     /** What the user picked; `null`: automatic by priority. */
     private var chosen: AudioOutput? = null
+    /** Our camera is on: speaker instead of the earpiece, no proximity lock. */
+    private var video = false
 
     private var savedMode = AudioManager.MODE_NORMAL
     private var savedSpeaker = false
@@ -133,6 +135,19 @@ class CallAudio(private val context: Context) {
         Log.i(TAG, "call audio started (previous mode $savedMode)")
     }
 
+    /**
+     * Our camera on/off (docs/calls.md "Mobil"): without a headset the speaker, off again
+     * back to the automatic choice unless the user picked an output meanwhile.
+     */
+    fun setVideo(on: Boolean) {
+        if (on == video) return
+        video = on
+        if (!active) return
+        if (on && chosen?.route == AudioRoute.EARPIECE) chosen = null
+        apply()
+        updateProximity()
+    }
+
     /** The call is up (not just dialing/ringing): proximity lock on the earpiece. */
     fun setInCall(value: Boolean) {
         inCall = value
@@ -143,6 +158,7 @@ class CallAudio(private val context: Context) {
         if (!active) return
         active = false
         inCall = false
+        video = false
         audio.unregisterAudioDeviceCallback(deviceCallback)
         if (Build.VERSION.SDK_INT >= 31) {
             audio.removeOnCommunicationDeviceChangedListener(commListener as AudioManager.OnCommunicationDeviceChangedListener)
@@ -218,12 +234,19 @@ class CallAudio(private val context: Context) {
             ?: outputs.firstOrNull { it.route == AudioRoute.EARPIECE }
             ?: outputs.firstOrNull { it.route == AudioRoute.SPEAKER }
 
+    /** Automatic choice: by priority, with our camera on the speaker instead of the earpiece. */
+    private fun auto(outputs: List<AudioOutput>): AudioOutput? {
+        val b = best(outputs) ?: return null
+        if (!video || b.route != AudioRoute.EARPIECE) return b
+        return outputs.firstOrNull { it.route == AudioRoute.SPEAKER } ?: b
+    }
+
     /** Applies the chosen (or best) output and publishes the state. */
     private fun apply() {
         if (!active) return
         val outputs = outputs()
         val wanted = chosen?.let { c -> outputs.firstOrNull { it.id == c.id } ?: outputs.firstOrNull { it.route == c.route } }
-            ?: best(outputs)
+            ?: auto(outputs)
             ?: return
         if (Build.VERSION.SDK_INT >= 31) {
             val device = audio.availableCommunicationDevices.firstOrNull { it.id == wanted.id }
@@ -271,7 +294,7 @@ class CallAudio(private val context: Context) {
 
     @SuppressLint("WakelockTimeout")
     private fun updateProximity() {
-        val wantLock = active && inCall && _routing.value.current == AudioRoute.EARPIECE
+        val wantLock = active && inCall && !video && _routing.value.current == AudioRoute.EARPIECE
         if (wantLock) {
             if (proximity == null && power?.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK) == true) {
                 proximity = power.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "talk:proximity")

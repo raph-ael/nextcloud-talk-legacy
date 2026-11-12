@@ -75,6 +75,7 @@ class CallActivity : ComponentActivity() {
                         onDecline = { sessions.calls.decline(current.token) },
                         onHangUp = { sessions.calls.hangUp() },
                         onMute = { sessions.calls.setMuted(!current.muted) },
+                        onCamera = { sessions.calls.setCamera(it) },
                         onSpeaker = { sessions.calls.audio.toggleSpeaker() },
                         onOutput = { sessions.calls.audio.select(it) },
                         onMinimize = { minimize() },
@@ -82,6 +83,17 @@ class CallActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Camera only while the call screen is visible (docs/calls.md "Mobil").
+    override fun onStart() {
+        super.onStart()
+        sessions.calls.resumeCamera()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        sessions.calls.pauseCamera()
     }
 
     private fun onCall(call: CallView?) {

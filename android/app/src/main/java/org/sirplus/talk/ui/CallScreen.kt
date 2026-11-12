@@ -23,6 +23,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -53,6 +54,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -63,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -83,9 +86,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.sirplus.talk.SessionManager
 import org.sirplus.talk.call.AudioOutput
 import org.sirplus.talk.call.AudioRoute
@@ -93,6 +98,9 @@ import org.sirplus.talk.call.AudioRouting
 import org.sirplus.talk.call.CallController.Companion.isRunning
 import org.sirplus.talk.call.CallController.Companion.isStarting
 import org.sirplus.talk.call.CallNotifications
+import org.sirplus.talk.call.LocalVideo
+import org.sirplus.talk.call.VideoFeed
+import org.sirplus.talk.call.VideoTextureView
 import uniffi.talk_ffi.CallRecording
 import uniffi.talk_ffi.CallParticipant
 import uniffi.talk_ffi.CallState
@@ -113,7 +121,9 @@ private val WashFilter = ColorFilter.colorMatrix(
 /**
  * The call screen, Signal's layout: blurred avatar behind a 40 % dimming; ringing with
  * two round buttons (decline left, accept right); otherwise avatar, name, status and the
- * control bar (output · [video later] · mute · hang up). Groups show participant tiles.
+ * control bar (output · camera · more · mute · hang up). Groups show participant tiles.
+ * Video (docs/calls.md "Video"): in 1:1 the other side's video fills the screen, in groups
+ * it replaces the avatar in the tile; our own preview sits bottom right.
  */
 @Composable
 fun CallScreen(
@@ -124,10 +134,12 @@ fun CallScreen(
     onDecline: () -> Unit,
     onHangUp: () -> Unit,
     onMute: () -> Unit,
+    onCamera: (Boolean) -> Unit,
     onSpeaker: () -> Unit,
     onOutput: (AudioOutput) -> Unit,
     onMinimize: () -> Unit,
 ) {
+    val feeds by sessions.callVideo.remote.collectAsState()
     val state by sessions.state.collectAsStateWithLifecycle()
     val room = state.rooms.find { it.token == call.token }
     val dark = isSystemInDarkTheme()
@@ -136,12 +148,89 @@ fun CallScreen(
     }
     val title = if (call.isGroup) call.roomName else call.callerName.ifBlank { call.roomName }
 
+    // 1:1: the other side's video on the stage while it is on and frames arrive.
+    val stageFeed = if (!call.isGroup && call.state != CallState.ENDED && call.state != CallState.INCOMING) {
+        call.participants.firstOrNull { it.video }?.peerId?.let { feeds[it] }
+    } else {
+        null
+    }
+    val stage = stageFeed != null && feedActive(stageFeed)
+
     Box(Modifier.fillMaxSize().background(Color(0xFF1B1B1D))) {
-        CallBackground(avatar, colorFor(title))
+        if (stage) Stage(stageFeed!!) else CallBackground(avatar, colorFor(title))
         if (call.state == CallState.INCOMING) {
             Incoming(call, title, room?.token, room?.avatarVersion.orEmpty(), sessions, onAccept, onDecline)
         } else {
-            InCall(call, title, room?.token, room?.avatarVersion.orEmpty(), routing, sessions, onHangUp, onMute, onSpeaker, onOutput, onMinimize)
+            InCall(call, title, room?.token, room?.avatarVersion.orEmpty(), routing, sessions, feeds, stage, onHangUp, onMute, onCamera, onSpeaker, onOutput, onMinimize)
+        }
+    }
+}
+
+// --- video ----------------------------------------------------------------------
+
+/** Frames arrived within the last 2 s. */
+@Composable
+private fun feedActive(feed: VideoFeed?): Boolean {
+    val flow = remember(feed) { feed?.active ?: MutableStateFlow(false) }
+    return flow.collectAsState().value
+}
+
+/** A video feed in a TextureView (fills the view, cropping what does not fit). */
+@Composable
+private fun VideoView(feed: VideoFeed, modifier: Modifier = Modifier, mirror: Boolean = false) {
+    AndroidView(
+        factory = { VideoTextureView(it) },
+        update = {
+            it.bind(feed)
+            it.setMirror(mirror)
+        },
+        onRelease = { it.release() },
+        modifier = modifier,
+    )
+}
+
+/**
+ * 1:1 video on the whole screen: cropped when its orientation matches the screen,
+ * otherwise whole (landscape video on a portrait phone); scrims keep the text readable.
+ */
+@Composable
+private fun Stage(feed: VideoFeed) {
+    val aspect by feed.aspect.collectAsState()
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        val screenLandscape = maxWidth > maxHeight
+        if (aspect > 0f && (aspect > 1f) != screenLandscape) {
+            VideoView(feed, Modifier.align(Alignment.Center).fillMaxWidth().aspectRatio(aspect))
+        } else {
+            VideoView(feed, Modifier.fillMaxSize())
+        }
+        Box(
+            Modifier.fillMaxWidth().height(180.dp).align(Alignment.TopCenter)
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent))),
+        )
+        Box(
+            Modifier.fillMaxWidth().height(200.dp).align(Alignment.BottomCenter)
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f)))),
+        )
+    }
+}
+
+/** Our camera, mirrored for the front camera, with "Kamera wechseln". */
+@Composable
+private fun LocalPreview(local: LocalVideo, onSwitch: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(width = 96.dp, height = 128.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black)
+            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), RoundedCornerShape(12.dp)),
+    ) {
+        VideoView(local.feed, Modifier.fillMaxSize(), mirror = local.front)
+        Box(
+            Modifier.align(Alignment.BottomEnd).padding(6.dp).size(32.dp).clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.45f)).clickable(onClick = onSwitch),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(TalkIcons.CameraSwitch, "Kamera wechseln", tint = Color.White, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -250,61 +339,83 @@ private fun InCall(
     version: String,
     routing: AudioRouting,
     sessions: SessionManager,
+    feeds: Map<String, VideoFeed>,
+    /** The other side's video fills the screen (1:1): no big avatar. */
+    stage: Boolean,
     onHangUp: () -> Unit,
     onMute: () -> Unit,
+    onCamera: (Boolean) -> Unit,
     onSpeaker: () -> Unit,
     onOutput: (AudioOutput) -> Unit,
     onMinimize: () -> Unit,
 ) {
+    val local by sessions.callVideo.local.collectAsState()
+    val openCamera = rememberCameraOpener { onCamera(true) }
     var picker by remember { mutableStateOf(false) }
     var more by remember { mutableStateOf(false) }
     var confirmStop by remember { mutableStateOf(false) }
     val tiles = call.isGroup && call.participants.isNotEmpty() && call.state != CallState.ENDED
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) {
-            IconButton(onClick = onMinimize) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zu den Chats", tint = Color.White)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) {
+                IconButton(onClick = onMinimize) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zu den Chats", tint = Color.White)
+                }
+                if (call.state != CallState.ENDED) RecordingIndicator(call, Modifier.align(Alignment.Center))
             }
-            if (call.state != CallState.ENDED) RecordingIndicator(call, Modifier.align(Alignment.Center))
+            Spacer(Modifier.height(if (tiles || stage) 0.dp else 40.dp))
+            Header(title, { CallStatus(call) }, token, version, sessions, showAvatar = !tiles && !stage)
+            if (tiles) {
+                Spacer(Modifier.height(16.dp))
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(if (call.participants.size <= 4) 2 else 3),
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(call.participants, key = { it.sessionId }) { p ->
+                        Tile(p, sessions, p.peerId?.takeIf { p.video }?.let { feeds[it] })
+                    }
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            if (call.state != CallState.ENDED) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 32.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+                ) {
+                    val speakerOn = routing.current == AudioRoute.SPEAKER
+                    ControlButton(
+                        when (routing.current) {
+                            AudioRoute.BLUETOOTH -> TalkIcons.Bluetooth
+                            AudioRoute.WIRED -> TalkIcons.Headset
+                            else -> TalkIcons.Speaker
+                        },
+                        if (routing.needsPicker) "Audioausgabe" else "Lautsprecher",
+                        active = speakerOn && !routing.needsPicker,
+                    ) { if (routing.needsPicker) picker = true else onSpeaker() }
+                    ControlButton(
+                        if (call.cameraOn) TalkIcons.Videocam else TalkIcons.VideocamOff,
+                        if (call.cameraOn) "Kamera ausschalten" else "Kamera einschalten",
+                        active = call.cameraOn,
+                    ) { if (call.cameraOn) onCamera(false) else openCamera() }
+                    if (call.canRecord) ControlButton(TalkIcons.MoreHoriz, "Mehr") { more = true }
+                    ControlButton(if (call.muted) TalkIcons.MicOff else TalkIcons.MicFilled, if (call.muted) "Stumm aus" else "Stumm", active = call.muted, onClick = onMute)
+                    ControlButton(TalkIcons.CallEnd, "Auflegen", background = Decline, onClick = onHangUp)
+                }
+            } else {
+                Spacer(Modifier.height(96.dp))
+            }
         }
-        Spacer(Modifier.height(if (tiles) 0.dp else 40.dp))
-        Header(title, { CallStatus(call) }, token, version, sessions, showAvatar = !tiles)
-        if (tiles) {
-            Spacer(Modifier.height(16.dp))
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(if (call.participants.size <= 4) 2 else 3),
-                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                contentPadding = PaddingValues(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(call.participants, key = { it.sessionId }) { p -> Tile(p, sessions) }
-            }
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-        if (call.state != CallState.ENDED) {
-            Row(
-                Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 32.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
-            ) {
-                val speakerOn = routing.current == AudioRoute.SPEAKER
-                ControlButton(
-                    when (routing.current) {
-                        AudioRoute.BLUETOOTH -> TalkIcons.Bluetooth
-                        AudioRoute.WIRED -> TalkIcons.Headset
-                        else -> TalkIcons.Speaker
-                    },
-                    if (routing.needsPicker) "Audioausgabe" else "Lautsprecher",
-                    active = speakerOn && !routing.needsPicker,
-                ) { if (routing.needsPicker) picker = true else onSpeaker() }
-                // Slot for the video button (video calls come later).
-                ControlButton(if (call.muted) TalkIcons.MicOff else TalkIcons.MicFilled, if (call.muted) "Stumm aus" else "Stumm", active = call.muted, onClick = onMute)
-                if (call.canRecord) ControlButton(TalkIcons.MoreHoriz, "Mehr") { more = true }
-                ControlButton(TalkIcons.CallEnd, "Auflegen", background = Decline, onClick = onHangUp)
-            }
-        } else {
-            Spacer(Modifier.height(96.dp))
+        val preview = local
+        if (preview != null && call.cameraOn && call.state != CallState.ENDED) {
+            LocalPreview(
+                preview,
+                onSwitch = { sessions.callVideo.switchCamera() },
+                Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = 112.dp),
+            )
         }
     }
     if (picker) OutputSheet(routing, onDismiss = { picker = false }) { picker = false; onOutput(it) }
@@ -478,7 +589,7 @@ private fun endText(reason: EndReason?): String = when (reason) {
 // --- group tiles ----------------------------------------------------------------
 
 @Composable
-private fun Tile(p: CallParticipant, sessions: SessionManager) {
+private fun Tile(p: CallParticipant, sessions: SessionManager, feed: VideoFeed?) {
     val dark = isSystemInDarkTheme()
     val image by produceState(sessions.cachedUserAvatar(p.userId, dark), p.userId) {
         if (value == null && p.userId.isNotEmpty()) value = sessions.userAvatar(p.userId, dark)
@@ -492,11 +603,21 @@ private fun Tile(p: CallParticipant, sessions: SessionManager) {
             .then(if (p.speaking && !p.muted) Modifier.border(BorderStroke(3.dp, Speaking), shape) else Modifier)
             .alpha(if (p.connected) 1f else 0.5f),
     ) {
-        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-            TileAvatar(p.name, image, 64.dp)
-            Spacer(Modifier.height(8.dp))
-            Text(p.name, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
-            if (!p.connected) Text("Verbinde …", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+        if (feed != null && feedActive(feed)) {
+            VideoView(feed, Modifier.fillMaxSize())
+            Text(
+                p.name, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
+                    .clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.45f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        } else {
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                TileAvatar(p.name, image, 64.dp)
+                Spacer(Modifier.height(8.dp))
+                Text(p.name, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
+                if (!p.connected) Text("Verbinde …", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+            }
         }
         if (p.muted) {
             Icon(
