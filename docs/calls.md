@@ -3,7 +3,8 @@
 Audio und Video (Kamera), 1:1 und Gruppen, über das Talk High Performance Backend (HPB,
 `nextcloud-spreed-signaling` ≥ 2.1) mit Janus-MCU, ohne MCU als Mesh-Fallback. Jeder Anruf
 startet mit Ton, die Kamera schaltet man im Anruf zu (Abschnitt „Video“).
-Bildschirmfreigabe gibt es noch nicht.
+Den Bildschirm teilen nur die Desktop-Apps; alle Apps zeigen geteilte Bildschirme an
+(Abschnitt „Bildschirmfreigabe“).
 
 **Aufteilung:**
 - **Kern** (`core/talk-core/src/call/`): REST, Signaling-Websocket, Anruf-Zustandsautomat,
@@ -109,6 +110,7 @@ Klingeln funktioniert auch ohne `setMediaEngine`. Annehmen ohne MediaEngine ende
 | `hangUpAndWait(timeoutMs)` | auflegen und warten, bis der Server es weiß (vor dem Beenden der App; `shutdown` legt nur best effort auf) |
 | `setCallMuted(bool)` | stumm |
 | `setCameraEnabled(bool)` | Kamera an/aus (Abschnitt „Video“) |
+| `setScreenShare(bool)` | Bildschirm teilen an/aus, nur Desktop (Abschnitt „Bildschirmfreigabe“) |
 | `currentCall()` | aktueller `CallView` oder nichts |
 | `userAvatar(userId, dark)` | Avatar für Gruppen-Kacheln |
 | `networkChanged()` | gibt es schon; bei jedem Netzwechsel aufrufen (sofortiger Reconnect, ICE-Restart) |
@@ -176,7 +178,8 @@ MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
   Es geht an alle und an jeden Neuen. Das Web zeigt daraufhin Video bzw. Avatar.
 - Abonnements fragen beim MCU per `selectStream` die passende Simulcast-Stufe an, denn
   Web-Clients senden drei: bis 2 Videos die volle, bis 6 die mittlere, sonst die kleinste.
-- Offers von `roomType: "screen"` (Bildschirmfreigabe) werden ignoriert.
+- Offers, Answers und Kandidaten mit `roomType: "screen"` gehören zur Bildschirmfreigabe
+  und berühren nie die Kamera-/Ton-Verbindung der Person.
 
 **`CallView`:**
 - `cameraOn`: unsere Kamera ist an.
@@ -239,10 +242,104 @@ MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
     Vorschau).
   - Vollbild per Knopf und Doppelklick.
 
+## Bildschirmfreigabe
+
+**Wer:** Teilen können nur die Desktop-Apps (Linux, macOS). Android und iOS zeigen geteilte
+Bildschirme nur an. Zuerst nur das Bild, kein Systemton.
+
+**Grundprinzip:** Eine Freigabe ist ein zweiter Datenstrom der Person, mit eigenen
+Verbindungen. Die Kamera-/Ton-Verbindung bleibt davon unberührt.
+
+**Kern ↔ Server** (wie der Web-Client; es gibt kein Flag „teilt gerade“):
+- **MCU:**
+  - Wir bauen einen eigenen, nur sendenden Publisher (`roomType: "screen"`, mit
+    `broadcaster` = eigene Session) auf.
+  - Sobald er verbunden ist, schicken wir jedem Teilnehmer im Anruf `sendoffer`
+    (`roomType: "screen"`). Neue Teilnehmer bekommen es ebenfalls.
+  - Der MCU bietet ihnen dann den Bildschirm an.
+- **Mesh:**
+  - Eine nur sendende Verbindung pro Teilnehmer, deren Offer `broadcaster` trägt.
+  - Ein Offer ohne `broadcaster` heißt „teile du deinen Bildschirm“ und wird ignoriert.
+- **Ende:**
+  - Wir schicken `unshareScreen` an die eigene Session (MCU: der Server schließt den
+    Publisher) und an den ganzen Raum. Im Mesh geht es an jeden Empfänger.
+  - Empfangen wird `unshareScreen` in jeder dieser Formen. Auch wenn die Person den Anruf
+    verlässt, endet ihre Freigabe.
+- **Empfang:**
+  - Eine Bildschirm-Offer ergibt eine eigene, nur empfangende Verbindung.
+  - Bricht sie ab, fragt der Kern beim MCU selbst mit `requestoffer` (`roomType:
+    "screen"`) nach. Kommt dabei ein Fehler, hat die Person aufgehört zu teilen.
+- **Robustheit:**
+  - Nach einem Rejoin baut der Kern unsere Freigabe von selbst neu auf.
+  - Klemmt der Bildschirm-Publisher trotz ICE-Restart, startet der Kern nur die Freigabe
+    neu. Nach drei Fehlversuchen beendet er sie, statt den Anruf zu stören.
+  - Kein Simulcast für Bildschirme.
+- **Berechtigung:** Talk-Berechtigung 128 („Bildschirm teilen“). Lehnt der Server die
+  Freigabe ab, endet sie, und `canShareScreen` wird `false`.
+
+**`CallView`:**
+- `screenSharing`: Wir teilen gerade.
+- `canShareScreen`: Die Unterhaltung erlaubt uns das Teilen. Ohne das ist der Knopf
+  ausgegraut.
+- `screens`: `[{ sessionId, name, peerId }]`, die Bildschirme der anderen, die neueste
+  zuerst. Die erste kommt auf die Bühne. Der Video-Track des Peers `peerId` ist der
+  Bildschirm.
+
+**Session und MediaEngine:**
+- **Desktop, Ablauf:**
+  1. Die Plattform holt zuerst den Bildschirm-Stream (die Auswahl macht die eigene UI).
+  2. Dann ruft sie `setScreenShare(true)`.
+  3. Der Kern legt Peers vom Typ `screenPublisher` an. An jeden hängt die Plattform den
+     aktuellen Bildschirm-Track.
+- **`setScreenShare(false)` oder das Ende durch den Kern** (Server lehnt ab, Anruf
+  vorbei): Der Kern ruft `stopScreen()`, und die Plattform beendet den Track. Damit geht die
+  Aufnahme-Anzeige des Systems aus.
+- **Track endet von selbst:** Dazu zählen „Freigabe beenden“ des Systems, das Schließen des
+  geteilten Fensters, der Ruhezustand und das Neuladen des Renderers. Die Plattform meldet
+  dann `{ type: "screenState", on: false }`, und der Kern beendet die Freigabe sauber.
+- **`screenSubscriber`:** nur empfangen, wie angeboten. Android und iOS bekommen dafür
+  `subscriber` (die FFI bildet es ab) und brauchen keine eigene Behandlung. Sie teilen nie,
+  deshalb gibt es dort weder `setScreenShare` noch einen `screenPublisher`.
+- **Pegel:** Der Pegel eines Bildschirm-Peers zählt nicht als Sprechen.
+
+**Qualität (Desktop):**
+- `contentHint = "detail"`, höchstens 1920×1080, 15 fps (höchstens 30).
+- Höchstens 2,5 Mbit/s, `degradationPreference: maintain-resolution`, VP8.
+
+**Oberfläche:**
+- **Desktop-Leiste:** Ausgabe · Kamera · **Teilen** · Mehr · Stumm · Auflegen.
+  - Der Knopf heißt „Bildschirm teilen“, aktiv „Teilen beenden“.
+  - Ohne `canShareScreen` ist er ausgegraut.
+  - Kürzel Strg/⌘+Shift+E.
+- **Auswahl wie bei Meet:**
+  - Ein eigener Dialog mit den Reitern „Ganzer Bildschirm“ und „Fenster“, mit
+    Vorschaubildern. Das eigene Talk-Fenster ist nicht in der Liste.
+  - Unter Linux/Wayland stattdessen direkt der System-Dialog (Portal).
+  - **macOS** ohne Freigabe „Bildschirmaufnahme“: ein Hinweis mit Link in die
+    Systemeinstellungen. Danach muss Talk neu gestartet werden.
+- **Während man selbst teilt:**
+  - Eine Leiste „Du teilst deinen Bildschirm · Beenden“.
+  - Der eigene Bildschirm erscheint nur als kleine Kachel, nie groß (kein Spiegelkabinett).
+  - Die Kamera läuft unabhängig weiter.
+- **Präsentationsansicht beim Empfang:**
+  - Der Bildschirm füllt die Bühne, immer eingepasst und nie beschnitten, mit dem Schild
+    „Bildschirm von …“.
+  - Die Teilnehmer stehen am Desktop rechts als Leiste (bei schmalen Fenstern unten), am
+    Handy als Reihe darunter.
+  - Bei mehreren Freigaben liegt die neueste auf der Bühne, die anderen lassen sich in der
+    Leiste anwählen.
+  - Endet die letzte Freigabe, kommt die normale Ansicht zurück.
+- **Mobil:**
+  - Zoomen mit zwei Fingern, Verschieben, Doppeltippen.
+  - Solange ein Bildschirm gezeigt wird, darf man ins Querformat drehen; die Drehsperre des
+    Systems gilt. Danach geht es wieder ins Hochformat.
+  - Im Querformat blendet die Steuerleiste aus; Tippen holt sie zurück.
+
 ## MediaEngine (Plattform implementiert, Kern ruft auf)
 
 ```
 createPeer(peerId, kind, iceServers)        kind: publisher | subscriber | mesh
+                                            (Desktop zusätzlich screenPublisher | screenSubscriber)
 createOffer(peerId, iceRestart)
 createAnswer(peerId)
 setRemoteDescription(peerId, sdpType, sdp)  sdpType: offer | answer
@@ -252,6 +349,7 @@ setMicrophoneEnabled(enabled)
 setCameraEnabled(enabled)
 startAudio(callId)
 stopAudio(callId)
+stopScreen()                                nur Desktop (Bildschirmfreigabe)
 ```
 
 **Regeln:**
@@ -266,6 +364,9 @@ stopAudio(callId)
    - `mesh`: Senden und Empfangen zu einem Teilnehmer (ohne MCU).
    - Immer ein Audio- (Opus) und ein Video-Transceiver (VP8), auch ohne Kamera (siehe
      „Video“).
+   - `screenPublisher` (Desktop): nur ein Video-Transceiver `sendonly` mit dem
+     Bildschirm-Track.
+   - `screenSubscriber`: nur Empfangen, wie angeboten (siehe „Bildschirmfreigabe“).
 4. `iceServers` direkt in die `RTCConfiguration` übernehmen (`urls`, `username`,
    `credential`). Bundle-Policy `max-bundle`, RTCP-Mux `require`, Continual Gathering an
    (Android/iOS), damit der Kern bei Netzwechseln nachziehen kann.
@@ -301,12 +402,12 @@ stopAudio(callId)
   `{ cmd: "addRemoteCandidate", peerId, candidate: { candidate, sdpMid, sdpMLineIndex } }`,
   `{ cmd: "closePeer", peerId }`, `{ cmd: "setMicrophoneEnabled", enabled }`,
   `{ cmd: "setCameraEnabled", enabled }`, `{ cmd: "startAudio", callId }`,
-  `{ cmd: "stopAudio", callId }`.
+  `{ cmd: "stopAudio", callId }`, `{ cmd: "stopScreen" }`.
 - Main leitet sie per IPC in derselben Reihenfolge an den Renderer weiter.
 - Meldungen gehen über `mediaReport(json)` zurück: `{ type: "localDescription", peerId,
   sdpType, sdp }`, `{ type: "localCandidate", peerId, candidate }`, `{ type: "peerState",
   peerId, state }`, `{ type: "peerError", peerId, message }`, `{ type: "audioLevel",
-  peerId, level }`, `{ type: "cameraState", on: false }`.
+  peerId, level }`, `{ type: "cameraState", on: false }`, `{ type: "screenState", on: false }`.
 
 ## Ablauf (zur Orientierung, macht alles der Kern)
 
@@ -363,6 +464,11 @@ Tray bzw. Menüleiste damit es klingeln kann.
     `--video-off-after N`).
   - `--expect-video` verlangt angekommene Bilder.
   - Das Log zeigt „Video von …: an/aus“ für die Gegenseite.
+  - Bildschirm: `--screen` teilt einen Fake-Bildschirm (Canvas 1920×1080, bewegt).
+    Steuerung mit `--screen-after N`, `--screen-off-after N` und
+    `--screen-again-after N`.
+  - `--expect-screen` verlangt einen empfangenen Bildschirm. Das Log zeigt „Bildschirme der
+    anderen: …“.
 - **Testräume:**
   - **1:1 Bot A ↔ Bot B:** `CALL_TEST_ROOM_TOKEN` in `.env`. Klingeln ist erlaubt.
   - **Gruppe** im Testraum (`TEST_ROOM_TOKEN`) **nur mit `silent=true`**.

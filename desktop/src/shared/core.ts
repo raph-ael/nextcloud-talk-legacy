@@ -199,6 +199,15 @@ export interface CallParticipant {
   peerId: string | null
 }
 
+/** A screen shared by another participant (docs/calls.md „Bildschirmfreigabe“). */
+export interface CallScreen {
+  /** Session of the participant sharing it. */
+  sessionId: string
+  name: string
+  /** Receive-only peer carrying the screen: its video track is the screen. */
+  peerId: string
+}
+
 export interface CallView {
   /** Local id of this call (also the `callId` of `startAudio`). */
   id: string
@@ -214,6 +223,12 @@ export interface CallView {
   muted: boolean
   /** Our camera is on. */
   cameraOn: boolean
+  /** We share our screen (`setScreenShare`). */
+  screenSharing: boolean
+  /** The conversation allows us to share our screen. */
+  canShareScreen: boolean
+  /** Screens shared by others, newest first (the first one takes the stage). */
+  screens: CallScreen[]
   participants: CallParticipant[]
   endReason: EndReason | null
   /** Recording state, live from the server (also when somebody else started it). */
@@ -279,7 +294,7 @@ export interface IceCandidateInit {
   sdpMLineIndex: number
 }
 
-export type PeerKind = 'publisher' | 'subscriber' | 'mesh'
+export type PeerKind = 'publisher' | 'subscriber' | 'mesh' | 'screenPublisher' | 'screenSubscriber'
 export type SdpType = 'offer' | 'answer'
 export type PeerState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 
@@ -295,6 +310,7 @@ export type MediaCommand =
   | { cmd: 'setCameraEnabled'; enabled: boolean }
   | { cmd: 'startAudio'; callId: string }
   | { cmd: 'stopAudio'; callId: string }
+  | { cmd: 'stopScreen' }
 
 /** Renderer media engine → core. */
 export type MediaReport =
@@ -304,6 +320,7 @@ export type MediaReport =
   | { type: 'peerError'; peerId: string; message: string }
   | { type: 'audioLevel'; peerId: string; level: number }
   | { type: 'cameraState'; on: boolean }
+  | { type: 'screenState'; on: boolean }
 
 /** Events produced by the Electron main process itself. */
 export type AppEvent =

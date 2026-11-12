@@ -162,6 +162,15 @@ pub struct CallParticipant {
     pub peer_id: Option<String>,
 }
 
+/// A screen shared by another participant: show the video track of `peer_id` fitted
+/// (never cropped) on the stage.
+#[derive(uniffi::Record, Clone)]
+pub struct CallScreen {
+    pub session_id: String,
+    pub name: String,
+    pub peer_id: String,
+}
+
 #[derive(uniffi::Record, Clone)]
 pub struct CallView {
     pub id: String,
@@ -176,6 +185,8 @@ pub struct CallView {
     pub muted: bool,
     /// Our camera is on (`set_camera_enabled`).
     pub camera_on: bool,
+    /// Screens shared by others, newest first (the first one takes the stage).
+    pub screens: Vec<CallScreen>,
     pub participants: Vec<CallParticipant>,
     pub end_reason: Option<EndReason>,
     /// Recording state (also when somebody else started it): show the indicator.
@@ -200,6 +211,15 @@ impl From<core::CallView> for CallView {
             started_at: c.started_at,
             muted: c.muted,
             camera_on: c.camera_on,
+            screens: c
+                .screens
+                .into_iter()
+                .map(|s| CallScreen {
+                    session_id: s.session_id,
+                    name: s.name,
+                    peer_id: s.peer_id,
+                })
+                .collect(),
             participants: c
                 .participants
                 .into_iter()
@@ -306,8 +326,11 @@ impl core::MediaEngine for ForeignMedia {
     fn create_peer(&self, peer_id: String, kind: core::PeerKind, ice_servers: Vec<core::models::IceServer>) {
         let kind = match kind {
             core::PeerKind::Publisher => PeerKind::Publisher,
-            core::PeerKind::Subscriber => PeerKind::Subscriber,
+            // A shared screen is received like any subscription (video as offered).
+            core::PeerKind::Subscriber | core::PeerKind::ScreenSubscriber => PeerKind::Subscriber,
             core::PeerKind::Mesh => PeerKind::Mesh,
+            // The mobile apps never share their screen (no `set_screen_share` here).
+            core::PeerKind::ScreenPublisher => return,
         };
         let servers = ice_servers
             .into_iter()

@@ -1,13 +1,14 @@
 //! Message shapes of the standalone signaling server (nextcloud-spreed-signaling, API v1).
-//! Only what audio/video calls need (no screen sharing yet). Field names follow the server's Go structs.
+//! Only what audio/video calls and screen sharing need. Field names follow the server's Go structs.
 
 use serde_json::{Value, json};
 
 use super::{IceCandidate, SdpType};
 
-/// Room type of all our streams (the clients use "video" for camera+mic streams, also
-/// audio only; "screen" is screen sharing).
+/// Room type of camera+mic streams (also audio only).
 pub(crate) const ROOM_TYPE: &str = "video";
+/// Room type of screen shares (a second stream per session).
+pub(crate) const SCREEN: &str = "screen";
 
 pub(crate) fn hello_v2(id: &str, backend_url: &str, token: &str) -> Value {
     json!({"id": id, "type": "hello", "hello": {
@@ -48,15 +49,28 @@ fn to_session(session: &str, data: Value) -> Value {
     }})
 }
 
-pub(crate) fn sdp(to: &str, sid: &str, sdp_type: SdpType, sdp: &str, nick: &str) -> Value {
+/// `broadcaster`: offers of our own screen (the sharer's session; without it a mesh
+/// receiver would read the offer as "share your screen").
+pub(crate) fn sdp(
+    to: &str,
+    sid: &str,
+    room_type: &str,
+    sdp_type: SdpType,
+    sdp: &str,
+    nick: &str,
+    broadcaster: Option<&str>,
+) -> Value {
     let t = match sdp_type {
         SdpType::Offer => "offer",
         SdpType::Answer => "answer",
     };
     let mut data = json!({
-        "to": to, "type": t, "sid": sid, "roomType": ROOM_TYPE,
+        "to": to, "type": t, "sid": sid, "roomType": room_type,
         "payload": {"type": t, "sdp": sdp, "nick": nick}
     });
+    if let Some(b) = broadcaster {
+        data["broadcaster"] = json!(b);
+    }
     if sdp_type == SdpType::Offer {
         // Only evaluated for publisher offers (`offer-codecs`): Opus and VP8, which every
         // client (web, official apps, ours) decodes.
@@ -66,11 +80,11 @@ pub(crate) fn sdp(to: &str, sid: &str, sdp_type: SdpType, sdp: &str, nick: &str)
     to_session(to, data)
 }
 
-pub(crate) fn candidate(to: &str, sid: &str, c: &IceCandidate) -> Value {
+pub(crate) fn candidate(to: &str, sid: &str, room_type: &str, c: &IceCandidate) -> Value {
     to_session(
         to,
         json!({
-            "to": to, "type": "candidate", "sid": sid, "roomType": ROOM_TYPE,
+            "to": to, "type": "candidate", "sid": sid, "roomType": room_type,
             "payload": {"candidate": {
                 "candidate": c.candidate, "sdpMid": c.sdp_mid, "sdpMLineIndex": c.sdp_m_line_index
             }}
@@ -80,12 +94,36 @@ pub(crate) fn candidate(to: &str, sid: &str, c: &IceCandidate) -> Value {
 
 /// Ask the MCU to offer the stream of `to`. With `sid` an existing subscription is
 /// renegotiated (`update-sdp`), without one a new subscription is created.
-pub(crate) fn request_offer(to: &str, sid: Option<&str>) -> Value {
-    let mut data = json!({"type": "requestoffer", "roomType": ROOM_TYPE});
+pub(crate) fn request_offer(to: &str, room_type: &str, sid: Option<&str>) -> Value {
+    let mut data = json!({"type": "requestoffer", "roomType": room_type});
     if let Some(sid) = sid {
         data["sid"] = json!(sid);
     }
     to_session(to, data)
+}
+
+/// We share our screen (MCU): the MCU offers it to `to`. Clients cannot see that somebody
+/// shares, so the sharer asks for every participant (also later newcomers).
+pub(crate) fn send_offer(to: &str) -> Value {
+    to_session(to, json!({"type": "sendoffer", "roomType": SCREEN}))
+}
+
+/// Our screen share ended. To our own session (MCU: the server closes the screen
+/// publisher) or, without MCU, to each receiver with the sid of its connection.
+pub(crate) fn unshare_screen(to: &str, sid: &str, own: &str) -> Value {
+    to_session(
+        to,
+        json!({"to": to, "sid": sid, "broadcaster": own, "roomType": SCREEN, "type": "unshareScreen"}),
+    )
+}
+
+/// Our screen share ended, to everybody in the room (how the web client tells the
+/// receivers with MCU).
+pub(crate) fn unshare_screen_room() -> Value {
+    json!({"type": "message", "message": {
+        "recipient": {"type": "room"},
+        "data": {"roomType": SCREEN, "type": "unshareScreen"}
+    }})
 }
 
 pub(crate) fn mute(to: &str, muted: bool) -> Value {
@@ -231,6 +269,23 @@ mod tests {
         assert_eq!(sel["message"]["recipient"]["sessionid"], "s1");
         assert_eq!(sel["message"]["data"]["type"], "selectStream");
         assert_eq!(sel["message"]["data"]["payload"]["substream"], 2);
+    }
+
+    #[test]
+    fn screen_messages() {
+        let offer = sdp("me", "1", SCREEN, SdpType::Offer, "v=0", "Me", Some("me"));
+        let d = &offer["message"]["data"];
+        assert_eq!((d["roomType"].as_str(), d["broadcaster"].as_str()), (Some("screen"), Some("me")));
+        let answer = sdp("s1", "1", SCREEN, SdpType::Answer, "v=0", "Me", None);
+        assert!(answer["message"]["data"].get("broadcaster").is_none());
+        assert!(answer["message"]["data"].get("videocodec").is_none());
+        let so = send_offer("s1");
+        assert_eq!(so["message"]["recipient"]["sessionid"], "s1");
+        assert_eq!((so["message"]["data"]["type"].as_str(), so["message"]["data"]["roomType"].as_str()), (Some("sendoffer"), Some("screen")));
+        assert_eq!(unshare_screen_room()["message"]["recipient"]["type"], "room");
+        let un = unshare_screen("s1", "7", "me");
+        assert_eq!((un["message"]["data"]["sid"].as_str(), un["message"]["data"]["type"].as_str()), (Some("7"), Some("unshareScreen")));
+        assert_eq!(request_offer("s1", SCREEN, None)["message"]["data"]["roomType"], "screen");
     }
 
     #[test]

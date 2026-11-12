@@ -8,6 +8,10 @@
 //! 2. resume impossible → full rejoin: new session, room, call, all peers new
 //! 3. publisher ICE failed or no answer → ICE restart (same sid) → full rejoin
 //! 4. subscriber failed or no offer → `requestoffer` again (new subscription)
+//!
+//! Screen sharing is a second stream per session (`roomType` "screen"). Nobody can see
+//! that somebody shares: the sharer pushes it to every participant (MCU: `sendoffer`;
+//! mesh: one offer each) and says `unshareScreen` when done.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -49,6 +53,11 @@ const OFFER_RETRY_AFTER_ERROR: Duration = Duration::from_secs(1);
 /// makes the HPB wait 10 s and fail (race in its "publisher connected" waiter).
 const NEWCOMER_SUBSCRIBE_DELAY: Duration = Duration::from_millis(1500);
 const MESH_OFFER_FALLBACK: Duration = Duration::from_secs(10);
+/// The HPB closes a stopped screen publisher one second after `unshareScreen`; a new one
+/// created before would be the dying one.
+const SCREEN_RESTART_DELAY: Duration = Duration::from_millis(1500);
+/// After our rejoin: wait this long for the sharer's offer before asking for a screen.
+const SCREEN_OFFER_WAIT: Duration = Duration::from_secs(3);
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 const PONG_TIMEOUT_PROBE: Duration = Duration::from_secs(4);
@@ -95,6 +104,7 @@ pub(crate) enum Cmd {
     HangUp,
     Mute(bool),
     Camera(bool),
+    Screen(bool),
     Media(MediaReport),
     NetworkChanged,
     /// Ringing: ask the server now whether it still rings (a delete push arrived).
@@ -141,6 +151,7 @@ type Step<T> = std::result::Result<T, Stop>;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Owner {
     Publisher,
+    ScreenPublisher,
 }
 
 struct Publisher {
@@ -183,9 +194,58 @@ struct Other {
     requested_at: Option<Instant>,
     /// MCU: do not subscribe before this (newcomer still publishing).
     not_before: Option<Instant>,
+    /// Their shared screen (receive-only).
+    screen_in: Option<Peer>,
+    /// They share their screen (we got its offer and no `unshareScreen` since): MCU
+    /// re-subscribes when the connection breaks.
+    screen_wanted: bool,
+    /// MCU: last `requestoffer` for their screen.
+    screen_requested_at: Option<Instant>,
+    /// Order of their share (newest first on the stage).
+    screen_seq: u64,
+    /// Mesh: our screen to them.
+    screen_out: Option<Peer>,
+    /// MCU: the sid of our screen publisher we sent them `sendoffer` for.
+    screen_offered: Option<String>,
+    /// MCU: `sendoffer` failed, try again after this.
+    screen_offer_after: Option<Instant>,
 }
 
 impl Other {
+    fn new(user: CallUser, name: String, not_before: Option<Instant>) -> Self {
+        Self {
+            user,
+            name,
+            muted: false,
+            video_off: false,
+            speaking_until: None,
+            connected: false,
+            peer: None,
+            requested_at: None,
+            not_before,
+            screen_in: None,
+            screen_wanted: false,
+            screen_requested_at: None,
+            screen_seq: 0,
+            screen_out: None,
+            screen_offered: None,
+            screen_offer_after: None,
+        }
+    }
+
+    /// The connection with this id, whichever stream it carries.
+    fn peer_mut(&mut self, peer_id: &str) -> Option<&mut Peer> {
+        [&mut self.peer, &mut self.screen_in, &mut self.screen_out]
+            .into_iter()
+            .find_map(|p| p.as_mut().filter(|p| p.peer_id == peer_id))
+    }
+
+    fn peer_ref(&self, peer_id: &str) -> Option<&Peer> {
+        [&self.peer, &self.screen_in, &self.screen_out]
+            .into_iter()
+            .find_map(|p| p.as_ref().filter(|p| p.peer_id == peer_id))
+    }
+
     fn has_media(&self) -> bool {
         self.user.in_call & 6 != 0
     }
@@ -248,6 +308,18 @@ pub(crate) struct Actor {
     publisher_failures: u32,
     /// `requestoffer` message id → session (to retry on errors).
     offer_requests: HashMap<String, String>,
+    /// Screen: message id → session of `sendoffer` (we share) and `requestoffer` (theirs).
+    screen_offer_requests: HashMap<String, String>,
+    screen_sub_requests: HashMap<String, String>,
+    /// Message id of our last screen publisher offer (a refusal ends the share).
+    screen_offer_msg: Option<String>,
+    screen_publisher: Option<Publisher>,
+    /// We share our screen (the platform holds the track).
+    screen_on: bool,
+    screen_stopped_at: Option<Instant>,
+    screen_seq: u64,
+    /// Screen publisher restarts without it ever working.
+    screen_failures: u32,
     peer_seq: u64,
     owners: HashMap<String, Owner>,
     peer_session: HashMap<String, String>,
@@ -356,6 +428,14 @@ impl Actor {
             publisher: None,
             publisher_failures: 0,
             offer_requests: HashMap::new(),
+            screen_offer_requests: HashMap::new(),
+            screen_sub_requests: HashMap::new(),
+            screen_offer_msg: None,
+            screen_publisher: None,
+            screen_on: false,
+            screen_stopped_at: None,
+            screen_seq: 0,
+            screen_failures: 0,
             peer_seq: 0,
             owners: HashMap::new(),
             peer_session: HashMap::new(),
@@ -632,6 +712,10 @@ impl Actor {
         self.join_room_and_call().await?;
         if self.mcu {
             self.new_publisher();
+            // Still sharing after a rejoin: the platform's screen track lives on.
+            if self.screen_on {
+                self.new_screen_publisher();
+            }
         }
         Ok(())
     }
@@ -693,6 +777,8 @@ impl Actor {
     fn apply_room_data(&mut self, room: &Value) {
         // 1 owner, 2 moderator (guest moderators cannot record).
         self.moderator = matches!(room["participantType"].as_i64(), Some(1 | 2));
+        // Permission 128: publish screen (the server refuses screen offers without it).
+        self.view.can_share_screen = room["permissions"].as_i64().is_none_or(|p| p & 128 != 0);
         if let Some(r) = room["callRecording"].as_i64() {
             self.set_recording(r, "room data");
         }
@@ -855,6 +941,8 @@ impl Actor {
         } else {
             self.check_mesh().await;
         }
+        self.check_screen_share().await;
+        self.check_screen_receivers().await;
         if !self.vanished.is_empty() {
             self.check_alone();
         }
@@ -991,6 +1079,7 @@ impl Actor {
                 }
             }
             Cmd::Camera(on) => self.set_camera(on, true).await,
+            Cmd::Screen(on) => self.set_screen(on, true).await,
             Cmd::Media(r) => self.handle_media(r).await,
             Cmd::NetworkChanged => {
                 tracing::info!(call = %self.view.id, "network changed");
@@ -1080,11 +1169,13 @@ impl Actor {
         match v["type"].as_str().unwrap_or_default() {
             "event" => self.handle_event(&v["event"]).await,
             "message" => {
-                if v["message"]["sender"]["type"] == "room" {
+                let sender = v["message"]["sender"]["sessionid"].as_str().unwrap_or_default().to_string();
+                // A participant's message to the whole room (sender type "room" with its
+                // session): the web client ends a screen share like that.
+                if v["message"]["sender"]["type"] == "room" && (sender.is_empty() || v["message"]["data"]["roomType"] != proto::SCREEN) {
                     self.room_message(&v["message"]["data"]);
                     return;
                 }
-                let sender = v["message"]["sender"]["sessionid"].as_str().unwrap_or_default().to_string();
                 self.handle_peer_message(&sender, &v["message"]["data"]).await;
             }
             "control" => {
@@ -1101,6 +1192,11 @@ impl Actor {
             }
             "error" => {
                 let code = v["error"]["code"].as_str().unwrap_or_default();
+                if let Some(id) = v["id"].as_str() {
+                    if self.screen_error(id, code).await {
+                        return;
+                    }
+                }
                 // A failed subscription request: the publisher was not ready yet.
                 if let Some(session) = v["id"].as_str().and_then(|id| self.offer_requests.remove(id)) {
                     tracing::debug!(call = %self.view.id, session = %session, code, "requestoffer failed, retrying");
@@ -1206,23 +1302,11 @@ impl Actor {
                         .or_else(|| self.names.get(&u.actor_id))
                         .cloned()
                         .unwrap_or_default();
-                    self.others.insert(
-                        sid.clone(),
-                        Other {
-                            user: u,
-                            name,
-                            muted: false,
-                            video_off: false,
-                            speaking_until: None,
-                            connected: false,
-                            peer: None,
-                            requested_at: None,
-                            not_before: self
-                                .in_call_since
-                                .filter(|t| t.elapsed() > Duration::from_secs(1))
-                                .map(|_| Instant::now() + NEWCOMER_SUBSCRIBE_DELAY),
-                        },
-                    );
+                    let not_before = self
+                        .in_call_since
+                        .filter(|t| t.elapsed() > Duration::from_secs(1))
+                        .map(|_| Instant::now() + NEWCOMER_SUBSCRIBE_DELAY);
+                    self.others.insert(sid.clone(), Other::new(u, name, not_before));
                     self.ever_joined = true;
                     if self.someone_since.is_none() {
                         self.someone_since = Some(Instant::now());
@@ -1272,7 +1356,7 @@ impl Actor {
                     self.vanished.remove(&o.user.actor_id);
                 }
             }
-            if let Some(p) = o.peer {
+            for p in [o.peer, o.screen_in, o.screen_out].into_iter().flatten() {
                 self.close_peer(&p.peer_id);
             }
         }
@@ -1327,12 +1411,10 @@ impl Actor {
         let sid = data["sid"].as_str().unwrap_or_default().to_string();
         let payload = &data["payload"];
         let own = sender == self.session_id;
-        // Screen sharing is a second stream per session (not supported yet): its offers,
-        // answers and candidates must not touch the camera/mic connection of that person.
-        if data["roomType"].as_str() == Some("screen") {
-            if t == "offer" {
-                tracing::debug!(call = %self.view.id, session = sender, "ignoring screen share offer");
-            }
+        // Screen sharing is a second stream per session: its offers, answers and
+        // candidates must never touch the camera/mic connection of that person.
+        if data["roomType"].as_str() == Some(proto::SCREEN) {
+            self.screen_message(sender, t, &sid, data).await;
             return;
         }
         match t {
@@ -1352,7 +1434,7 @@ impl Actor {
                         self.media.set_remote_description(id, SdpType::Answer, sdp.to_string());
                         let own_session = self.session_id.clone();
                         for c in early {
-                            self.send(proto::candidate(&own_session, &psid, &c)).await;
+                            self.send(proto::candidate(&own_session, &psid, proto::ROOM_TYPE, &c)).await;
                         }
                     }
                 } else if let Some(peer) = self.others.get(sender).and_then(|o| o.peer.as_ref()) {
@@ -1394,33 +1476,26 @@ impl Actor {
         }
     }
 
+    /// Offers may overtake the participants update.
+    fn ensure_other(&mut self, sender: &str) {
+        if !self.others.contains_key(sender) {
+            let user = CallUser {
+                session_id: sender.to_string(),
+                in_call: 3,
+                actor_id: String::new(),
+                actor_type: String::new(),
+                internal: false,
+            };
+            let name = self.session_names.get(sender).cloned().unwrap_or_default();
+            self.others.insert(sender.to_string(), Other::new(user, name, None));
+        }
+    }
+
     fn remote_offer(&mut self, sender: &str, sid: &str, sdp: String) {
         let mcu = self.mcu;
         let my_session = self.session_id.clone();
         let ice = self.ice_servers();
-        if !self.others.contains_key(sender) {
-            // Offers may overtake the participants update.
-            self.others.insert(
-                sender.to_string(),
-                Other {
-                    user: CallUser {
-                        session_id: sender.to_string(),
-                        in_call: 3,
-                        actor_id: String::new(),
-                        actor_type: String::new(),
-                        internal: false,
-                    },
-                    name: self.session_names.get(sender).cloned().unwrap_or_default(),
-                    muted: false,
-                    video_off: false,
-                    speaking_until: None,
-                    connected: false,
-                    peer: None,
-                    requested_at: None,
-                    not_before: None,
-                },
-            );
-        }
+        self.ensure_other(sender);
         self.offer_requests.retain(|_, s| s != sender);
         let other = self.others.get_mut(sender).unwrap();
         // Renegotiation of a working subscription.
@@ -1475,15 +1550,27 @@ impl Actor {
                     let Some(p) = self.publisher.as_mut().filter(|p| p.peer_id == peer_id) else { return };
                     p.offer_sent_at = Some(Instant::now());
                     let (sid, own) = (p.sid.clone(), self.session_id.clone());
-                    let msg = proto::sdp(&own, &sid, sdp_type, &sdp, &self.nick);
+                    let msg = proto::sdp(&own, &sid, proto::ROOM_TYPE, sdp_type, &sdp, &self.nick, None);
                     tracing::debug!(call = %self.view.id, "publisher offer: {}", msg);
                     self.send(msg).await;
+                } else if self.owners.get(&peer_id) == Some(&Owner::ScreenPublisher) {
+                    let Some(p) = self.screen_publisher.as_mut().filter(|p| p.peer_id == peer_id) else { return };
+                    p.offer_sent_at = Some(Instant::now());
+                    let (sid, own) = (p.sid.clone(), self.session_id.clone());
+                    let mut msg = proto::sdp(&own, &sid, proto::SCREEN, sdp_type, &sdp, &self.nick, Some(&own));
+                    let id = format!("sp{}", self.next_id());
+                    msg["id"] = Value::String(id.clone());
+                    self.screen_offer_msg = Some(id);
+                    self.send(msg).await;
                 } else if let Some(session) = self.peer_session.get(&peer_id).cloned() {
-                    let Some(peer) = self.others.get(&session).and_then(|o| o.peer.as_ref()) else { return };
-                    if peer.peer_id != peer_id {
-                        return;
-                    }
-                    let msg = proto::sdp(&session, &peer.sid, sdp_type, &sdp, &self.nick);
+                    let Some(o) = self.others.get(&session) else { return };
+                    let Some(peer) = o.peer_ref(&peer_id) else { return };
+                    let screen = !o.peer.as_ref().is_some_and(|p| p.peer_id == peer_id);
+                    let room_type = if screen { proto::SCREEN } else { proto::ROOM_TYPE };
+                    // Our screen to them (mesh): we are the broadcaster.
+                    let own = self.session_id.clone();
+                    let broadcaster = o.screen_out.as_ref().is_some_and(|p| p.peer_id == peer_id).then_some(own.as_str());
+                    let msg = proto::sdp(&session, &peer.sid, room_type, sdp_type, &sdp, &self.nick, broadcaster);
                     self.send(msg).await;
                 }
             }
@@ -1494,14 +1581,23 @@ impl Actor {
                         p.early_candidates.push(candidate);
                         return;
                     }
-                    let msg = proto::candidate(&self.session_id, &p.sid, &candidate);
+                    let msg = proto::candidate(&self.session_id, &p.sid, proto::ROOM_TYPE, &candidate);
+                    self.send(msg).await;
+                } else if self.owners.get(&peer_id) == Some(&Owner::ScreenPublisher) {
+                    let Some(p) = self.screen_publisher.as_mut().filter(|p| p.peer_id == peer_id) else { return };
+                    if !p.answered {
+                        p.early_candidates.push(candidate);
+                        return;
+                    }
+                    let msg = proto::candidate(&self.session_id, &p.sid, proto::SCREEN, &candidate);
                     self.send(msg).await;
                 } else if let Some(session) = self.peer_session.get(&peer_id).cloned() {
-                    let Some(peer) = self.others.get(&session).and_then(|o| o.peer.as_ref()) else { return };
-                    if peer.peer_id == peer_id {
-                        let msg = proto::candidate(&session, &peer.sid, &candidate);
-                        self.send(msg).await;
-                    }
+                    let Some(o) = self.others.get(&session) else { return };
+                    let Some(peer) = o.peer_ref(&peer_id) else { return };
+                    let screen = !o.peer.as_ref().is_some_and(|p| p.peer_id == peer_id);
+                    let room_type = if screen { proto::SCREEN } else { proto::ROOM_TYPE };
+                    let msg = proto::candidate(&session, &peer.sid, room_type, &candidate);
+                    self.send(msg).await;
                 }
             }
             MediaReport::PeerState { peer_id, state } => self.peer_state(&peer_id, state),
@@ -1515,10 +1611,18 @@ impl Actor {
                     self.set_camera(false, false).await;
                 }
             }
+            MediaReport::ScreenState { on } => {
+                if !on && self.screen_on {
+                    tracing::info!(call = %self.view.id, "screen share stopped by the platform");
+                    self.set_screen(false, false).await;
+                }
+            }
             MediaReport::AudioLevel { peer_id, level } => {
                 if let Some(session) = self.peer_session.get(&peer_id) {
                     if let Some(o) = self.others.get_mut(session) {
-                        if level >= SPEAKING_LEVEL && !o.muted {
+                        // Only their voice, not the sound of a shared screen.
+                        let voice = o.peer.as_ref().is_some_and(|p| p.peer_id == peer_id);
+                        if voice && level >= SPEAKING_LEVEL && !o.muted {
                             o.speaking_until = Some(Instant::now() + SPEAKING_HOLD);
                         }
                     }
@@ -1541,8 +1645,32 @@ impl Actor {
             }
             return;
         }
+        if let Some(p) = self.screen_publisher.as_mut().filter(|p| p.peer_id == peer_id) {
+            p.state = state;
+            if state == PeerState::Connected {
+                p.bad_since = None;
+                p.restart_at = None;
+                self.screen_failures = 0;
+            } else if bad && p.bad_since.is_none() {
+                p.bad_since = Some(Instant::now());
+            }
+            return;
+        }
         let Some(session) = self.peer_session.get(peer_id).cloned() else { return };
         let Some(o) = self.others.get_mut(&session) else { return };
+        if !o.peer.as_ref().is_some_and(|p| p.peer_id == peer_id) {
+            // A screen connection: its state never says anything about their audio.
+            if let Some(peer) = o.peer_mut(peer_id) {
+                peer.state = state;
+                if state == PeerState::Connected {
+                    peer.bad_since = None;
+                    o.screen_requested_at = None;
+                } else if bad && peer.bad_since.is_none() {
+                    peer.bad_since = Some(Instant::now());
+                }
+            }
+            return;
+        }
         let Some(peer) = o.peer.as_mut().filter(|p| p.peer_id == peer_id) else { return };
         peer.state = state;
         if state == PeerState::Connected {
@@ -1587,38 +1715,10 @@ impl Actor {
             self.new_publisher();
             return;
         };
-        let now = Instant::now();
-        // Lost answer: the connection would stay `new` forever.
-        if !p.answered && p.offer_sent_at.is_some_and(|t| now - t > PUBLISHER_ANSWER_TIMEOUT)
-            || p.offer_sent_at.is_none() && now - p.created > PUBLISHER_ANSWER_TIMEOUT * 2
-        {
-            tracing::warn!(call = %self.view.id, "publisher got no answer, recreating");
-            self.publisher_trouble();
-            return;
-        }
-        if p.answered
-            && p.bad_since.is_none()
-            && matches!(p.state, PeerState::New | PeerState::Connecting)
-            && p.offer_sent_at.is_some_and(|t| now - t > CONNECT_TIMEOUT)
-            && p.restart_at.is_none()
-        {
-            tracing::warn!(call = %self.view.id, "publisher not connecting");
-            p.bad_since = Some(now - DISCONNECTED_GRACE);
-        }
-        let Some(bad_since) = p.bad_since else { return };
-        let grace = if p.state == PeerState::Failed { Duration::ZERO } else { DISCONNECTED_GRACE };
-        match p.restart_at {
-            None if now - bad_since >= grace => {
-                tracing::info!(call = %self.view.id, "publisher ICE restart");
-                p.restart_at = Some(now);
-                let id = p.peer_id.clone();
-                self.media.create_offer(id, true);
-            }
-            Some(t) if now - t > ICE_RESTART_TIMEOUT => {
-                tracing::warn!(call = %self.view.id, "ICE restart did not help");
-                self.publisher_trouble();
-            }
-            _ => {}
+        match publisher_health(p, &self.view.id, "publisher") {
+            Health::Ok => {}
+            Health::Restart(id) => self.media.create_offer(id, true),
+            Health::Trouble => self.publisher_trouble(),
         }
     }
 
@@ -1663,7 +1763,7 @@ impl Actor {
             self.close_peer(&id);
         }
         for s in requests {
-            let mut msg = proto::request_offer(&s, None);
+            let mut msg = proto::request_offer(&s, proto::ROOM_TYPE, None);
             let id = format!("ro{}", self.next_id());
             msg["id"] = Value::String(id.clone());
             self.offer_requests.insert(id, s);
@@ -1721,6 +1821,365 @@ impl Actor {
             self.media.set_camera_enabled(self.camera_on);
             self.media.create_offer(peer_id, false);
         }
+    }
+
+    // --- screen sharing ----------------------------------------------------------------
+
+    /// Screen share on/off. `command`: from the user (the platform holds the screen
+    /// track); otherwise the platform already stopped it.
+    async fn set_screen(&mut self, on: bool, command: bool) {
+        if matches!(self.view.state, CallState::Incoming | CallState::Ended) || on == self.screen_on {
+            if !on && command {
+                self.media.stop_screen();
+            }
+            return;
+        }
+        tracing::info!(call = %self.view.id, on, "screen share");
+        self.screen_on = on;
+        self.screen_failures = 0;
+        self.view.screen_sharing = on;
+        // On: the tick creates the peers (`check_screen_share`), also after a rejoin and
+        // not while the server still closes a share stopped a moment ago.
+        if !on {
+            self.end_screen().await;
+        }
+        self.emit();
+    }
+
+    async fn end_screen(&mut self) {
+        self.screen_on = false;
+        self.view.screen_sharing = false;
+        self.stop_screen_peers().await;
+        self.screen_stopped_at = Some(Instant::now());
+        self.media.stop_screen();
+    }
+
+    /// Ends our share for everybody (the platform's track stays: rejoin, or stop).
+    async fn stop_screen_peers(&mut self) {
+        let own = self.session_id.clone();
+        if let Some(p) = self.screen_publisher.take() {
+            self.send(proto::unshare_screen(&own, &p.sid, &own)).await;
+            self.send(proto::unshare_screen_room()).await;
+            self.close_peer(&p.peer_id);
+        }
+        let mut outs = Vec::new();
+        for (session, o) in self.others.iter_mut() {
+            o.screen_offered = None;
+            o.screen_offer_after = None;
+            if let Some(p) = o.screen_out.take() {
+                outs.push((session.clone(), p));
+            }
+        }
+        for (session, p) in outs {
+            self.send(proto::unshare_screen(&session, &p.sid, &own)).await;
+            self.close_peer(&p.peer_id);
+        }
+        self.screen_offer_msg = None;
+        self.screen_offer_requests.clear();
+    }
+
+    fn new_screen_publisher(&mut self) {
+        if let Some(old) = self.screen_publisher.take() {
+            self.close_peer(&old.peer_id);
+        }
+        self.peer_seq += 1;
+        let peer_id = format!("spub-{}", self.peer_seq);
+        self.owners.insert(peer_id.clone(), Owner::ScreenPublisher);
+        self.screen_publisher = Some(Publisher {
+            peer_id: peer_id.clone(),
+            sid: random_id(),
+            state: PeerState::New,
+            created: Instant::now(),
+            offer_sent_at: None,
+            answered: false,
+            bad_since: None,
+            restart_at: None,
+            early_candidates: Vec::new(),
+        });
+        for o in self.others.values_mut() {
+            o.screen_offered = None;
+        }
+        tracing::info!(call = %self.view.id, peer = %peer_id, "publishing screen");
+        self.media.create_peer(peer_id.clone(), PeerKind::ScreenPublisher, self.ice_servers());
+        self.media.create_offer(peer_id, false);
+    }
+
+    /// Our share (every tick while sharing): publisher up, everybody offered.
+    async fn check_screen_share(&mut self) {
+        if !self.screen_on || self.reconnect.is_some() || self.ws.is_none() || self.session_id.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        if self.screen_stopped_at.is_some_and(|t| now - t < SCREEN_RESTART_DELAY) {
+            return;
+        }
+        if !self.mcu {
+            self.check_mesh_screens().await;
+            return;
+        }
+        let Some(p) = self.screen_publisher.as_mut() else {
+            self.new_screen_publisher();
+            return;
+        };
+        match publisher_health(p, &self.view.id, "screen publisher") {
+            Health::Ok => {}
+            Health::Restart(id) => return self.media.create_offer(id, true),
+            Health::Trouble => {
+                // Start the share over (the server supports that within a session, as
+                // for stop and share again); after repeated failures give up on it
+                // instead of disturbing the call.
+                self.screen_failures += 1;
+                if self.screen_failures > 2 {
+                    tracing::warn!(call = %self.view.id, "screen share not working, stopping it");
+                    return self.end_screen().await;
+                }
+                self.stop_screen_peers().await;
+                self.screen_stopped_at = Some(now);
+                return;
+            }
+        }
+        let Some(p) = self.screen_publisher.as_ref() else { return };
+        if p.state != PeerState::Connected {
+            return;
+        }
+        let sid = p.sid.clone();
+        let mut targets = Vec::new();
+        for (session, o) in self.others.iter_mut() {
+            if o.user.in_call & 1 == 0
+                || o.not_before.is_some_and(|t| now < t)
+                || o.screen_offered.as_deref() == Some(sid.as_str())
+                || o.screen_offer_after.is_some_and(|t| now < t)
+            {
+                continue;
+            }
+            o.screen_offered = Some(sid.clone());
+            targets.push(session.clone());
+        }
+        for s in targets {
+            let mut msg = proto::send_offer(&s);
+            let id = format!("so{}", self.next_id());
+            msg["id"] = Value::String(id.clone());
+            self.screen_offer_requests.insert(id, s);
+            self.send(msg).await;
+        }
+    }
+
+    /// Mesh: one send-only screen connection per participant.
+    async fn check_mesh_screens(&mut self) {
+        let now = Instant::now();
+        let mut offers = Vec::new();
+        let mut closes = Vec::new();
+        for (session, o) in self.others.iter_mut() {
+            if o.user.in_call & 1 == 0 {
+                continue;
+            }
+            if let Some(p) = &o.screen_out {
+                let broken = p.state == PeerState::Failed
+                    || p.bad_since.is_some_and(|t| now - t > DISCONNECTED_GRACE * 2)
+                    || matches!(p.state, PeerState::New | PeerState::Connecting) && now - p.created > CONNECT_TIMEOUT * 2;
+                if !broken {
+                    continue;
+                }
+                closes.push(p.peer_id.clone());
+                o.screen_out = None;
+            }
+            offers.push(session.clone());
+        }
+        for id in closes {
+            self.close_peer(&id);
+        }
+        let ice = self.ice_servers();
+        for s in offers {
+            self.peer_seq += 1;
+            let peer_id = format!("sout-{}", self.peer_seq);
+            let Some(o) = self.others.get_mut(&s) else { continue };
+            o.screen_out = Some(Peer {
+                peer_id: peer_id.clone(),
+                sid: random_id(),
+                state: PeerState::New,
+                created: now,
+                bad_since: None,
+                offerer: true,
+                substream: None,
+            });
+            self.peer_session.insert(peer_id.clone(), s);
+            self.media.create_peer(peer_id.clone(), PeerKind::ScreenPublisher, ice.clone());
+            self.media.create_offer(peer_id, false);
+        }
+    }
+
+    /// The screens of others: MCU re-subscribes a broken one (the sharer offers only
+    /// once); mesh waits for the sharer's next offer.
+    async fn check_screen_receivers(&mut self) {
+        let now = Instant::now();
+        let mcu = self.mcu;
+        let mut requests = Vec::new();
+        let mut closes = Vec::new();
+        for (session, o) in self.others.iter_mut() {
+            if let Some(p) = &o.screen_in {
+                let broken = p.state == PeerState::Failed
+                    || p.state == PeerState::Closed
+                    || p.bad_since.is_some_and(|t| now - t > DISCONNECTED_GRACE * 2)
+                    || matches!(p.state, PeerState::New | PeerState::Connecting) && now - p.created > CONNECT_TIMEOUT;
+                if !broken {
+                    continue;
+                }
+                tracing::info!(call = %self.view.id, session, "screen connection broken");
+                closes.push(p.peer_id.clone());
+                o.screen_in = None;
+            }
+            if mcu && o.screen_wanted && o.screen_requested_at.is_none_or(|t| now - t > OFFER_RETRY) {
+                o.screen_requested_at = Some(now);
+                requests.push(session.clone());
+            }
+        }
+        for id in closes {
+            self.close_peer(&id);
+        }
+        for s in requests {
+            let mut msg = proto::request_offer(&s, proto::SCREEN, None);
+            let id = format!("rs{}", self.next_id());
+            msg["id"] = Value::String(id.clone());
+            self.screen_sub_requests.insert(id, s);
+            self.send(msg).await;
+        }
+    }
+
+    /// An error answer to one of our screen messages. `true`: handled.
+    async fn screen_error(&mut self, id: &str, code: &str) -> bool {
+        if let Some(session) = self.screen_offer_requests.remove(id) {
+            // Their subscriber could not be created (yet): offer again shortly.
+            tracing::debug!(call = %self.view.id, session = %session, code, "sendoffer failed, retrying");
+            if let Some(o) = self.others.get_mut(&session) {
+                o.screen_offered = None;
+                o.screen_offer_after = Some(Instant::now() + OFFER_RETRY_AFTER_ERROR * 2);
+            }
+            return true;
+        }
+        if let Some(session) = self.screen_sub_requests.remove(id) {
+            // Their screen publisher is gone: they stopped sharing.
+            tracing::debug!(call = %self.view.id, session = %session, code, "screen no longer shared");
+            if let Some(o) = self.others.get_mut(&session) {
+                if o.screen_in.is_none() {
+                    o.screen_wanted = false;
+                }
+            }
+            return true;
+        }
+        if self.screen_offer_msg.as_deref() == Some(id) {
+            tracing::warn!(call = %self.view.id, code, "screen share refused by the server");
+            if code == "not_allowed" {
+                self.view.can_share_screen = false;
+            }
+            self.set_screen(false, true).await;
+            return true;
+        }
+        false
+    }
+
+    /// Offers, answers, candidates and `unshareScreen` of screen streams.
+    async fn screen_message(&mut self, sender: &str, t: &str, sid: &str, data: &Value) {
+        let own = sender == self.session_id;
+        let payload = &data["payload"];
+        match t {
+            "offer" if !own => {
+                // Mesh: an offer without broadcaster asks us to share our screen.
+                if !self.mcu && data["broadcaster"].as_str().is_none_or(str::is_empty) {
+                    tracing::debug!(call = %self.view.id, session = sender, "ignoring screen share request");
+                    return;
+                }
+                let Some(sdp) = payload["sdp"].as_str() else { return };
+                self.screen_offer(sender, sid, sdp.to_string());
+            }
+            "answer" => {
+                let Some(sdp) = payload["sdp"].as_str() else { return };
+                if own || self.mcu {
+                    if let Some(p) = self.screen_publisher.as_mut().filter(|p| p.sid == sid || sid.is_empty()) {
+                        p.answered = true;
+                        let id = p.peer_id.clone();
+                        let early = std::mem::take(&mut p.early_candidates);
+                        let psid = p.sid.clone();
+                        self.media.set_remote_description(id, SdpType::Answer, sdp.to_string());
+                        let own_session = self.session_id.clone();
+                        for c in early {
+                            self.send(proto::candidate(&own_session, &psid, proto::SCREEN, &c)).await;
+                        }
+                    }
+                } else if let Some(p) = self.others.get(sender).and_then(|o| o.screen_out.as_ref()) {
+                    if p.sid == sid {
+                        self.media.set_remote_description(p.peer_id.clone(), SdpType::Answer, sdp.to_string());
+                    }
+                }
+            }
+            "candidate" => {
+                let Some(c) = proto::candidate_from(payload) else { return };
+                if own {
+                    if let Some(p) = self.screen_publisher.as_ref().filter(|p| p.sid == sid || sid.is_empty()) {
+                        self.media.add_remote_candidate(p.peer_id.clone(), c);
+                    }
+                } else if let Some(o) = self.others.get(sender) {
+                    let in_ = o.screen_in.as_ref().filter(|p| p.sid == sid || sid.is_empty());
+                    let out = o.screen_out.as_ref().filter(|p| p.sid == sid);
+                    if let Some(p) = in_.or(out) {
+                        self.media.add_remote_candidate(p.peer_id.clone(), c);
+                    }
+                }
+            }
+            "unshareScreen" if !own => {
+                let Some(o) = self.others.get_mut(sender) else { return };
+                o.screen_wanted = false;
+                o.screen_requested_at = None;
+                if let Some(p) = o.screen_in.take() {
+                    tracing::info!(call = %self.view.id, session = sender, "screen share ended");
+                    self.close_peer(&p.peer_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Somebody's screen (MCU: after their `sendoffer` or our `requestoffer`).
+    fn screen_offer(&mut self, sender: &str, sid: &str, sdp: String) {
+        self.ensure_other(sender);
+        self.screen_sub_requests.retain(|_, s| s != sender);
+        let ice = self.ice_servers();
+        let other = self.others.get_mut(sender).unwrap();
+        if let Some(p) = other.screen_in.as_ref() {
+            let alive = !matches!(p.state, PeerState::Failed | PeerState::Closed);
+            if p.sid == sid && alive {
+                let id = p.peer_id.clone();
+                self.media.set_remote_description(id.clone(), SdpType::Offer, sdp);
+                self.media.create_answer(id);
+                return;
+            }
+        }
+        if !other.screen_wanted {
+            self.screen_seq += 1;
+            other.screen_seq = self.screen_seq;
+            tracing::info!(call = %self.view.id, session = sender, "screen share started");
+        }
+        other.screen_wanted = true;
+        other.screen_requested_at = None;
+        let old = other.screen_in.take().map(|p| p.peer_id);
+        self.peer_seq += 1;
+        let peer_id = format!("sin-{}", self.peer_seq);
+        let other = self.others.get_mut(sender).unwrap();
+        other.screen_in = Some(Peer {
+            peer_id: peer_id.clone(),
+            sid: sid.to_string(),
+            state: PeerState::New,
+            created: Instant::now(),
+            bad_since: None,
+            offerer: false,
+            substream: None,
+        });
+        if let Some(old) = old {
+            self.close_peer(&old);
+        }
+        self.peer_session.insert(peer_id.clone(), sender.to_string());
+        self.media.create_peer(peer_id.clone(), PeerKind::ScreenSubscriber, ice);
+        self.media.set_remote_description(peer_id.clone(), SdpType::Offer, sdp);
+        self.media.create_answer(peer_id);
     }
 
     /// Simulcast: ask the MCU for the layer that fits the number of videos on screen
@@ -1781,16 +2240,23 @@ impl Actor {
     }
 
     fn close_all_peers(&mut self) {
-        if let Some(p) = self.publisher.take() {
+        for p in [self.publisher.take(), self.screen_publisher.take()].into_iter().flatten() {
             self.close_peer(&p.peer_id);
         }
         let ids: Vec<String> = self
             .others
             .values_mut()
-            .filter_map(|o| {
+            .flat_map(|o| {
                 o.connected = false;
                 o.requested_at = None;
-                o.peer.take().map(|p| p.peer_id)
+                // Their screen: after a rejoin the sharer offers it to our new session
+                // anyway; ask ourselves only if that does not come soon.
+                o.screen_requested_at = Instant::now().checked_sub(OFFER_RETRY - SCREEN_OFFER_WAIT);
+                o.screen_offered = None;
+                [o.peer.take(), o.screen_in.take(), o.screen_out.take()]
+                    .into_iter()
+                    .flatten()
+                    .map(|p| p.peer_id)
             })
             .collect();
         for id in ids {
@@ -1862,6 +2328,23 @@ impl Actor {
             .collect();
         participants.sort_by(|a, b| a.name.cmp(&b.name).then(a.session_id.cmp(&b.session_id)));
         self.view.participants = participants;
+        let mut screens: Vec<(u64, super::CallScreen)> = self
+            .others
+            .iter()
+            .filter_map(|(sid, o)| {
+                let p = o.screen_in.as_ref()?;
+                Some((
+                    o.screen_seq,
+                    super::CallScreen {
+                        session_id: sid.clone(),
+                        name: o.name.clone(),
+                        peer_id: p.peer_id.clone(),
+                    },
+                ))
+            })
+            .collect();
+        screens.sort_by(|a, b| b.0.cmp(&a.0));
+        self.view.screens = screens.into_iter().map(|(_, s)| s).collect();
         self.view.can_record = self.recording_enabled
             && self.moderator
             && self.in_call_since.is_some()
@@ -1905,6 +2388,11 @@ impl Actor {
                     Err(_) => tracing::info!(call = %id, "declined: timeout"),
                 }
             });
+        }
+        if self.screen_on {
+            self.screen_on = false;
+            self.view.screen_sharing = false;
+            self.media.stop_screen();
         }
         self.close_all_peers();
         if self.audio_started {
@@ -1983,6 +2471,49 @@ async fn dismiss_reason(client: &TalkClient, token: &str, me: &str) -> EndReason
             EndReason::AnsweredElsewhere
         }
         _ => EndReason::Missed,
+    }
+}
+
+enum Health {
+    Ok,
+    /// ICE restart of this peer.
+    Restart(String),
+    /// Not working even after an ICE restart (or no answer): full rejoin.
+    Trouble,
+}
+
+/// Publisher checks (camera/mic and screen): lost answer, not connecting, broken.
+fn publisher_health(p: &mut Publisher, call: &str, what: &str) -> Health {
+    let now = Instant::now();
+    // Lost answer: the connection would stay `new` forever.
+    if !p.answered && p.offer_sent_at.is_some_and(|t| now - t > PUBLISHER_ANSWER_TIMEOUT)
+        || p.offer_sent_at.is_none() && now - p.created > PUBLISHER_ANSWER_TIMEOUT * 2
+    {
+        tracing::warn!(call, "{what} got no answer, recreating");
+        return Health::Trouble;
+    }
+    if p.answered
+        && p.bad_since.is_none()
+        && matches!(p.state, PeerState::New | PeerState::Connecting)
+        && p.offer_sent_at.is_some_and(|t| now - t > CONNECT_TIMEOUT)
+        && p.restart_at.is_none()
+    {
+        tracing::warn!(call, "{what} not connecting");
+        p.bad_since = Some(now - DISCONNECTED_GRACE);
+    }
+    let Some(bad_since) = p.bad_since else { return Health::Ok };
+    let grace = if p.state == PeerState::Failed { Duration::ZERO } else { DISCONNECTED_GRACE };
+    match p.restart_at {
+        None if now - bad_since >= grace => {
+            tracing::info!(call, "{what} ICE restart");
+            p.restart_at = Some(now);
+            Health::Restart(p.peer_id.clone())
+        }
+        Some(t) if now - t > ICE_RESTART_TIMEOUT => {
+            tracing::warn!(call, "{what}: ICE restart did not help");
+            Health::Trouble
+        }
+        _ => Health::Ok,
     }
 }
 

@@ -416,6 +416,12 @@ impl Engine {
         self.calls.set_camera(on);
     }
 
+    /// Screen sharing on/off in the running call. Get the screen stream first (the
+    /// user picks it); the core then creates `ScreenPublisher` peers for its track.
+    pub fn set_screen_share(&self, on: bool) {
+        self.calls.set_screen_share(on);
+    }
+
     /// The user agreed to being recorded (answer to `CallView::recording_consent_pending`);
     /// the core then joins the call.
     pub fn consent_to_recording(&self) {

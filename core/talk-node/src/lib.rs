@@ -176,6 +176,9 @@ impl core::MediaEngine for JsMedia {
     fn stop_audio(&self, call_id: String) {
         self.send(serde_json::json!({"cmd": "stopAudio", "callId": call_id}));
     }
+    fn stop_screen(&self) {
+        self.send(serde_json::json!({"cmd": "stopScreen"}));
+    }
 }
 
 #[napi(object)]
@@ -424,6 +427,14 @@ impl TalkSession {
         self.engine.set_camera_enabled(on);
     }
 
+    /// Screen sharing on/off in the running call. Get the screen stream first; the core
+    /// then creates `screenPublisher` peers for its track (and sends `stopScreen` when
+    /// the share ends for another reason).
+    #[napi]
+    pub fn set_screen_share(&self, on: bool) {
+        self.engine.set_screen_share(on);
+    }
+
     /// Starts recording the current call (only when `call.canRecord`). `video`: records
     /// the call view; otherwise audio only. Rejects with a readable message.
     #[napi]
@@ -462,7 +473,8 @@ impl TalkSession {
     /// `{ type: "localDescription", peerId, sdpType: "offer", sdp }`,
     /// `{ type: "localCandidate", peerId, candidate: { candidate, sdpMid, sdpMLineIndex } }`,
     /// `{ type: "peerState", peerId, state: "connected" }`, `{ type: "peerError", peerId, message }`,
-    /// `{ type: "audioLevel", peerId, level }`, `{ type: "cameraState", on: false }`.
+    /// `{ type: "audioLevel", peerId, level }`, `{ type: "cameraState", on: false }`,
+    /// `{ type: "screenState", on: false }`.
     #[napi]
     pub fn media_report(&self, #[napi(ts_arg_type = "any")] report: Value) -> Result<()> {
         let r: core::MediaReport =

@@ -104,6 +104,8 @@ function handle(c: MediaCommand): void {
       return setCameraEnabled(c.enabled)
     case 'startAudio':
       return startAudio(c.callId)
+    case 'stopScreen':
+      break
     case 'stopAudio':
       return stopAudio(c.callId)
   }
@@ -154,7 +156,8 @@ function createPeer(peerId: string, kind: PeerKind, iceServers: IceServerConfig[
     reported: null,
   }
   peers.set(peerId, p)
-  if (kind !== 'subscriber') {
+  // Screens (docs/calls.md „Bildschirmfreigabe“): placeholder, received like a subscription.
+  if (kind === 'publisher' || kind === 'mesh') {
     // Audio and video from the start (docs/calls.md „Video“): the camera is only a track on
     // the video sender, switching it never renegotiates. Tracks follow when the devices are ready.
     const direction = kind === 'publisher' ? 'sendonly' : 'sendrecv'
@@ -235,7 +238,7 @@ function reportLocal(p: Peer, sdpType: 'offer' | 'answer'): void {
 
 async function setRemote(p: Peer, type: 'offer' | 'answer', sdp: string): Promise<void> {
   await p.pc.setRemoteDescription({ type, sdp })
-  if (type === 'offer' && p.kind === 'subscriber') {
+  if (type === 'offer' && (p.kind === 'subscriber' || p.kind === 'screenSubscriber')) {
     // Receive only: never send anything to the MCU on a subscriber.
     for (const t of p.pc.getTransceivers()) if (t.direction !== 'stopped') t.direction = 'recvonly'
   } else if (type === 'offer' && p.kind === 'mesh') adoptOffered(p)

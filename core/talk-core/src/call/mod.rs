@@ -119,6 +119,17 @@ pub struct CallParticipant {
     pub peer_id: Option<String>,
 }
 
+/// A screen shared by another participant (newest first in [`CallView::screens`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallScreen {
+    /// Session of the participant sharing it (see [`CallParticipant::session_id`]).
+    pub session_id: String,
+    pub name: String,
+    /// The receive-only connection carrying the screen: its video track is the screen.
+    pub peer_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallView {
@@ -138,6 +149,13 @@ pub struct CallView {
     /// Our camera is on (`set_camera_enabled`); off again when the platform reports
     /// `CameraState { on: false }` (no camera, permission denied, unplugged).
     pub camera_on: bool,
+    /// We share our screen (`set_screen_share`); off again when the platform reports
+    /// `ScreenState { on: false }` (stopped by the system, window closed).
+    pub screen_sharing: bool,
+    /// The conversation allows us to share our screen (permission "publish screen").
+    pub can_share_screen: bool,
+    /// Screens shared by others, newest first: the first one takes the stage.
+    pub screens: Vec<CallScreen>,
     pub participants: Vec<CallParticipant>,
     pub end_reason: Option<EndReason>,
     /// Recording state of the call (also when somebody else started it).
@@ -153,9 +171,9 @@ pub struct CallView {
 
 // --- media engine (implemented by the platform) --------------------------------------
 
-/// Kind of a peer connection. Every connection carries one audio and one video
+/// Kind of a peer connection. Camera/mic connections carry one audio and one video
 /// transceiver from the start; the camera is switched by attaching or removing the track
-/// (no renegotiation).
+/// (no renegotiation). Screen sharing uses connections of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PeerKind {
@@ -165,6 +183,13 @@ pub enum PeerKind {
     Subscriber,
     /// Without MCU: one send+receive connection per participant.
     Mesh,
+    /// Our shared screen: send-only, one video transceiver (no audio), we create the
+    /// offer. To the MCU (one) or, without MCU, one per participant. Attach the current
+    /// screen track.
+    ScreenPublisher,
+    /// The screen of one participant: receive-only as offered (video, possibly audio).
+    /// Mobile platforms handle it like `Subscriber`.
+    ScreenSubscriber,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -225,6 +250,9 @@ pub trait MediaEngine: Send + Sync + 'static {
     fn set_camera_enabled(&self, enabled: bool);
     fn start_audio(&self, call_id: String);
     fn stop_audio(&self, call_id: String);
+    /// Our screen share ended: stop the screen track (the system's capture indicator
+    /// goes off). Platforms that cannot share ignore it.
+    fn stop_screen(&self) {}
 }
 
 /// Reports from the platform's media engine to the core. JSON form (desktop):
@@ -241,6 +269,9 @@ pub enum MediaReport {
     /// The camera could not be opened or stopped on its own (unplugged, taken by another
     /// app, permission denied): `on: false`. The platform shows the reason itself.
     CameraState { on: bool },
+    /// The shared screen ended on its own (stopped in the system's UI, window closed,
+    /// app reloaded): `on: false`.
+    ScreenState { on: bool },
 }
 
 mod actor;

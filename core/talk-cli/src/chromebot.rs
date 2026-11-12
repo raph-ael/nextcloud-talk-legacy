@@ -1,7 +1,7 @@
 //! Media engine on headless Chrome (real libwebrtc, like the apps): the core's commands
 //! go to a page over the DevTools protocol, the page reports back through a binding.
 //! The microphone is a generated sine tone (`--use-file-for-fake-audio-capture`), the
-//! camera Chrome's fake device (moving test pattern).
+//! camera Chrome's fake device (moving test pattern), the shared screen a canvas.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,8 +19,23 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::callbot::RxStats;
 
 const PAGE_JS: &str = r#"
-const peers = new Map(), queues = new Map(), stats = {};
-let mic = null, micEnabled = true, cam = null;
+const peers = new Map(), queues = new Map(), kinds = new Map(), stats = {};
+let mic = null, micEnabled = true, cam = null, screen = null, screenTimer = null;
+const isScreen = (id) => (kinds.get(id) || '').startsWith('screen');
+// Fake shared screen: 1920x1080 canvas with moving content (a real capture needs a
+// display; this one also works headless).
+window.talkStartScreen = () => {
+  if (screen) return true;
+  const cv = document.createElement('canvas'); cv.width = 1920; cv.height = 1080;
+  const g = cv.getContext('2d'); let n = 0;
+  const draw = () => { n++; g.fillStyle = '#f4f4f4'; g.fillRect(0, 0, 1920, 1080);
+    g.fillStyle = '#0082c9'; g.fillRect((n * 12) % 1920, 300, 240, 240);
+    g.fillStyle = '#222'; g.font = '64px sans-serif'; g.fillText('Talk-Bot Bildschirm ' + n, 80, 160); };
+  draw(); screenTimer = setInterval(draw, 66);
+  screen = cv.captureStream(15);
+  screen.getVideoTracks()[0].contentHint = 'detail';
+  return true;
+};
 window.talkStats = stats;
 const report = (o) => window.talkReport(JSON.stringify(o));
 async function getMic() {
@@ -37,12 +52,14 @@ window.talkCmd = (c) => {
   case 'createPeer': enqueue(id, async () => {
     const pc = new RTCPeerConnection({bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require',
       iceServers: c.iceServers.map((s) => ({urls: s.urls, username: s.username || undefined, credential: s.credential || undefined}))});
-    peers.set(id, pc);
+    peers.set(id, pc); kinds.set(id, c.kind);
     pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate)
       report({type: 'localCandidate', peerId: id, candidate: {candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex ?? 0}}); };
     pc.onconnectionstatechange = () => report({type: 'peerState', peerId: id, state: pc.connectionState});
     pc.ontrack = (e) => { if (e.track.kind !== 'audio') return; const a = new Audio(); a.srcObject = e.streams[0] || new MediaStream([e.track]); a.play().catch(() => {}); };
-    if (c.kind !== 'subscriber') {
+    if (c.kind === 'screenPublisher') {
+      pc.addTransceiver(screen ? screen.getVideoTracks()[0] : 'video', {direction: 'sendonly', streams: screen ? [screen] : []});
+    } else if (c.kind === 'publisher' || c.kind === 'mesh') {
       const m = await getMic(); const t = m.getAudioTracks()[0]; t.enabled = micEnabled;
       const dir = c.kind === 'publisher' ? 'sendonly' : 'sendrecv';
       pc.addTransceiver(t, {direction: dir, streams: [m]});
@@ -65,10 +82,13 @@ window.talkCmd = (c) => {
       if (c.enabled && !cam) cam = await navigator.mediaDevices.getUserMedia({video: {width: 640, height: 480, frameRate: 24}});
       if (!c.enabled && cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; }
       const track = cam ? cam.getVideoTracks()[0] : null;
-      for (const pc of peers.values()) for (const tr of pc.getTransceivers())
+      for (const [pid, pc] of peers) if (!isScreen(pid)) for (const tr of pc.getTransceivers())
         if (tr.receiver.track.kind === 'video' && (tr.direction === 'sendonly' || tr.direction === 'sendrecv')) await tr.sender.replaceTrack(track);
     } catch (e) { console.log('camera', e); report({type: 'cameraState', on: false}); }
   })(); break;
+  case 'stopScreen':
+    if (screen) { screen.getTracks().forEach((t) => t.stop()); screen = null; clearInterval(screenTimer); }
+    break;
   case 'stopAudio':
     if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
     if (cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; }
@@ -274,6 +294,15 @@ impl ChromeMedia {
 
     pub fn attach(&self, engine: &Arc<Engine>) {
         let _ = self.engine.set(Arc::downgrade(engine));
+    }
+
+    /// The fake screen is ready for `set_screen_share(true)`.
+    pub async fn start_screen(&self) -> Result<()> {
+        let ok = self.eval_value("window.talkStartScreen()").await?;
+        if ok != true {
+            bail!("Fake-Bildschirm nicht gestartet: {ok}");
+        }
+        Ok(())
     }
 
     fn cmd(&self, v: Value) {

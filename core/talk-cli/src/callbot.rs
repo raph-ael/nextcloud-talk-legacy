@@ -242,7 +242,8 @@ impl PeerWorker {
                         .await?;
                         tokio::spawn(send_tone(track, self.mic.clone(), self.tone_hz, Arc::downgrade(&pc)));
                     }
-                    PeerKind::Subscriber => {}
+                    // Receive only (screens: the webrtc-rs bot shares none).
+                    PeerKind::Subscriber | PeerKind::ScreenSubscriber | PeerKind::ScreenPublisher => {}
                 }
                 self.pc = Some(pc);
             }
@@ -513,6 +514,11 @@ pub struct CallOpts {
     /// … and off again after this many seconds.
     pub video_off_after: Option<u64>,
     pub expect_video: bool,
+    /// Share the fake screen after this many seconds (connected), off again after …
+    pub screen_after: Option<u64>,
+    pub screen_off_after: Option<u64>,
+    pub screen_again_after: Option<u64>,
+    pub expect_screen: bool,
 }
 
 fn own_sessions(peers: &[serde_json::Value], me: &str) -> Vec<String> {
@@ -534,6 +540,13 @@ impl Media {
         match self {
             Media::Chrome(c) => c.stats().await,
             Media::Rust(r) => r.stats.lock().unwrap().clone(),
+        }
+    }
+
+    async fn start_screen(&self) -> Result<()> {
+        match self {
+            Media::Chrome(c) => c.start_screen().await,
+            Media::Rust(_) => bail!("Bildschirm teilen nur mit Chrome (ohne BOT_MEDIA=rust)"),
         }
     }
 }
@@ -614,7 +627,10 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     let mut record_started = false;
     let mut record_stopped = false;
     let mut camera = (false, false);
+    let mut sharing = (false, false, false);
     let mut videos: Vec<(String, bool)> = Vec::new();
+    let mut screens: Vec<String> = Vec::new();
+    let mut own_screen = false;
     while started.elapsed() < Duration::from_secs(o.seconds) {
         if let Some(v) = state(&sink) {
             if v.state == CallState::Ended {
@@ -627,6 +643,15 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
                     eprintln!("Video von {}: {}", if name.is_empty() { "?" } else { name }, if *on { "an" } else { "aus" });
                 }
                 videos = now;
+            }
+            let now: Vec<String> = v.screens.iter().map(|s| format!("{} ({})", if s.name.is_empty() { "?" } else { &s.name }, s.peer_id)).collect();
+            if now != screens {
+                eprintln!("Bildschirme der anderen: {}", if now.is_empty() { "keine".to_string() } else { now.join(", ") });
+                screens = now;
+            }
+            if v.screen_sharing != own_screen {
+                eprintln!("eigene Freigabe: {}", if v.screen_sharing { "läuft" } else { "beendet" });
+                own_screen = v.screen_sharing;
             }
             if recording != Some(v.recording) {
                 eprintln!("Aufnahme: {:?} (darf aufnehmen: {})", v.recording, v.can_record);
@@ -674,6 +699,29 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
                 engine.set_camera_enabled(false);
             }
         }
+        if let Some(a) = o.screen_after {
+            if !sharing.0 && started.elapsed() > Duration::from_secs(a) {
+                sharing.0 = true;
+                eprintln!("Bildschirm teilen");
+                media.start_screen().await?;
+                engine.set_screen_share(true);
+            }
+        }
+        if let Some(a) = o.screen_off_after {
+            if sharing.0 && !sharing.1 && started.elapsed() > Duration::from_secs(a) {
+                sharing.1 = true;
+                eprintln!("Bildschirm teilen beenden");
+                engine.set_screen_share(false);
+            }
+        }
+        if let Some(a) = o.screen_again_after {
+            if sharing.1 && !sharing.2 && started.elapsed() > Duration::from_secs(a) {
+                sharing.2 = true;
+                eprintln!("Bildschirm wieder teilen");
+                media.start_screen().await?;
+                engine.set_screen_share(true);
+            }
+        }
         if let Some(m) = o.mute_after {
             if !muted && started.elapsed() > Duration::from_secs(m) {
                 engine.set_call_muted(true);
@@ -685,6 +733,7 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     let rx: HashMap<String, RxStats> = media.stats().await;
     let mut ok = false;
     let mut video_ok = false;
+    let mut screen_ok = false;
     for (peer, s) in &rx {
         eprintln!(
             "empfangen {peer}: {} Pakete, Pegel max {:.3}, {} Videobilder {}x{}",
@@ -693,8 +742,13 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
         if s.packets > 50 && s.max_level > 0.05 {
             ok = true;
         }
+        // Received screens are the `sin-` connections.
         if s.frames > 30 && s.width > 0 {
-            video_ok = true;
+            if peer.starts_with("sin-") {
+                screen_ok = true;
+            } else {
+                video_ok = true;
+            }
         }
     }
     if state(&sink).is_some_and(|v| v.state != CallState::Ended) {
@@ -714,6 +768,9 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     }
     if o.expect_video && !video_ok {
         bail!("kein Video empfangen");
+    }
+    if o.expect_screen && !screen_ok {
+        bail!("keinen geteilten Bildschirm empfangen");
     }
     eprintln!("ok");
     Ok(())

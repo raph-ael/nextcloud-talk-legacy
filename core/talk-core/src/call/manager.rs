@@ -123,6 +123,9 @@ impl CallManager {
             can_record: false,
             recording_consent_pending: false,
             camera_on: false,
+            screen_sharing: false,
+            can_share_screen: false,
+            screens: Vec::new(),
         };
         self.launch(client, sink, me, view, silent, runtime)
     }
@@ -177,6 +180,9 @@ impl CallManager {
             can_record: false,
             recording_consent_pending: false,
             camera_on: false,
+            screen_sharing: false,
+            can_share_screen: false,
+            screens: Vec::new(),
         };
         self.launch(client, sink, me, view, true, runtime).is_ok()
     }
@@ -218,6 +224,10 @@ impl CallManager {
 
     pub(crate) fn set_camera(&self, on: bool) {
         self.send(Cmd::Camera(on));
+    }
+
+    pub(crate) fn set_screen_share(&self, on: bool) {
+        self.send(Cmd::Screen(on));
     }
 
     pub(crate) fn report(&self, report: MediaReport) {

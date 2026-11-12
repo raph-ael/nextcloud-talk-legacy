@@ -168,6 +168,21 @@ enum Cmd {
         /// Fail unless video from the other side arrived
         #[arg(long)]
         expect_video: bool,
+        /// Share a (fake, 1920x1080 canvas) screen once connected
+        #[arg(long)]
+        screen: bool,
+        /// With --screen: start sharing after this many seconds
+        #[arg(long, default_value_t = 0)]
+        screen_after: u64,
+        /// With --screen: stop sharing after this many seconds
+        #[arg(long)]
+        screen_off_after: Option<u64>,
+        /// With --screen and --screen-off-after: share again after this many seconds
+        #[arg(long)]
+        screen_again_after: Option<u64>,
+        /// Fail unless a screen shared by the other side arrived
+        #[arg(long)]
+        expect_screen: bool,
     },
     /// Finished call recordings waiting for us (notifications); --share/--dismiss one
     Recordings {
@@ -420,7 +435,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "call-bot")]
 async fn call_cmd(cli: &Cli) -> Result<()> {
-    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json, record, record_after, record_stop_after, video, video_after, video_off_after, expect_video } = &cli.cmd else {
+    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json, record, record_after, record_stop_after, video, video_after, video_off_after, expect_video, screen, screen_after, screen_off_after, screen_again_after, expect_screen } = &cli.cmd else {
         unreachable!()
     };
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -462,6 +477,10 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
         video_after: video.then_some(*video_after),
         video_off_after: *video_off_after,
         expect_video: *expect_video,
+        screen_after: screen.then_some(*screen_after),
+        screen_off_after: *screen_off_after,
+        screen_again_after: *screen_again_after,
+        expect_screen: *expect_screen,
     };
     let r = callbot::run(engine.clone(), sink, media, opts).await;
     engine.shutdown();

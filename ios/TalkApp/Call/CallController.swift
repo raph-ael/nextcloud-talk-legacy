@@ -740,7 +740,7 @@ extension CallController {
             isGroup: group, direction: state == .incoming ? .incoming : .outgoing, state: state,
             callerName: room?.name ?? "Anna Berg",
             startedAt: state == .connected ? Int64(Date().timeIntervalSince1970 * 1000) - 192_000 : nil,
-            muted: mode == "reconnecting", cameraOn: video, participants: participants,
+            muted: mode == "reconnecting", cameraOn: video, screens: [], participants: participants,
             endReason: state == .ended ? .noAnswer : nil,
             recording: recording, canRecord: env["TALK_CALL_MOCK_CAN_RECORD"] == "1",
             recordingConsentPending: mode == "consent"
