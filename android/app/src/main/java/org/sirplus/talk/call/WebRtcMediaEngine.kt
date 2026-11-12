@@ -618,9 +618,13 @@ class WebRtcMediaEngine(
                 if (++tick % VIDEO_STATS_TICKS == 0 && videoTrack != null) logVideoStats()
                 for (peer in peers.values) peer.feed?.checkStale()
                 localFeed?.checkStale()
+                val logIn = tick % VIDEO_STATS_TICKS == 0
                 for (peer in peers.values.toList()) {
                     val pc = peer.pc ?: continue
-                    pc.getStats { report -> onEngine { reportLevel(peer, report) } }
+                    pc.getStats { report ->
+                        if (logIn && peer.feed?.active?.value == true) logVideoIn(peer, report)
+                        onEngine { reportLevel(peer, report) }
+                    }
                 }
             }
         }
@@ -647,6 +651,17 @@ class WebRtcMediaEngine(
                     "target ${m["targetBitrate"]}",
             )
         }
+    }
+
+    /** What we receive and how it is decoded (e.g. a shared screen in 1080p), for the log. */
+    private fun logVideoIn(peer: Peer, report: RTCStatsReport) {
+        val m = report.statsMap.values.firstOrNull { it.type == "inbound-rtp" && it.members["kind"] == "video" }?.members ?: return
+        if (m["frameWidth"] == null) return
+        Log.i(
+            TAG,
+            "video in ${peer.id}: ${m["frameWidth"]}x${m["frameHeight"]} ${m["framesPerSecond"]} fps, " +
+                "${m["decoderImplementation"]}, dropped ${m["framesDropped"]}",
+        )
     }
 
     private fun reportLevel(peer: Peer, report: RTCStatsReport) {

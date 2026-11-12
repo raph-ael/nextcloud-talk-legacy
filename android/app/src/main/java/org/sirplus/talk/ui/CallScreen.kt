@@ -1,6 +1,35 @@
 package org.sirplus.talk.ui
 
 import android.Manifest
+import android.app.Activity
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import android.content.res.Configuration
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import uniffi.talk_ffi.CallScreen as SharedScreen
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -157,7 +186,11 @@ fun CallScreen(
     val stage = stageFeed != null && feedActive(stageFeed)
 
     Box(Modifier.fillMaxSize().background(Color(0xFF1B1B1D))) {
-        if (stage) Stage(stageFeed!!) else CallBackground(avatar, colorFor(title))
+        when {
+            presenting(call) -> Unit // the presentation draws its own black stage
+            stage -> Stage(stageFeed!!)
+            else -> CallBackground(avatar, colorFor(title))
+        }
         if (call.state == CallState.INCOMING) {
             Incoming(call, title, room?.token, room?.avatarVersion.orEmpty(), sessions, onAccept, onDecline)
         } else {
@@ -165,6 +198,13 @@ fun CallScreen(
         }
     }
 }
+
+/**
+ * Someone shares their screen (docs/calls.md "Bildschirmfreigabe"): the presentation view
+ * replaces the normal one, and the call screen may rotate (CallActivity).
+ */
+fun presenting(call: CallView): Boolean =
+    call.screens.isNotEmpty() && call.state != CallState.ENDED && call.state != CallState.INCOMING
 
 // --- video ----------------------------------------------------------------------
 
@@ -216,21 +256,21 @@ private fun Stage(feed: VideoFeed) {
 
 /** Our camera, mirrored for the front camera, with "Kamera wechseln". */
 @Composable
-private fun LocalPreview(local: LocalVideo, onSwitch: () -> Unit, modifier: Modifier = Modifier) {
+private fun LocalPreview(local: LocalVideo, onSwitch: () -> Unit, modifier: Modifier = Modifier, width: Dp = 96.dp, height: Dp = 128.dp) {
     Box(
         modifier
-            .size(width = 96.dp, height = 128.dp)
+            .size(width = width, height = height)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black)
             .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), RoundedCornerShape(12.dp)),
     ) {
         VideoView(local.feed, Modifier.fillMaxSize(), mirror = local.front)
         Box(
-            Modifier.align(Alignment.BottomEnd).padding(6.dp).size(32.dp).clip(CircleShape)
+            Modifier.align(Alignment.BottomEnd).padding(if (height < 100.dp) 4.dp else 6.dp).size(if (height < 100.dp) 28.dp else 32.dp).clip(CircleShape)
                 .background(Color.Black.copy(alpha = 0.45f)).clickable(onClick = onSwitch),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(TalkIcons.CameraSwitch, "Kamera wechseln", tint = Color.White, modifier = Modifier.size(18.dp))
+            Icon(TalkIcons.CameraSwitch, "Kamera wechseln", tint = Color.White, modifier = Modifier.size(if (height < 100.dp) 16.dp else 18.dp))
         }
     }
 }
@@ -355,7 +395,12 @@ private fun InCall(
     var more by remember { mutableStateOf(false) }
     var confirmStop by remember { mutableStateOf(false) }
     val tiles = call.isGroup && call.participants.isNotEmpty() && call.state != CallState.ENDED
-    Box(Modifier.fillMaxSize()) {
+    val bar: @Composable () -> Unit = {
+        ControlBar(call, routing, onSpeaker = onSpeaker, onPicker = { picker = true }, onCamera = { on -> if (on) openCamera() else onCamera(false) }, onMore = { more = true }, onMute = onMute, onHangUp = onHangUp)
+    }
+    if (presenting(call)) {
+        Presentation(call, title, sessions, feeds, local, onMinimize, bar)
+    } else Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) {
                 IconButton(onClick = onMinimize) {
@@ -382,29 +427,7 @@ private fun InCall(
                 Spacer(Modifier.weight(1f))
             }
             if (call.state != CallState.ENDED) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 32.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
-                ) {
-                    val speakerOn = routing.current == AudioRoute.SPEAKER
-                    ControlButton(
-                        when (routing.current) {
-                            AudioRoute.BLUETOOTH -> TalkIcons.Bluetooth
-                            AudioRoute.WIRED -> TalkIcons.Headset
-                            else -> TalkIcons.Speaker
-                        },
-                        if (routing.needsPicker) "Audioausgabe" else "Lautsprecher",
-                        active = speakerOn && !routing.needsPicker,
-                    ) { if (routing.needsPicker) picker = true else onSpeaker() }
-                    ControlButton(
-                        if (call.cameraOn) TalkIcons.Videocam else TalkIcons.VideocamOff,
-                        if (call.cameraOn) "Kamera ausschalten" else "Kamera einschalten",
-                        active = call.cameraOn,
-                    ) { if (call.cameraOn) onCamera(false) else openCamera() }
-                    if (call.canRecord) ControlButton(TalkIcons.MoreHoriz, "Mehr") { more = true }
-                    ControlButton(if (call.muted) TalkIcons.MicOff else TalkIcons.MicFilled, if (call.muted) "Stumm aus" else "Stumm", active = call.muted, onClick = onMute)
-                    ControlButton(TalkIcons.CallEnd, "Auflegen", background = Decline, onClick = onHangUp)
-                }
+                Box(Modifier.padding(top = 16.dp, bottom = 32.dp)) { bar() }
             } else {
                 Spacer(Modifier.height(96.dp))
             }
@@ -441,6 +464,287 @@ private fun InCall(
     }
     ConsentDialog(call, sessions, onHangUp)
 }
+
+/** Output · camera · more · mute · hang up (docs/calls.md "Oberfläche"). */
+@Composable
+private fun ControlBar(
+    call: CallView,
+    routing: AudioRouting,
+    onSpeaker: () -> Unit,
+    onPicker: () -> Unit,
+    onCamera: (Boolean) -> Unit,
+    onMore: () -> Unit,
+    onMute: () -> Unit,
+    onHangUp: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+    ) {
+        val speakerOn = routing.current == AudioRoute.SPEAKER
+        ControlButton(
+            when (routing.current) {
+                AudioRoute.BLUETOOTH -> TalkIcons.Bluetooth
+                AudioRoute.WIRED -> TalkIcons.Headset
+                else -> TalkIcons.Speaker
+            },
+            if (routing.needsPicker) "Audioausgabe" else "Lautsprecher",
+            active = speakerOn && !routing.needsPicker,
+        ) { if (routing.needsPicker) onPicker() else onSpeaker() }
+        ControlButton(
+            if (call.cameraOn) TalkIcons.Videocam else TalkIcons.VideocamOff,
+            if (call.cameraOn) "Kamera ausschalten" else "Kamera einschalten",
+            active = call.cameraOn,
+        ) { onCamera(!call.cameraOn) }
+        if (call.canRecord) ControlButton(TalkIcons.MoreHoriz, "Mehr", onClick = onMore)
+        ControlButton(if (call.muted) TalkIcons.MicOff else TalkIcons.MicFilled, if (call.muted) "Stumm aus" else "Stumm", active = call.muted, onClick = onMute)
+        ControlButton(TalkIcons.CallEnd, "Auflegen", background = Decline, onClick = onHangUp)
+    }
+}
+
+// --- screen sharing (receive only) -------------------------------------------------
+
+/**
+ * Presentation view: the shared screen fitted on the stage, the participants as a row
+ * below it (portrait). In landscape the screen takes everything and the controls fade
+ * out after 3 s; a tap brings them back. Several screens: the newest one is shown, the
+ * labels on the stage switch between them.
+ */
+@Composable
+private fun Presentation(
+    call: CallView,
+    title: String,
+    sessions: SessionManager,
+    feeds: Map<String, VideoFeed>,
+    local: LocalVideo?,
+    onMinimize: () -> Unit,
+    bar: @Composable () -> Unit,
+) {
+    val screens = call.screens
+    val newest = screens.first().sessionId
+    // A new share takes the stage; otherwise stay with the chosen one while it lasts.
+    var chosen by remember(newest) { mutableStateOf(newest) }
+    val screen = screens.firstOrNull { it.sessionId == chosen } ?: screens.first()
+    val feed = feeds[screen.peerId]
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    // Landscape like a video player: the system bars only on a swipe from the edge.
+    val view = LocalView.current
+    DisposableEffect(landscape) {
+        val window = (view.context as? Activity)?.window
+        val insets = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (landscape && insets != null) {
+            insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insets.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { insets?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+    var controls by remember { mutableStateOf(true) }
+    var touches by remember { mutableIntStateOf(0) }
+    LaunchedEffect(landscape, controls, touches) {
+        if (!landscape) controls = true
+        else if (controls) {
+            delay(CONTROLS_HIDE_MS)
+            controls = false
+        }
+    }
+    val onTap = { if (landscape) { controls = !controls; touches++ } }
+    val labels: @Composable (Modifier) -> Unit = { m ->
+        ScreenLabels(screens, screen.sessionId, m) { chosen = it; touches++ }
+    }
+    val top: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onMinimize) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zu den Chats", tint = Color.White)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                CallStatusSmall(call)
+            }
+            RecordingIndicator(call, Modifier.padding(end = 12.dp))
+        }
+    }
+
+    if (!landscape) {
+        Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
+            top()
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                ScreenStage(screen.sessionId, screen.name, feed, Modifier.fillMaxSize(), onTap)
+                labels(Modifier.align(Alignment.TopStart).padding(8.dp))
+            }
+            ParticipantRow(call, sessions, feeds, local, Modifier.padding(top = 12.dp))
+            Box(Modifier.padding(top = 16.dp, bottom = 24.dp)) { bar() }
+        }
+    } else {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            ScreenStage(screen.sessionId, screen.name, feed, Modifier.fillMaxSize(), onTap)
+            AnimatedVisibility(controls, Modifier.fillMaxSize(), enter = fadeIn(), exit = fadeOut()) {
+                Box(Modifier.fillMaxSize()) {
+                    Box(
+                        Modifier.fillMaxWidth().align(Alignment.TopCenter)
+                            .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent))),
+                    ) {
+                        Column(Modifier.systemBarsPadding().padding(bottom = 16.dp)) {
+                            top()
+                            labels(Modifier.padding(horizontal = 12.dp))
+                        }
+                    }
+                    Box(
+                        Modifier.fillMaxWidth().align(Alignment.BottomCenter)
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f)))),
+                    ) {
+                        Box(Modifier.systemBarsPadding().padding(top = 24.dp, bottom = 16.dp)) { bar() }
+                    }
+                    if (local != null && call.cameraOn) {
+                        LocalPreview(
+                            local,
+                            onSwitch = { sessions.callVideo.switchCamera() },
+                            Modifier.align(Alignment.BottomEnd).systemBarsPadding().padding(end = 16.dp, bottom = 16.dp),
+                            width = 72.dp, height = 96.dp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "Bildschirm von …"; with several screens one chip each, the shown one highlighted. */
+@Composable
+private fun ScreenLabels(screens: List<SharedScreen>, shown: String, modifier: Modifier, onChoose: (String) -> Unit) {
+    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (s in screens) {
+            val selected = s.sessionId == shown
+            val several = screens.size > 1
+            Text(
+                "Bildschirm von ${s.name.ifBlank { "Gast" }}",
+                color = if (selected && several) Color.Black else Color.White,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (selected && several) Color.White else Color.Black.copy(alpha = 0.55f))
+                    .then(if (several && !selected) Modifier.clickable { onChoose(s.sessionId) } else Modifier)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The shared screen, always fitted (never cropped). Two fingers zoom, one finger moves
+ * the zoomed screen, a double tap zooms in at that point or back out.
+ */
+@Composable
+private fun ScreenStage(key: String, name: String, feed: VideoFeed?, modifier: Modifier, onTap: () -> Unit) {
+    val aspect by (feed?.aspect ?: remember { MutableStateFlow(0f) }).collectAsState()
+    val active = feedActive(feed)
+    BoxWithConstraints(modifier.clipToBounds()) {
+        val boxW = constraints.maxWidth.toFloat()
+        val boxH = constraints.maxHeight.toFloat()
+        // Fitted size in px: the whole screen, letterboxed.
+        val (fitW, fitH) = when {
+            aspect <= 0f || boxH <= 0f -> boxW to boxH
+            aspect > boxW / boxH -> boxW to boxW / aspect
+            else -> boxH * aspect to boxH
+        }
+        var scale by remember(key, boxW, boxH) { mutableFloatStateOf(1f) }
+        var offset by remember(key, boxW, boxH) { mutableStateOf(Offset.Zero) }
+        val fit by rememberUpdatedState(Size(fitW, fitH))
+        fun clamp(o: Offset, s: Float): Offset {
+            val mx = ((fit.width * s - boxW) / 2f).coerceAtLeast(0f)
+            val my = ((fit.height * s - boxH) / 2f).coerceAtLeast(0f)
+            return Offset(o.x.coerceIn(-mx, mx), o.y.coerceIn(-my, my))
+        }
+        val center = Offset(boxW / 2f, boxH / 2f)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(key) {
+                    detectTapGestures(
+                        onTap = { onTap() },
+                        onDoubleTap = { tap ->
+                            if (scale > 1f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                scale = DOUBLE_TAP_ZOOM
+                                offset = clamp((tap - center) * (1f - DOUBLE_TAP_ZOOM), DOUBLE_TAP_ZOOM)
+                            }
+                        },
+                    )
+                }
+                .pointerInput(key) {
+                    detectTransformGestures { centroid, pan, zoom, _ ->
+                        val next = (scale * zoom).coerceIn(1f, MAX_ZOOM)
+                        val z = next / scale
+                        // Keep the point under the fingers in place while zooming.
+                        offset = clamp((centroid - center) * (1f - z) + offset * z + pan, next)
+                        scale = next
+                    }
+                },
+        ) {
+            if (feed != null && aspect > 0f) {
+                val density = LocalDensity.current
+                VideoView(
+                    feed,
+                    Modifier
+                        .align(Alignment.Center)
+                        .size(with(density) { fitW.toDp() }, with(density) { fitH.toDp() })
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offset.x
+                            translationY = offset.y
+                        },
+                )
+            }
+            if (!active) {
+                Text(
+                    "Bildschirm von ${name.ifBlank { "Gast" }} wird geladen …",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Below the shared screen (portrait): our camera, then everybody else as small tiles. */
+@Composable
+private fun ParticipantRow(call: CallView, sessions: SessionManager, feeds: Map<String, VideoFeed>, local: LocalVideo?, modifier: Modifier) {
+    LazyRow(
+        modifier.fillMaxWidth().height(ROW_TILE),
+        contentPadding = PaddingValues(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (local != null && call.cameraOn) {
+            item(key = "self") {
+                LocalPreview(local, onSwitch = { sessions.callVideo.switchCamera() }, width = ROW_TILE, height = ROW_TILE)
+            }
+        }
+        items(call.participants, key = { it.sessionId }) { p ->
+            Tile(p, sessions, p.peerId?.takeIf { p.video }?.let { feeds[it] }, Modifier.size(ROW_TILE), compact = true)
+        }
+    }
+}
+
+@Composable
+private fun CallStatusSmall(call: CallView) {
+    val text = when (call.state) {
+        CallState.CONNECTED -> callDuration(call.startedAt)
+        CallState.RECONNECTING -> "Verbindung wird neu hergestellt …"
+        else -> ""
+    }
+    if (text.isNotEmpty()) Text(text, color = Color.White.copy(alpha = 0.75f), fontSize = 13.sp, maxLines = 1)
+}
+
+private val ROW_TILE = 84.dp
+private const val CONTROLS_HIDE_MS = 3_000L
+private const val DOUBLE_TAP_ZOOM = 2.5f
+private const val MAX_ZOOM = 6f
 
 /** "Aufnahme läuft" with a gently pulsing red dot; also while starting / after a failure. */
 @Composable
@@ -589,15 +893,14 @@ private fun endText(reason: EndReason?): String = when (reason) {
 // --- group tiles ----------------------------------------------------------------
 
 @Composable
-private fun Tile(p: CallParticipant, sessions: SessionManager, feed: VideoFeed?) {
+private fun Tile(p: CallParticipant, sessions: SessionManager, feed: VideoFeed?, modifier: Modifier = Modifier.aspectRatio(1f), compact: Boolean = false) {
     val dark = isSystemInDarkTheme()
     val image by produceState(sessions.cachedUserAvatar(p.userId, dark), p.userId) {
         if (value == null && p.userId.isNotEmpty()) value = sessions.userAvatar(p.userId, dark)
     }
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(if (compact) 12.dp else 16.dp)
     Box(
-        Modifier
-            .aspectRatio(1f)
+        modifier
             .clip(shape)
             .background(Color.White.copy(alpha = 0.1f))
             .then(if (p.speaking && !p.muted) Modifier.border(BorderStroke(3.dp, Speaking), shape) else Modifier)
@@ -606,23 +909,23 @@ private fun Tile(p: CallParticipant, sessions: SessionManager, feed: VideoFeed?)
         if (feed != null && feedActive(feed)) {
             VideoView(feed, Modifier.fillMaxSize())
             Text(
-                p.name, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
+                p.name, color = Color.White, fontSize = if (compact) 11.sp else 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.BottomStart).padding(if (compact) 4.dp else 8.dp)
                     .clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.45f))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             )
         } else {
             Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                TileAvatar(p.name, image, 64.dp)
-                Spacer(Modifier.height(8.dp))
-                Text(p.name, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
-                if (!p.connected) Text("Verbinde …", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                TileAvatar(p.name, image, if (compact) 40.dp else 64.dp)
+                Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
+                Text(p.name, color = Color.White, fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = if (compact) 4.dp else 8.dp))
+                if (!p.connected && !compact) Text("Verbinde …", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
             }
         }
         if (p.muted) {
             Icon(
                 TalkIcons.MicOff, "Stumm", tint = Color.White,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(20.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(if (compact) 4.dp else 8.dp).size(if (compact) 16.dp else 20.dp),
             )
         }
     }

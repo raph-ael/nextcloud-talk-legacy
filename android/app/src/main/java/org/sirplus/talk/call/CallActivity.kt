@@ -1,6 +1,7 @@
 package org.sirplus.talk.call
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -23,6 +24,7 @@ import org.sirplus.talk.MainActivity
 import org.sirplus.talk.TalkApplication
 import org.sirplus.talk.ui.CallScreen
 import org.sirplus.talk.ui.TalkTheme
+import org.sirplus.talk.ui.presenting
 import org.sirplus.talk.ui.rememberCallPermissions
 import uniffi.talk_ffi.CallState
 
@@ -57,6 +59,12 @@ class CallActivity : ComponentActivity() {
                 val routing by sessions.calls.audio.routing.collectAsState()
                 val withPermissions = rememberCallPermissions()
                 val current = call
+                // Rotating only while a shared screen is shown (the system's rotation
+                // lock applies), otherwise portrait (docs/calls.md "Mobil").
+                val rotate = current != null && presenting(current)
+                LaunchedEffect(rotate) {
+                    requestedOrientation = if (rotate) ActivityInfo.SCREEN_ORIENTATION_FULL_USER else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
 
                 // Accept from the notification: once the microphone is allowed.
                 LaunchedEffect(acceptRequested, current?.id) {
