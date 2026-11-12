@@ -94,6 +94,7 @@ pub(crate) enum Cmd {
     Decline,
     HangUp,
     Mute(bool),
+    Camera(bool),
     Media(MediaReport),
     NetworkChanged,
     /// Ringing: ask the server now whether it still rings (a delete push arrived).
@@ -164,12 +165,17 @@ struct Peer {
     bad_since: Option<Instant>,
     /// Mesh: we created the offer.
     offerer: bool,
+    /// MCU: simulcast layer requested with `selectStream` (web clients publish three).
+    substream: Option<u8>,
 }
 
 struct Other {
     user: CallUser,
     name: String,
     muted: bool,
+    /// They said "mute video" (camera off). Their camera counts as on with call flag 4
+    /// unless they said so (the web client announces its state to newcomers).
+    video_off: bool,
     speaking_until: Option<Instant>,
     connected: bool,
     peer: Option<Peer>,
@@ -182,6 +188,10 @@ struct Other {
 impl Other {
     fn has_media(&self) -> bool {
         self.user.in_call & 6 != 0
+    }
+
+    fn video(&self) -> bool {
+        self.user.in_call & 4 != 0 && !self.video_off
     }
 }
 
@@ -244,6 +254,7 @@ pub(crate) struct Actor {
     someone_since: Option<Instant>,
     media_trouble_since: Option<Instant>,
     muted: bool,
+    camera_on: bool,
     ended: Option<EndReason>,
 
     // recording
@@ -351,6 +362,7 @@ impl Actor {
             someone_since: None,
             media_trouble_since: None,
             muted: false,
+            camera_on: false,
             ended: None,
             recording_enabled: false,
             consent_config: 0,
@@ -642,7 +654,10 @@ impl Actor {
             let token = self.token();
             let silent = self.silent;
             let consent = self.consent_given;
-            match self.abortable(async move { client.join_call(&token, 3, silent, consent).await }).await? {
+            // In call | audio | video, like the web client with a camera: the flags say what
+            // we may send (others subscribe accordingly), `mute`/`unmute` "video" whether
+            // the camera is on right now.
+            match self.abortable(async move { client.join_call(&token, 7, silent, consent).await }).await? {
                 Ok(()) => break,
                 // The Nextcloud session got lost (cookie, expiry): join the room again.
                 Err(Error::NotFound | Error::Http { status: 404, .. }) if attempt == 0 => continue,
@@ -827,6 +842,7 @@ impl Actor {
         if self.mcu {
             self.check_publisher().await;
             self.check_subscribers().await;
+            self.check_streams().await;
         } else {
             self.check_mesh().await;
         }
@@ -965,6 +981,7 @@ impl Actor {
                     self.send(proto::mute(&t, m)).await;
                 }
             }
+            Cmd::Camera(on) => self.set_camera(on, true).await,
             Cmd::Media(r) => self.handle_media(r).await,
             Cmd::NetworkChanged => {
                 tracing::info!(call = %self.view.id, "network changed");
@@ -1186,6 +1203,7 @@ impl Actor {
                             user: u,
                             name,
                             muted: false,
+                            video_off: false,
                             speaking_until: None,
                             connected: false,
                             peer: None,
@@ -1200,10 +1218,11 @@ impl Actor {
                     if self.someone_since.is_none() {
                         self.someone_since = Some(Instant::now());
                     }
-                    // Tell the newcomer that we are muted.
+                    // Tell the newcomer that we are muted / our camera state.
                     if muted_now {
                         self.send(proto::mute(&sid, true)).await;
                     }
+                    self.send(proto::video(&sid, self.camera_on)).await;
                 }
             }
         }
@@ -1299,6 +1318,14 @@ impl Actor {
         let sid = data["sid"].as_str().unwrap_or_default().to_string();
         let payload = &data["payload"];
         let own = sender == self.session_id;
+        // Screen sharing is a second stream per session (not supported yet): its offers,
+        // answers and candidates must not touch the camera/mic connection of that person.
+        if data["roomType"].as_str() == Some("screen") {
+            if t == "offer" {
+                tracing::debug!(call = %self.view.id, session = sender, "ignoring screen share offer");
+            }
+            return;
+        }
         match t {
             "offer" if !own => {
                 let Some(sdp) = payload["sdp"].as_str() else { return };
@@ -1339,12 +1366,18 @@ impl Actor {
             }
             "hangup" if !own => self.remote_hangup(sender),
             "mute" | "unmute" => {
+                let Some(o) = self.others.get_mut(sender) else { return };
                 if payload["name"] == "audio" {
-                    if let Some(o) = self.others.get_mut(sender) {
-                        o.muted = t == "mute";
-                        if o.muted {
-                            o.speaking_until = None;
-                        }
+                    o.muted = t == "mute";
+                    if o.muted {
+                        o.speaking_until = None;
+                    }
+                } else if payload["name"] == "video" {
+                    o.video_off = t == "mute";
+                    // An unmute means they publish video even if the participants update
+                    // with flag 4 is still on its way.
+                    if !o.video_off {
+                        o.user.in_call |= 4;
                     }
                 }
             }
@@ -1370,6 +1403,7 @@ impl Actor {
                     },
                     name: self.session_names.get(sender).cloned().unwrap_or_default(),
                     muted: false,
+                    video_off: false,
                     speaking_until: None,
                     connected: false,
                     peer: None,
@@ -1406,6 +1440,7 @@ impl Actor {
             created: Instant::now(),
             bad_since: None,
             offerer: false,
+            substream: None,
         });
         other.connected = false;
         if let Some(old) = old {
@@ -1416,6 +1451,7 @@ impl Actor {
         self.media.create_peer(peer_id.clone(), kind, ice);
         if !mcu {
             self.media.set_microphone_enabled(!self.muted);
+            self.media.set_camera_enabled(self.camera_on);
         }
         self.media.set_remote_description(peer_id.clone(), SdpType::Offer, sdp);
         self.media.create_answer(peer_id);
@@ -1463,6 +1499,12 @@ impl Actor {
             MediaReport::PeerError { peer_id, message } => {
                 tracing::warn!(call = %self.view.id, peer = %peer_id, "media error: {message}");
                 self.peer_state(&peer_id, PeerState::Failed);
+            }
+            MediaReport::CameraState { on } => {
+                if !on && self.camera_on {
+                    tracing::info!(call = %self.view.id, "camera stopped by the platform");
+                    self.set_camera(false, false).await;
+                }
             }
             MediaReport::AudioLevel { peer_id, level } => {
                 if let Some(session) = self.peer_session.get(&peer_id) {
@@ -1527,6 +1569,7 @@ impl Actor {
         tracing::info!(call = %self.view.id, peer = %peer_id, "publishing");
         self.media.create_peer(peer_id.clone(), PeerKind::Publisher, self.ice_servers());
         self.media.set_microphone_enabled(!self.muted);
+        self.media.set_camera_enabled(self.camera_on);
         self.media.create_offer(peer_id, false);
     }
 
@@ -1660,13 +1703,66 @@ impl Actor {
                 created: now,
                 bad_since: None,
                 offerer: true,
+                substream: None,
             });
             o.requested_at = None;
             self.peer_session.insert(peer_id.clone(), s);
             self.media.create_peer(peer_id.clone(), PeerKind::Mesh, ice.clone());
             self.media.set_microphone_enabled(!self.muted);
+            self.media.set_camera_enabled(self.camera_on);
             self.media.create_offer(peer_id, false);
         }
+    }
+
+    /// Simulcast: ask the MCU for the layer that fits the number of videos on screen
+    /// (without a request it sends the smallest one).
+    async fn check_streams(&mut self) {
+        let videos = self.others.values().filter(|o| o.video()).count();
+        let want = match videos {
+            0..=2 => 2,
+            3..=6 => 1,
+            _ => 0,
+        };
+        let mut msgs = Vec::new();
+        for (session, o) in self.others.iter_mut() {
+            if !o.video() {
+                continue;
+            }
+            let Some(p) = o.peer.as_mut() else { continue };
+            if p.state == PeerState::Connected && p.substream != Some(want) {
+                p.substream = Some(want);
+                msgs.push(proto::select_stream(session, &p.sid, want));
+            }
+        }
+        for m in msgs {
+            self.send(m).await;
+        }
+    }
+
+    /// Camera on/off. `command`: from the user (tell the media engine); otherwise the
+    /// platform already stopped it.
+    async fn set_camera(&mut self, on: bool, command: bool) {
+        if matches!(self.view.state, CallState::Incoming | CallState::Ended) {
+            return;
+        }
+        if on == self.camera_on {
+            // Repeated command: let the platform retry (e.g. after replugging).
+            if command {
+                self.media.set_camera_enabled(on);
+            }
+            return;
+        }
+        tracing::info!(call = %self.view.id, on, "camera");
+        self.camera_on = on;
+        self.view.camera_on = on;
+        if command {
+            self.media.set_camera_enabled(on);
+        }
+        let targets: Vec<String> = self.others.keys().cloned().collect();
+        for t in targets {
+            self.send(proto::video(&t, on)).await;
+        }
+        self.emit();
     }
 
     fn close_peer(&mut self, peer_id: &str) {
@@ -1751,6 +1847,8 @@ impl Actor {
                 muted: o.muted,
                 speaking: !o.muted && o.speaking_until.is_some_and(|t| t > now),
                 connected: o.connected,
+                video: o.video(),
+                peer_id: o.peer.as_ref().map(|p| p.peer_id.clone()),
             })
             .collect();
         participants.sort_by(|a, b| a.name.cmp(&b.name).then(a.session_id.cmp(&b.session_id)));
@@ -1891,6 +1989,7 @@ impl MediaEngine for NoMedia {
     fn add_remote_candidate(&self, _: String, _: super::IceCandidate) {}
     fn close_peer(&self, _: String) {}
     fn set_microphone_enabled(&self, _: bool) {}
+    fn set_camera_enabled(&self, _: bool) {}
     fn start_audio(&self, _: String) {}
     fn stop_audio(&self, _: String) {}
 }

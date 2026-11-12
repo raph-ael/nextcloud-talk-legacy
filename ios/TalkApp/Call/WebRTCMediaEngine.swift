@@ -144,6 +144,9 @@ final class WebRTCMediaEngine: MediaEngine, @unchecked Sendable {
         track?.isEnabled = enabled
     }
 
+    /// Video (docs/calls.md "Video"): not implemented yet, the camera stays off.
+    func setCameraEnabled(enabled: Bool) {}
+
     func startAudio(callId: String) {
         DispatchQueue.main.async { [weak self] in self?.onStartAudio?(callId) }
     }

@@ -597,15 +597,15 @@ extension CallController {
         }
         let participants = group
             ? names.enumerated().map { i, n in
-                CallParticipant(sessionId: "s\(i)", userId: "", name: n, muted: i == 2, speaking: i == 1, connected: i != 4)
+                CallParticipant(sessionId: "s\(i)", userId: "", name: n, muted: i == 2, speaking: i == 1, connected: i != 4, video: false, peerId: nil)
             }
-            : [CallParticipant(sessionId: "s0", userId: "", name: room?.name ?? "Anna", muted: false, speaking: true, connected: true)]
+            : [CallParticipant(sessionId: "s0", userId: "", name: room?.name ?? "Anna", muted: false, speaking: true, connected: true, video: false, peerId: nil)]
         let view = CallView(
             id: UUID().uuidString, token: room?.token ?? "mock", roomName: group ? "Projektgruppe" : (room?.name ?? "Anna Berg"),
             isGroup: group, direction: state == .incoming ? .incoming : .outgoing, state: state,
             callerName: room?.name ?? "Anna Berg",
             startedAt: state == .connected ? Int64(Date().timeIntervalSince1970 * 1000) - 192_000 : nil,
-            muted: mode == "reconnecting", participants: participants,
+            muted: mode == "reconnecting", cameraOn: false, participants: participants,
             endReason: state == .ended ? .noAnswer : nil,
             recording: recording, canRecord: env["TALK_CALL_MOCK_CAN_RECORD"] == "1",
             recordingConsentPending: mode == "consent"

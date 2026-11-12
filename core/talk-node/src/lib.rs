@@ -167,6 +167,9 @@ impl core::MediaEngine for JsMedia {
     fn set_microphone_enabled(&self, enabled: bool) {
         self.send(serde_json::json!({"cmd": "setMicrophoneEnabled", "enabled": enabled}));
     }
+    fn set_camera_enabled(&self, enabled: bool) {
+        self.send(serde_json::json!({"cmd": "setCameraEnabled", "enabled": enabled}));
+    }
     fn start_audio(&self, call_id: String) {
         self.send(serde_json::json!({"cmd": "startAudio", "callId": call_id}));
     }
@@ -415,6 +418,12 @@ impl TalkSession {
         self.engine.set_call_muted(muted);
     }
 
+    /// Camera on/off in the running call (calls always start without camera).
+    #[napi]
+    pub fn set_camera_enabled(&self, on: bool) {
+        self.engine.set_camera_enabled(on);
+    }
+
     /// Starts recording the current call (only when `call.canRecord`). `video`: records
     /// the call view; otherwise audio only. Rejects with a readable message.
     #[napi]
@@ -453,7 +462,7 @@ impl TalkSession {
     /// `{ type: "localDescription", peerId, sdpType: "offer", sdp }`,
     /// `{ type: "localCandidate", peerId, candidate: { candidate, sdpMid, sdpMLineIndex } }`,
     /// `{ type: "peerState", peerId, state: "connected" }`, `{ type: "peerError", peerId, message }`,
-    /// `{ type: "audioLevel", peerId, level }`.
+    /// `{ type: "audioLevel", peerId, level }`, `{ type: "cameraState", on: false }`.
     #[napi]
     pub fn media_report(&self, #[napi(ts_arg_type = "any")] report: Value) -> Result<()> {
         let r: core::MediaReport =

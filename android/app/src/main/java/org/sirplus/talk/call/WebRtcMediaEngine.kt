@@ -160,6 +160,9 @@ class WebRtcMediaEngine(
         localTrack?.setEnabled(enabled)
     }
 
+    // Video (docs/calls.md "Video"): not implemented yet, the camera stays off.
+    override fun setCameraEnabled(enabled: Boolean) = Unit
+
     override fun startAudio(callId: String) {
         // Platform audio (mode, focus, routing, service) first, then the first peer
         // creates the factory with the audio device in the right mode.

@@ -193,6 +193,10 @@ export interface CallParticipant {
   speaking: boolean
   /** Their audio reaches us. */
   connected: boolean
+  /** Their camera is on: show the video of `peerId` while frames arrive, else the avatar. */
+  video: boolean
+  /** Media engine peer carrying their audio and video. */
+  peerId: string | null
 }
 
 export interface CallView {
@@ -208,6 +212,8 @@ export interface CallView {
   /** Unix ms when the call became `connected`. */
   startedAt: number | null
   muted: boolean
+  /** Our camera is on. */
+  cameraOn: boolean
   participants: CallParticipant[]
   endReason: EndReason | null
   /** Recording state, live from the server (also when somebody else started it). */
@@ -286,6 +292,7 @@ export type MediaCommand =
   | { cmd: 'addRemoteCandidate'; peerId: string; candidate: IceCandidateInit }
   | { cmd: 'closePeer'; peerId: string }
   | { cmd: 'setMicrophoneEnabled'; enabled: boolean }
+  | { cmd: 'setCameraEnabled'; enabled: boolean }
   | { cmd: 'startAudio'; callId: string }
   | { cmd: 'stopAudio'; callId: string }
 
@@ -296,6 +303,7 @@ export type MediaReport =
   | { type: 'peerState'; peerId: string; state: PeerState }
   | { type: 'peerError'; peerId: string; message: string }
   | { type: 'audioLevel'; peerId: string; level: number }
+  | { type: 'cameraState'; on: boolean }
 
 /** Events produced by the Electron main process itself. */
 export type AppEvent =

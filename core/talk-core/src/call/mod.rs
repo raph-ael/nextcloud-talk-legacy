@@ -111,6 +111,12 @@ pub struct CallParticipant {
     pub speaking: bool,
     /// Their audio reaches us (the subscriber connection is up).
     pub connected: bool,
+    /// Their camera is on (signaling `unmute`/`mute` "video", call flag 4). Show the video
+    /// of `peer_id` on their tile while frames arrive; the avatar otherwise.
+    pub video: bool,
+    /// The connection carrying their audio and video (`MediaEngine` peer id), if any:
+    /// remote video tracks of this peer belong on their tile.
+    pub peer_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -129,6 +135,9 @@ pub struct CallView {
     /// Unix ms when the call became `Connected` (drives the timer).
     pub started_at: Option<i64>,
     pub muted: bool,
+    /// Our camera is on (`set_camera_enabled`); off again when the platform reports
+    /// `CameraState { on: false }` (no camera, permission denied, unplugged).
+    pub camera_on: bool,
     pub participants: Vec<CallParticipant>,
     pub end_reason: Option<EndReason>,
     /// Recording state of the call (also when somebody else started it).
@@ -144,14 +153,15 @@ pub struct CallView {
 
 // --- media engine (implemented by the platform) --------------------------------------
 
-/// Kind of a peer connection. Audio only for now; video comes later as extra
-/// transceivers on the same connections.
+/// Kind of a peer connection. Every connection carries one audio and one video
+/// transceiver from the start; the camera is switched by attaching or removing the track
+/// (no renegotiation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PeerKind {
-    /// Our own audio to the MCU: send-only, we create the offer.
+    /// Our own audio and video to the MCU: send-only, we create the offer.
     Publisher,
-    /// Audio of one participant from the MCU: receive-only, the MCU offers.
+    /// Audio and video of one participant from the MCU: receive-only, the MCU offers.
     Subscriber,
     /// Without MCU: one send+receive connection per participant.
     Mesh,
@@ -197,7 +207,9 @@ pub type IceServerConfig = IceServer;
 /// - `create_offer`/`create_answer` also apply the description locally, then report it
 ///   with `on_local_description`.
 /// - Audio may only start after `start_audio` (iOS: after CallKit activated the audio
-///   session); `stop_audio` releases microphone and audio routing.
+///   session); `stop_audio` releases microphone, camera and audio routing.
+/// - Every peer gets a video transceiver next to the audio one (publisher send-only, mesh
+///   send+receive, subscriber as offered). Without camera no track is attached.
 pub trait MediaEngine: Send + Sync + 'static {
     fn create_peer(&self, peer_id: String, kind: PeerKind, ice_servers: Vec<IceServerConfig>);
     fn create_offer(&self, peer_id: String, ice_restart: bool);
@@ -207,6 +219,10 @@ pub trait MediaEngine: Send + Sync + 'static {
     fn close_peer(&self, peer_id: String);
     /// Mute without renegotiation (track enabled flag).
     fn set_microphone_enabled(&self, enabled: bool);
+    /// Opens (true) or closes the camera and attaches/removes its track on the video
+    /// sender of every publisher and mesh peer, without renegotiation. Repeated after every
+    /// new publisher/mesh peer: then only attach. Failures: `CameraState { on: false }`.
+    fn set_camera_enabled(&self, enabled: bool);
     fn start_audio(&self, call_id: String);
     fn stop_audio(&self, call_id: String);
 }
@@ -222,6 +238,9 @@ pub enum MediaReport {
     PeerError { peer_id: String, message: String },
     /// 0..1, about every 300 ms per receiving peer (and for the publisher: own mic).
     AudioLevel { peer_id: String, level: f32 },
+    /// The camera could not be opened or stopped on its own (unplugged, taken by another
+    /// app, permission denied): `on: false`. The platform shows the reason itself.
+    CameraState { on: bool },
 }
 
 mod actor;

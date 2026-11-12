@@ -156,6 +156,18 @@ enum Cmd {
         /// With --record: stop it after this many seconds (otherwise it runs until the call ends)
         #[arg(long)]
         record_stop_after: Option<u64>,
+        /// Camera on (Chrome's fake camera) once connected
+        #[arg(long)]
+        video: bool,
+        /// With --video: switch the camera on after this many seconds
+        #[arg(long, default_value_t = 0)]
+        video_after: u64,
+        /// With --video: switch the camera off again after this many seconds
+        #[arg(long)]
+        video_off_after: Option<u64>,
+        /// Fail unless video from the other side arrived
+        #[arg(long)]
+        expect_video: bool,
     },
     /// Finished call recordings waiting for us (notifications); --share/--dismiss one
     Recordings {
@@ -408,7 +420,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "call-bot")]
 async fn call_cmd(cli: &Cli) -> Result<()> {
-    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json, record, record_after, record_stop_after } = &cli.cmd else {
+    let Cmd::Call { token, answer, decline, silent, seconds, expect_audio, mute_after, rejoin_after, tone, ring_wait, connect_timeout, passive, json, record, record_after, record_stop_after, video, video_after, video_off_after, expect_video } = &cli.cmd else {
         unreachable!()
     };
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -447,6 +459,9 @@ async fn call_cmd(cli: &Cli) -> Result<()> {
         record: record.as_deref().map(|r| r == "video"),
         record_after: *record_after,
         record_stop_after: *record_stop_after,
+        video_after: video.then_some(*video_after),
+        video_off_after: *video_off_after,
+        expect_video: *expect_video,
     };
     let r = callbot::run(engine.clone(), sink, media, opts).await;
     engine.shutdown();

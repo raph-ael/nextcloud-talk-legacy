@@ -122,6 +122,7 @@ impl CallManager {
             recording: CallRecording::Off,
             can_record: false,
             recording_consent_pending: false,
+            camera_on: false,
         };
         self.launch(client, sink, me, view, silent, runtime)
     }
@@ -175,6 +176,7 @@ impl CallManager {
             recording: CallRecording::Off,
             can_record: false,
             recording_consent_pending: false,
+            camera_on: false,
         };
         self.launch(client, sink, me, view, true, runtime).is_ok()
     }
@@ -212,6 +214,10 @@ impl CallManager {
 
     pub(crate) fn set_muted(&self, muted: bool) {
         self.send(Cmd::Mute(muted));
+    }
+
+    pub(crate) fn set_camera(&self, on: bool) {
+        self.send(Cmd::Camera(on));
     }
 
     pub(crate) fn report(&self, report: MediaReport) {

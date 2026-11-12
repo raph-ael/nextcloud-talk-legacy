@@ -156,6 +156,10 @@ pub struct CallParticipant {
     pub muted: bool,
     pub speaking: bool,
     pub connected: bool,
+    /// Their camera is on: show the video of `peer_id` on their tile while frames arrive.
+    pub video: bool,
+    /// The connection carrying their audio and video (MediaEngine peer id).
+    pub peer_id: Option<String>,
 }
 
 #[derive(uniffi::Record, Clone)]
@@ -170,6 +174,8 @@ pub struct CallView {
     /// Unix ms when the call became connected (timer).
     pub started_at: Option<i64>,
     pub muted: bool,
+    /// Our camera is on (`set_camera_enabled`).
+    pub camera_on: bool,
     pub participants: Vec<CallParticipant>,
     pub end_reason: Option<EndReason>,
     /// Recording state (also when somebody else started it): show the indicator.
@@ -193,6 +199,7 @@ impl From<core::CallView> for CallView {
             caller_name: c.caller_name,
             started_at: c.started_at,
             muted: c.muted,
+            camera_on: c.camera_on,
             participants: c
                 .participants
                 .into_iter()
@@ -203,6 +210,8 @@ impl From<core::CallView> for CallView {
                     muted: p.muted,
                     speaking: p.speaking,
                     connected: p.connected,
+                    video: p.video,
+                    peer_id: p.peer_id,
                 })
                 .collect(),
             end_reason: c.end_reason.map(Into::into),
@@ -284,6 +293,9 @@ pub trait MediaEngine: Send + Sync {
     fn add_remote_candidate(&self, peer_id: String, candidate: CallIceCandidate);
     fn close_peer(&self, peer_id: String);
     fn set_microphone_enabled(&self, enabled: bool);
+    /// Opens/closes the camera and attaches/removes its track on every publisher/mesh
+    /// video sender (no renegotiation). Repeated after each new such peer.
+    fn set_camera_enabled(&self, enabled: bool);
     fn start_audio(&self, call_id: String);
     fn stop_audio(&self, call_id: String);
 }
@@ -335,6 +347,9 @@ impl core::MediaEngine for ForeignMedia {
     }
     fn set_microphone_enabled(&self, enabled: bool) {
         self.0.set_microphone_enabled(enabled);
+    }
+    fn set_camera_enabled(&self, enabled: bool) {
+        self.0.set_camera_enabled(enabled);
     }
     fn start_audio(&self, call_id: String) {
         self.0.start_audio(call_id);
@@ -391,6 +406,11 @@ impl TalkSession {
 
     pub fn set_call_muted(&self, muted: bool) {
         self.engine.set_call_muted(muted);
+    }
+
+    /// Camera on/off in the running call (calls always start without camera).
+    pub fn set_camera_enabled(&self, on: bool) {
+        self.engine.set_camera_enabled(on);
     }
 
     // Recording (docs/calls.md "Aufnahme").
@@ -462,5 +482,10 @@ impl TalkSession {
     pub fn media_audio_level(&self, peer_id: String, level: f32) {
         self.engine
             .media_report(core::MediaReport::AudioLevel { peer_id, level });
+    }
+
+    /// The camera stopped or could not be opened (`on: false`); the app shows why.
+    pub fn media_camera_state(&self, on: bool) {
+        self.engine.media_report(core::MediaReport::CameraState { on });
     }
 }

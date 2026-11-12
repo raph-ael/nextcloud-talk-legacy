@@ -1,5 +1,5 @@
 //! Message shapes of the standalone signaling server (nextcloud-spreed-signaling, API v1).
-//! Only what audio calls need. Field names follow the server's Go structs.
+//! Only what audio/video calls need (no screen sharing yet). Field names follow the server's Go structs.
 
 use serde_json::{Value, json};
 
@@ -58,8 +58,10 @@ pub(crate) fn sdp(to: &str, sid: &str, sdp_type: SdpType, sdp: &str, nick: &str)
         "payload": {"type": t, "sdp": sdp, "nick": nick}
     });
     if sdp_type == SdpType::Offer {
-        // Only evaluated for publisher offers (`offer-codecs`): Opus for audio.
+        // Only evaluated for publisher offers (`offer-codecs`): Opus and VP8, which every
+        // client (web, official apps, ours) decodes.
         data["audiocodec"] = json!("opus");
+        data["videocodec"] = json!("vp8");
     }
     to_session(to, data)
 }
@@ -87,12 +89,33 @@ pub(crate) fn request_offer(to: &str, sid: Option<&str>) -> Value {
 }
 
 pub(crate) fn mute(to: &str, muted: bool) -> Value {
+    mute_track(to, "audio", muted)
+}
+
+/// Camera off (`muted`) or on, as the web client sends it.
+pub(crate) fn video(to: &str, on: bool) -> Value {
+    mute_track(to, "video", !on)
+}
+
+fn mute_track(to: &str, name: &str, muted: bool) -> Value {
     to_session(
         to,
         json!({
             "type": if muted { "mute" } else { "unmute" },
             "roomType": ROOM_TYPE,
-            "payload": {"name": "audio"}
+            "payload": {"name": name}
+        }),
+    )
+}
+
+/// Simulcast layer of a subscription (0 smallest … 2 full size); the HPB forwards it to
+/// the MCU. Publishers without simulcast ignore it.
+pub(crate) fn select_stream(to: &str, sid: &str, substream: u8) -> Value {
+    to_session(
+        to,
+        json!({
+            "to": to, "sid": sid, "roomType": ROOM_TYPE, "type": "selectStream",
+            "payload": {"substream": substream, "temporal": 2}
         }),
     )
 }
@@ -196,6 +219,18 @@ mod tests {
         assert_eq!(users[0].actor_id, "bob");
         assert_eq!(users[0].in_call, 3);
         assert!(users[1].internal);
+    }
+
+    #[test]
+    fn video_and_select_stream() {
+        let off = video("s1", false);
+        assert_eq!(off["message"]["data"]["type"], "mute");
+        assert_eq!(off["message"]["data"]["payload"]["name"], "video");
+        assert_eq!(video("s1", true)["message"]["data"]["type"], "unmute");
+        let sel = select_stream("s1", "123", 2);
+        assert_eq!(sel["message"]["recipient"]["sessionid"], "s1");
+        assert_eq!(sel["message"]["data"]["type"], "selectStream");
+        assert_eq!(sel["message"]["data"]["payload"]["substream"], 2);
     }
 
     #[test]

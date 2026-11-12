@@ -42,11 +42,15 @@ enum PeerCmd {
     Close,
 }
 
-/// Received audio per peer (for the test verdict).
+/// Received audio and video per peer (for the test verdict).
 #[derive(Default, Clone, Debug)]
 pub struct RxStats {
     pub packets: u64,
     pub max_level: f32,
+    /// Decoded video frames and their size (headless Chrome only).
+    pub frames: u64,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub struct BotMedia {
@@ -143,6 +147,8 @@ impl MediaEngine for BotMedia {
     fn set_microphone_enabled(&self, enabled: bool) {
         self.mic_enabled.store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
+    /// No camera in the webrtc-rs bot (use the Chrome bot for video).
+    fn set_camera_enabled(&self, _enabled: bool) {}
     fn start_audio(&self, call_id: String) {
         tracing::info!(call = %call_id, "bot: audio on");
     }
@@ -502,6 +508,11 @@ pub struct CallOpts {
     pub record: Option<bool>,
     pub record_after: u64,
     pub record_stop_after: Option<u64>,
+    /// Switch the camera on after this many seconds (connected).
+    pub video_after: Option<u64>,
+    /// … and off again after this many seconds.
+    pub video_off_after: Option<u64>,
+    pub expect_video: bool,
 }
 
 fn own_sessions(peers: &[serde_json::Value], me: &str) -> Vec<String> {
@@ -602,11 +613,20 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     let mut recording = None;
     let mut record_started = false;
     let mut record_stopped = false;
+    let mut camera = (false, false);
+    let mut videos: Vec<(String, bool)> = Vec::new();
     while started.elapsed() < Duration::from_secs(o.seconds) {
         if let Some(v) = state(&sink) {
             if v.state == CallState::Ended {
                 eprintln!("Anruf von der Gegenseite beendet: {:?}", v.end_reason);
                 break;
+            }
+            let now: Vec<(String, bool)> = v.participants.iter().map(|p| (p.name.clone(), p.video)).collect();
+            if now != videos {
+                for (name, on) in &now {
+                    eprintln!("Video von {}: {}", if name.is_empty() { "?" } else { name }, if *on { "an" } else { "aus" });
+                }
+                videos = now;
             }
             if recording != Some(v.recording) {
                 eprintln!("Aufnahme: {:?} (darf aufnehmen: {})", v.recording, v.can_record);
@@ -640,6 +660,20 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
                 rejoined = true;
             }
         }
+        if let Some(a) = o.video_after {
+            if !camera.0 && started.elapsed() > Duration::from_secs(a) {
+                camera.0 = true;
+                eprintln!("Kamera an");
+                engine.set_camera_enabled(true);
+            }
+        }
+        if let Some(a) = o.video_off_after {
+            if camera.0 && !camera.1 && started.elapsed() > Duration::from_secs(a) {
+                camera.1 = true;
+                eprintln!("Kamera aus");
+                engine.set_camera_enabled(false);
+            }
+        }
         if let Some(m) = o.mute_after {
             if !muted && started.elapsed() > Duration::from_secs(m) {
                 engine.set_call_muted(true);
@@ -650,10 +684,17 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     }
     let rx: HashMap<String, RxStats> = media.stats().await;
     let mut ok = false;
+    let mut video_ok = false;
     for (peer, s) in &rx {
-        eprintln!("empfangen {peer}: {} Pakete, Pegel max {:.3}", s.packets, s.max_level);
+        eprintln!(
+            "empfangen {peer}: {} Pakete, Pegel max {:.3}, {} Videobilder {}x{}",
+            s.packets, s.max_level, s.frames, s.width, s.height
+        );
         if s.packets > 50 && s.max_level > 0.05 {
             ok = true;
+        }
+        if s.frames > 30 && s.width > 0 {
+            video_ok = true;
         }
     }
     if state(&sink).is_some_and(|v| v.state != CallState::Ended) {
@@ -670,6 +711,9 @@ pub async fn run(engine: Arc<Engine>, sink: Arc<CallSink>, media: Media, o: Call
     }
     if o.expect_audio && !ok {
         bail!("kein Ton empfangen");
+    }
+    if o.expect_video && !video_ok {
+        bail!("kein Video empfangen");
     }
     eprintln!("ok");
     Ok(())

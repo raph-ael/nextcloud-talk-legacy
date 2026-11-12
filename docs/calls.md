@@ -1,9 +1,9 @@
 # Anrufe – Vertrag zwischen Kern und Plattformen
 
-Nur Audio, 1:1 und Gruppen, über das Talk High Performance Backend (HPB,
-`nextcloud-spreed-signaling` ≥ 2.1) mit Janus-MCU, ohne MCU als Mesh-Fallback. Video kommt
-später: dieselben Peer-Verbindungen bekommen dann zusätzliche Transceiver, die UI hat schon
-einen Platz für den Video-Knopf.
+Audio und Video (Kamera), 1:1 und Gruppen, über das Talk High Performance Backend (HPB,
+`nextcloud-spreed-signaling` ≥ 2.1) mit Janus-MCU, ohne MCU als Mesh-Fallback. Jeder Anruf
+startet mit Ton, die Kamera schaltet man im Anruf zu (Abschnitt „Video“).
+Bildschirmfreigabe gibt es noch nicht.
 
 **Aufteilung:**
 - **Kern** (`core/talk-core/src/call/`): REST, Signaling-Websocket, Anruf-Zustandsautomat,
@@ -52,6 +52,7 @@ Anrufansicht. Neue Anrufe sind sofort möglich.
 - `name`, `userId`: Avatar über `userAvatar(userId, dark)`; bei 1:1 reicht der
   Raum-Avatar.
 - `muted`, `speaking` (Rahmen um die Kachel).
+- `video`, `peerId`: siehe „Video“.
 - `connected`: Ton dieses Teilnehmers kommt an. Ist es `false`, die Kachel abgeblendet
   mit „Verbinde …“ zeigen.
 
@@ -107,6 +108,7 @@ Klingeln funktioniert auch ohne `setMediaEngine`. Annehmen ohne MediaEngine ende
 | `hangUp()` | auflegen / Wählen abbrechen |
 | `hangUpAndWait(timeoutMs)` | auflegen und warten, bis der Server es weiß (vor dem Beenden der App; `shutdown` legt nur best effort auf) |
 | `setCallMuted(bool)` | stumm |
+| `setCameraEnabled(bool)` | Kamera an/aus (Abschnitt „Video“) |
 | `currentCall()` | aktueller `CallView` oder nichts |
 | `userAvatar(userId, dark)` | Avatar für Gruppen-Kacheln |
 | `networkChanged()` | gibt es schon; bei jedem Netzwechsel aufrufen (sofortiger Reconnect, ICE-Restart) |
@@ -160,6 +162,83 @@ unsichtbar bei. Der Kern zeigt nur den Stand an und startet bzw. stoppt die Aufn
 - Läuft die App, zusätzlich eine leise Systembenachrichtigung.
 - Der Kern holt die Hinweise beim Start, bei jeder notify_push-Benachrichtigung und nach einer eigenen Aufnahme 15 min lang alle 30 s.
 
+## Video
+
+**Grundprinzip:** Jede Peer-Verbindung hat von Anfang an einen Audio- **und** einen
+Video-Transceiver. Die Kamera schaltet man, indem man ihren Track an den Video-Sender hängt
+(`replaceTrack`) bzw. abnimmt. Es gibt keine Neuverhandlung, also kein SDP und keine
+MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
+
+**Kern ↔ Server:**
+- Wir treten immer mit Flags 7 bei (im Anruf | Audio | Video), wie der Web-Client mit
+  Kamera. Die anderen abonnieren uns dann mit Video.
+- Ob die Kamera gerade an ist, sagt Signaling `unmute`/`mute` mit `payload.name: "video"`.
+  Es geht an alle und an jeden Neuen. Das Web zeigt daraufhin Video bzw. Avatar.
+- Abonnements fragen beim MCU per `selectStream` die passende Simulcast-Stufe an, denn
+  Web-Clients senden drei: bis 2 Videos die volle, bis 6 die mittlere, sonst die kleinste.
+- Offers von `roomType: "screen"` (Bildschirmfreigabe) werden ignoriert.
+
+**`CallView`:**
+- `cameraOn`: unsere Kamera ist an.
+
+**`CallParticipant`:**
+- `video`: Die Kamera der Person ist an. Das gilt bei Flag 4, solange sie kein
+  `mute video` geschickt hat.
+- `peerId`: die Verbindung (MediaEngine-Peer), die ihren Ton und ihr Video trägt.
+  Video-Tracks dieses Peers gehören auf ihre Kachel.
+
+**Plattform:**
+- `setCameraEnabled(true)` (MediaEngine) öffnet die Kamera und hängt den Track an den
+  Video-Sender jedes Publisher- und Mesh-Peers. `false` nimmt ihn ab und stoppt die Kamera,
+  die Kamera-LED geht aus.
+- Der Kern ruft es nach jedem neuen Publisher- bzw. Mesh-Peer erneut auf. Ist die Kamera
+  schon offen, nur anhängen.
+- Fehler: Gibt es keine Kamera, ist sie verweigert, abgezogen oder von einer anderen App
+  belegt, meldet die Plattform `mediaCameraState(false)`. Der Kern setzt dann `cameraOn`
+  zurück und sagt es den anderen. Den Grund zeigt die Plattform selbst als Hinweis.
+- `stopAudio` gibt auch die Kamera frei.
+- Video der anderen anzeigen, solange `video` gesetzt ist **und** Bilder ankommen. Sonst den
+  Avatar zeigen, z. B. wenn der Track `muted` ist oder seit über 2 s keine Frames kamen.
+
+**Qualität:**
+- VP8 (`videocodec` in der Publisher-Offer).
+- Desktop 1280×720@30, höchstens 1,5 Mbit/s.
+- Mobil 640×480@24, höchstens 600 kbit/s, schwache Geräte 480×360.
+- `degradationPreference: balanced`.
+
+**Oberfläche (alle Plattformen gleich):**
+- **Steuerleiste:** Ausgabe · **Kamera** · Mehr · Stumm · Auflegen.
+  - Der Kamera-Knopf ist durchgestrichen, solange die Kamera aus ist.
+  - Bezeichnung „Kamera einschalten“ / „Kamera ausschalten“.
+  - Desktop-Kürzel Strg/⌘+Shift+V.
+- **Jeder Anruf startet ohne Kamera**, auch beim Annehmen. Es gibt keinen eigenen
+  „Videoanruf“.
+- **1:1:** Das Video der Gegenseite füllt die Bühne, ohne Video der Avatar wie bisher.
+- **Gruppe:** In der Kachel das Video statt des Avatars, Sprech-Rahmen und Stumm-Symbol
+  bleiben.
+- **Eigene Vorschau:** Eine kleine Kachel unten rechts, gespiegelt, nur solange die eigene
+  Kamera an ist. Am Handy gibt es dort einen Knopf „Kamera wechseln“ (vorn/hinten).
+- **Mobil:**
+  - Kamera an → ohne Headset auf den Lautsprecher, kein Näherungssensor, der Bildschirm
+    bleibt an.
+  - Verlässt man die Anrufansicht (minimiert, andere App), wird die Kamera pausiert. Für
+    die anderen ist das „Video aus“.
+  - Zurück in der Ansicht läuft sie weiter. Das ist kein Kamera-Foreground-Service, und es
+    gibt keinen Konflikt mit der Chat-Kamera.
+- **Desktop-Geräte wie bei Meet:**
+  - Alle `getUserMedia`-Aufrufe laufen über einen seriellen Gerätemanager.
+  - Folgt man dem Systemstandard, schaltet ein neues Headset sofort um. Ein Hinweis zeigt
+    „Mikrofon: …“ / „Lautsprecher: …“.
+  - Wird ein gewähltes Gerät abgezogen, geht es zurück zum Standard. Kommt es wieder,
+    zurück zum gewählten Gerät.
+  - Ein beendeter Track (Ruhezustand, USB) wird mit Backoff neu geöffnet. Danach kommt der
+    Hinweis mit „Erneut versuchen“.
+  - Wird die Kamera abgezogen, geht sie aus. Kommt sie binnen 60 s wieder, geht sie wieder
+    an.
+  - Das Gerätemenü hat Mikrofon (mit Pegel), Lautsprecher (mit Testton) und Kamera (mit
+    Vorschau).
+  - Vollbild per Knopf und Doppelklick.
+
 ## MediaEngine (Plattform implementiert, Kern ruft auf)
 
 ```
@@ -170,6 +249,7 @@ setRemoteDescription(peerId, sdpType, sdp)  sdpType: offer | answer
 addRemoteCandidate(peerId, candidate)       { candidate, sdpMid, sdpMLineIndex }
 closePeer(peerId)
 setMicrophoneEnabled(enabled)
+setCameraEnabled(enabled)
 startAudio(callId)
 stopAudio(callId)
 ```
@@ -181,10 +261,11 @@ stopAudio(callId)
 2. Eine `peerId` wird nie wiederverwendet. Befehle für unbekannte oder geschlossene IDs
    ignorieren und für sie nie etwas melden.
 3. **`kind`:**
-   - `publisher`: nur Senden (`sendonly`), eigenes Mikrofon.
+   - `publisher`: nur Senden (`sendonly`), eigenes Mikrofon und eigene Kamera.
    - `subscriber`: nur Empfangen (`recvonly`), ein Teilnehmer vom MCU.
    - `mesh`: Senden und Empfangen zu einem Teilnehmer (ohne MCU).
-   - Nur Audio, Opus. Kein Video-Transceiver, solange es Video noch nicht gibt.
+   - Immer ein Audio- (Opus) und ein Video-Transceiver (VP8), auch ohne Kamera (siehe
+     „Video“).
 4. `iceServers` direkt in die `RTCConfiguration` übernehmen (`urls`, `username`,
    `credential`). Bundle-Policy `max-bundle`, RTCP-Mux `require`, Continual Gathering an
    (Android/iOS), damit der Kern bei Netzwechseln nachziehen kann.
@@ -219,12 +300,13 @@ stopAudio(callId)
   iceRestart }`, `{ cmd: "setRemoteDescription", peerId, sdpType, sdp }`,
   `{ cmd: "addRemoteCandidate", peerId, candidate: { candidate, sdpMid, sdpMLineIndex } }`,
   `{ cmd: "closePeer", peerId }`, `{ cmd: "setMicrophoneEnabled", enabled }`,
-  `{ cmd: "startAudio", callId }`, `{ cmd: "stopAudio", callId }`.
+  `{ cmd: "setCameraEnabled", enabled }`, `{ cmd: "startAudio", callId }`,
+  `{ cmd: "stopAudio", callId }`.
 - Main leitet sie per IPC in derselben Reihenfolge an den Renderer weiter.
 - Meldungen gehen über `mediaReport(json)` zurück: `{ type: "localDescription", peerId,
   sdpType, sdp }`, `{ type: "localCandidate", peerId, candidate }`, `{ type: "peerState",
   peerId, state }`, `{ type: "peerError", peerId, message }`, `{ type: "audioLevel",
-  peerId, level }`.
+  peerId, level }`, `{ type: "cameraState", on: false }`.
 
 ## Ablauf (zur Orientierung, macht alles der Kern)
 
@@ -277,6 +359,10 @@ Tray bzw. Menüleiste damit es klingeln kann.
 
 - **Bot-Gegenstelle:** `talk-cli call …` (Feature `call-bot`) ruft an, nimmt an, sendet
   einen Ton und prüft, ob Ton ankommt.
+  - Video: `--video` schaltet die Fake-Kamera von Chrome zu (`--video-after N`,
+    `--video-off-after N`).
+  - `--expect-video` verlangt angekommene Bilder.
+  - Das Log zeigt „Video von …: an/aus“ für die Gegenseite.
 - **Testräume:**
   - **1:1 Bot A ↔ Bot B:** `CALL_TEST_ROOM_TOKEN` in `.env`. Klingeln ist erlaubt.
   - **Gruppe** im Testraum (`TEST_ROOM_TOKEN`) **nur mit `silent=true`**.

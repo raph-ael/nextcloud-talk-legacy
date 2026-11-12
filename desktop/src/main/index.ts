@@ -867,7 +867,7 @@ function registerIpc(): void {
   ipcMain.on('talk:mediaReport', (e, report: MediaReport) => {
     if (e.sender !== win?.webContents || !session) return
     // Reports of peers lost with an earlier renderer must not reach the core.
-    if (!openPeers.has(report.peerId)) return
+    if ('peerId' in report && !openPeers.has(report.peerId)) return
     try {
       session.mediaReport(report)
     } catch (err) {

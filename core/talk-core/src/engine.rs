@@ -411,6 +411,11 @@ impl Engine {
         self.calls.set_muted(muted);
     }
 
+    /// Camera on/off in the running call (ignored while ringing; calls start without).
+    pub fn set_camera_enabled(&self, on: bool) {
+        self.calls.set_camera(on);
+    }
+
     /// The user agreed to being recorded (answer to `CallView::recording_consent_pending`);
     /// the core then joins the call.
     pub fn consent_to_recording(&self) {

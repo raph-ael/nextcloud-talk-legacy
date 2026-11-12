@@ -1,6 +1,7 @@
 //! Media engine on headless Chrome (real libwebrtc, like the apps): the core's commands
 //! go to a page over the DevTools protocol, the page reports back through a binding.
-//! The microphone is a generated sine tone (`--use-file-for-fake-audio-capture`).
+//! The microphone is a generated sine tone (`--use-file-for-fake-audio-capture`), the
+//! camera Chrome's fake device (moving test pattern).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use crate::callbot::RxStats;
 
 const PAGE_JS: &str = r#"
 const peers = new Map(), queues = new Map(), stats = {};
-let mic = null, micEnabled = true;
+let mic = null, micEnabled = true, cam = null;
 window.talkStats = stats;
 const report = (o) => window.talkReport(JSON.stringify(o));
 async function getMic() {
@@ -40,10 +41,13 @@ window.talkCmd = (c) => {
     pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate)
       report({type: 'localCandidate', peerId: id, candidate: {candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex ?? 0}}); };
     pc.onconnectionstatechange = () => report({type: 'peerState', peerId: id, state: pc.connectionState});
-    pc.ontrack = (e) => { const a = new Audio(); a.srcObject = e.streams[0] || new MediaStream([e.track]); a.play().catch(() => {}); };
+    pc.ontrack = (e) => { if (e.track.kind !== 'audio') return; const a = new Audio(); a.srcObject = e.streams[0] || new MediaStream([e.track]); a.play().catch(() => {}); };
     if (c.kind !== 'subscriber') {
       const m = await getMic(); const t = m.getAudioTracks()[0]; t.enabled = micEnabled;
-      pc.addTransceiver(t, {direction: c.kind === 'publisher' ? 'sendonly' : 'sendrecv', streams: [m]});
+      const dir = c.kind === 'publisher' ? 'sendonly' : 'sendrecv';
+      pc.addTransceiver(t, {direction: dir, streams: [m]});
+      // Always a video transceiver; the camera track is attached when switched on.
+      pc.addTransceiver(cam ? cam.getVideoTracks()[0] : 'video', {direction: dir, streams: [m]});
     }
   }); break;
   case 'createOffer': enqueue(id, async () => { const pc = peers.get(id); if (!pc) return;
@@ -56,13 +60,29 @@ window.talkCmd = (c) => {
   case 'addRemoteCandidate': enqueue(id, async () => { const pc = peers.get(id); if (pc) await pc.addIceCandidate(c.candidate).catch((e) => console.log('candidate', e)); }); break;
   case 'closePeer': enqueue(id, async () => { const pc = peers.get(id); if (pc) { pc.close(); peers.delete(id); } }); break;
   case 'setMicrophoneEnabled': micEnabled = c.enabled; if (mic) mic.getAudioTracks().forEach((t) => t.enabled = c.enabled); break;
-  case 'stopAudio': if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; } break;
+  case 'setCameraEnabled': (async () => {
+    try {
+      if (c.enabled && !cam) cam = await navigator.mediaDevices.getUserMedia({video: {width: 640, height: 480, frameRate: 24}});
+      if (!c.enabled && cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; }
+      const track = cam ? cam.getVideoTracks()[0] : null;
+      for (const pc of peers.values()) for (const tr of pc.getTransceivers())
+        if (tr.receiver.track.kind === 'video' && (tr.direction === 'sendonly' || tr.direction === 'sendrecv')) await tr.sender.replaceTrack(track);
+    } catch (e) { console.log('camera', e); report({type: 'cameraState', on: false}); }
+  })(); break;
+  case 'stopAudio':
+    if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
+    if (cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; }
+    break;
   }
 };
 setInterval(async () => {
   for (const [id, pc] of peers) {
     const r = await pc.getStats();
     r.forEach((s) => {
+      if (s.type === 'inbound-rtp' && s.kind === 'video') {
+        const st = stats[id] || (stats[id] = {packets: 0, max: 0});
+        st.frames = s.framesDecoded || 0; st.width = s.frameWidth || 0; st.height = s.frameHeight || 0;
+      }
       if (s.type === 'inbound-rtp' && s.kind === 'audio') {
         const st = stats[id] || (stats[id] = {packets: 0, max: 0});
         st.packets = s.packetsReceived || 0;
@@ -282,6 +302,9 @@ impl ChromeMedia {
                             RxStats {
                                 packets: s["packets"].as_u64().unwrap_or(0),
                                 max_level: s["max"].as_f64().unwrap_or(0.0) as f32,
+                                frames: s["frames"].as_u64().unwrap_or(0),
+                                width: s["width"].as_u64().unwrap_or(0) as u32,
+                                height: s["height"].as_u64().unwrap_or(0) as u32,
                             },
                         )
                     })
@@ -312,6 +335,9 @@ impl MediaEngine for ChromeMedia {
     }
     fn set_microphone_enabled(&self, enabled: bool) {
         self.cmd(json!({"cmd": "setMicrophoneEnabled", "enabled": enabled}));
+    }
+    fn set_camera_enabled(&self, enabled: bool) {
+        self.cmd(json!({"cmd": "setCameraEnabled", "enabled": enabled}));
     }
     fn start_audio(&self, _call_id: String) {}
     fn stop_audio(&self, _call_id: String) {

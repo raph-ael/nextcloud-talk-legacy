@@ -118,6 +118,9 @@ function handle(c: MediaCommand): void {
       micEnabled = c.enabled
       if (mic) mic.enabled = c.enabled
       return
+    case 'setCameraEnabled':
+      // Video (docs/calls.md "Video"): not implemented yet, the camera stays off.
+      return
     case 'startAudio':
       return startAudio(c.callId)
     case 'stopAudio':
