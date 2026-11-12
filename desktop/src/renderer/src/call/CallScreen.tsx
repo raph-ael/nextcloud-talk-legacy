@@ -688,12 +688,13 @@ function MicLevel() {
  */
 function CameraPreview() {
   const media = useSyncExternalStore(subscribeMedia, mediaState)
-  const [wanted, setWanted] = useState(false)
+  /** Clicks on „Vorschau anzeigen“ (0: none yet); each one tries again after an error. */
+  const [wanted, setWanted] = useState(0)
   const [preview, setPreview] = useState<MediaStream | null>(null)
   const [error, setError] = useState<string | null>(null)
   const running = media.camera
   useEffect(() => {
-    if (running || !wanted) return
+    if (running || wanted === 0) return
     let live = true
     let stream: MediaStream | null = null
     setError(null)
@@ -717,7 +718,7 @@ function CameraPreview() {
     return (
       <>
         {error && <div className="call-menu-error">{error}</div>}
-        <button className="call-menu-action" onClick={() => setWanted(true)} disabled={wanted && !error}>
+        <button className="call-menu-action" onClick={() => setWanted((n) => n + 1)} disabled={wanted > 0 && !error}>
           <CameraIcon size={16} />
           Vorschau anzeigen
         </button>
