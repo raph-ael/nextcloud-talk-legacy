@@ -602,10 +602,12 @@ private final class Peer: NSObject, RTCPeerConnectionDelegate, @unchecked Sendab
 extension WebRTCMediaEngine {
     nonisolated(unsafe) private static var mockCapturers: [FakeVideoCapturer] = []
 
-    /// A moving test picture for `TALK_CALL_MOCK` (no call, no peers).
-    static func mockTrack(front: Bool) -> RTCVideoTrack {
+    /// A moving test picture for `TALK_CALL_MOCK` (no call, no peers); `screen`: a shared
+    /// screen (landscape page) instead of a camera.
+    static func mockTrack(front: Bool, screen: Bool = false) -> RTCVideoTrack {
         let source = factory.videoSource()
         let capturer = FakeVideoCapturer(delegate: source)
+        capturer.screen = screen
         capturer.start(front: front)
         mockCapturers.append(capturer)
         return factory.videoTrack(with: source, trackId: "mock-\(mockCapturers.count)")

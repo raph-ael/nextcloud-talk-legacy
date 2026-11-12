@@ -66,8 +66,11 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # Landscape only while a shared screen is shown in a call (AppDelegate).
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # Only standard HTTPS/TLS → exempt from export compliance documentation.
         ITSAppUsesNonExemptEncryption: false
         TalkPushProxyURL: $(TALK_PUSH_PROXY_URL)

@@ -96,6 +96,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    /// Portrait, except while the call screen shows a shared screen (docs/calls.md
+    /// "Bildschirmfreigabe"); the system rotation lock still applies.
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        CallController.shared.allowsLandscape ? .allButUpsideDown : .portrait
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Push.shared.apnsToken(deviceToken)
     }

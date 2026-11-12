@@ -165,14 +165,23 @@ final class CallVideo {
     private(set) var remote: [String: RTCVideoTrack] = [:]
     /// Peers whose video delivered frames within the last 2 s.
     private(set) var live: Set<String> = []
+    /// Peers whose video delivered at least one frame. A shared screen sends frames only
+    /// when its content changes, so it stays on the stage without the 2 s rule.
+    private(set) var seen: Set<String> = []
 
     @ObservationIgnored private var watches: [String: FrameWatch] = [:]
     @ObservationIgnored private var timer: Timer?
 
-    /// The video to show for a participant: camera on (`video`) and frames arriving.
+    /// The camera video to show for a participant: camera on (`video`) and frames arriving.
     func track(for p: CallParticipant) -> RTCVideoTrack? {
         guard p.video, let id = p.peerId, live.contains(id) else { return nil }
         return remote[id]
+    }
+
+    /// The video of a shared screen (`CallView.screens`), once it delivered a frame.
+    func screenTrack(_ s: CallScreen) -> RTCVideoTrack? {
+        guard seen.contains(s.peerId) else { return nil }
+        return remote[s.peerId]
     }
 
     func setLocal(_ track: RTCVideoTrack?, front: Bool) {
@@ -194,6 +203,7 @@ final class CallVideo {
             t.remove(w)
         }
         live.remove(peerId)
+        seen.remove(peerId)
         if remote.isEmpty { stopTimer() }
     }
 
@@ -220,6 +230,8 @@ final class CallVideo {
         let now = CACurrentMediaTime()
         var next = Set<String>()
         for (id, w) in watches where now - w.lastFrame < 2 { next.insert(id) }
+        let started = next.subtracting(seen)
+        if !started.isEmpty { seen.formUnion(started) }
         guard next != live else { return }
         for id in next.subtracting(live) {
             let s = watches[id]?.frameSize ?? .zero

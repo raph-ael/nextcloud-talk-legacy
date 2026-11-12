@@ -15,7 +15,10 @@ final class CallController: NSObject {
 
     /// The call as shown; after `ended` it stays ~1.5 s with its end reason.
     private(set) var call: CallView? {
-        didSet { if (oldValue == nil) != (call == nil) { CallWindow.shared.sync() } }
+        didSet {
+            if (oldValue == nil) != (call == nil) { CallWindow.shared.sync() }
+            syncOrientation()
+        }
     }
     /// The full-screen call view is shown (else only the in-app bar).
     var presented = false {
@@ -23,8 +26,12 @@ final class CallController: NSObject {
             guard oldValue != presented else { return }
             CallWindow.shared.sync()
             applyCamera()
+            syncOrientation()
         }
     }
+    /// The call screen shows a shared screen: the app may turn to landscape
+    /// (docs/calls.md "Bildschirmfreigabe", `AppDelegate`); everything else stays portrait.
+    @ObservationIgnored private(set) var allowsLandscape = false
 
     /// CallKit is used on devices; the simulator has no working CallKit audio.
     @ObservationIgnored let useCallKit: Bool
@@ -302,8 +309,9 @@ final class CallController: NSObject {
             session.setCameraEnabled(on: run)
         }
         if active { CallAudio.shared.setVideo(wantCamera) }
-        // The screen stays on while video runs (own or from the others).
-        let screenOn = active && (wantCamera || call?.participants.contains { $0.video } == true)
+        // The screen stays on while video runs (own, from the others or a shared screen).
+        let screenOn = active && (wantCamera || call?.participants.contains { $0.video } == true
+            || call?.screens.isEmpty == false)
         if screenOn != keepsScreenOn {
             keepsScreenOn = screenOn
             UIApplication.shared.isIdleTimerDisabled = screenOn
@@ -313,6 +321,18 @@ final class CallController: NSObject {
             let u = CXCallUpdate()
             u.hasVideo = wantCamera
             provider.reportCall(with: uuid, updated: u)
+        }
+    }
+
+    /// Landscape only while the call screen shows a shared screen; back to portrait after.
+    private func syncOrientation() {
+        let allow = presented && call.map { !$0.screens.isEmpty && $0.state != .ended } == true
+        guard allow != allowsLandscape else { return }
+        allowsLandscape = allow
+        Log.call.info("orientation: \(allow ? "landscape allowed" : "portrait", privacy: .public)")
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for w in scene.windows { w.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            if !allow { scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) }
         }
     }
 
@@ -424,6 +444,9 @@ final class CallController: NSObject {
             #endif
         }
         let isNewCall = call?.id != new.id
+        if (call?.screens.map(\.peerId) ?? []) != new.screens.map(\.peerId) {
+            Log.call.info("screens: \(new.screens.map(\.peerId).joined(separator: ","), privacy: .public)")
+        }
         lastState = new.state
         call = new
         if isNewCall {
@@ -675,6 +698,7 @@ extension CallController {
     /// state, `TALK_CALL_MOCK_CAN_RECORD=1` shows the recording controls.
     /// `TALK_CALL_MOCK_VIDEO=1` gives the others a moving test picture (in a group every
     /// participant but the last two) and switches our camera on (own preview).
+    /// `TALK_CALL_MOCK_SCREEN=1|2` lets the first one (or two) participants share a screen.
     /// `TALK_AUTOCALL=<token>` calls that conversation after launch; `TALK_AUTOHANGUP=<s>`
     /// hangs up after that many seconds (automated call tests).
     func autoCallIfRequested() {
@@ -735,12 +759,17 @@ extension CallController {
             CallVideo.shared.setLocal(WebRTCMediaEngine.mockTrack(front: true), front: true)
             wantCamera = true
         }
+        let screenCount = min(participants.count, Int(env["TALK_CALL_MOCK_SCREEN"] ?? "") ?? 0)
+        let screens = participants.prefix(screenCount).enumerated().map { i, p in
+            CallScreen(sessionId: p.sessionId, name: p.name, peerId: "mockscreen\(i)")
+        }
+        for s in screens { CallVideo.shared.setRemote(s.peerId, WebRTCMediaEngine.mockTrack(front: true, screen: true)) }
         let view = CallView(
             id: UUID().uuidString, token: room?.token ?? "mock", roomName: group ? "Projektgruppe" : (room?.name ?? "Anna Berg"),
             isGroup: group, direction: state == .incoming ? .incoming : .outgoing, state: state,
             callerName: room?.name ?? "Anna Berg",
             startedAt: state == .connected ? Int64(Date().timeIntervalSince1970 * 1000) - 192_000 : nil,
-            muted: mode == "reconnecting", cameraOn: video, screens: [], participants: participants,
+            muted: mode == "reconnecting", cameraOn: video, screens: screens, participants: participants,
             endReason: state == .ended ? .noAnswer : nil,
             recording: recording, canRecord: env["TALK_CALL_MOCK_CAN_RECORD"] == "1",
             recordingConsentPending: mode == "consent"

@@ -20,7 +20,7 @@ final class CallWindow {
             else { return }
             let w = UIWindow(windowScene: scene)
             w.windowLevel = .normal + 1
-            let host = UIHostingController(rootView: CallScreen())
+            let host = UIHostingController(rootView: CallRootView())
             host.view.backgroundColor = .clear
             w.rootViewController = host
             w.overrideUserInterfaceStyle = .dark
@@ -99,7 +99,7 @@ struct CallStatusLine: View {
     }
 }
 
-struct CallScreen: View {
+struct CallRootView: View {
     private var controller: CallController { .shared }
 
     var body: some View {
@@ -142,6 +142,23 @@ struct ActiveCallView: View {
     private var video: CallVideo { .shared }
 
     var body: some View {
+        Group {
+            if !call.screens.isEmpty && call.state != .ended {
+                ScreenCallView(call: call)
+            } else {
+                classic
+            }
+        }
+        .alert("Dieser Anruf kann aufgezeichnet werden", isPresented: consentAsked) {
+            Button("Abbrechen", role: .cancel) { controller.hangUp() }
+            Button("Zustimmen und beitreten") { controller.consentToRecording() }
+        } message: {
+            Text("Wenn du beitrittst, stimmst du der Aufzeichnung zu.")
+        }
+    }
+
+    /// Without a shared screen: avatar or the other side's video, tiles in a group.
+    @ViewBuilder private var classic: some View {
         let room = SessionStore.shared.room(call.token)
         // 1:1: the other side's video fills the stage while it runs.
         let stage = call.isGroup ? nil : call.participants.lazy.compactMap { video.track(for: $0) }.first
@@ -167,16 +184,7 @@ struct ActiveCallView: View {
             }
             VStack(spacing: 0) {
                 HStack {
-                    Button {
-                        controller.presented = false
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                    }
-                    .accessibilityLabel("Zurück zum Chat")
-                    .accessibilityIdentifier("call-minimize")
+                    MinimizeButton()
                     Spacer()
                     RecordingIndicator(call: call)
                     Spacer()
@@ -216,12 +224,6 @@ struct ActiveCallView: View {
         }
         .animation(.easeOut(duration: 0.2), value: stage != nil)
         .animation(.easeOut(duration: 0.2), value: video.local != nil && controller.wantCamera)
-        .alert("Dieser Anruf kann aufgezeichnet werden", isPresented: consentAsked) {
-            Button("Abbrechen", role: .cancel) { controller.hangUp() }
-            Button("Zustimmen und beitreten") { controller.consentToRecording() }
-        } message: {
-            Text("Wenn du beitrittst, stimmst du der Aufzeichnung zu.")
-        }
     }
 
     /// The core waits in `connecting` until we consent or hang up.
@@ -231,6 +233,22 @@ struct ActiveCallView: View {
 
     private var speaking: Bool {
         call.state == .connected && call.participants.contains { $0.speaking }
+    }
+}
+
+/// "Zurück zum Chat": the call goes on in the bar above the app.
+struct MinimizeButton: View {
+    var body: some View {
+        Button {
+            CallController.shared.presented = false
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+        }
+        .accessibilityLabel("Zurück zum Chat")
+        .accessibilityIdentifier("call-minimize")
     }
 }
 
@@ -379,6 +397,8 @@ struct CallTiles: View {
 struct CallTile: View {
     let participant: CallParticipant
     let large: Bool
+    /// Small tile in the row under a shared screen.
+    var compact = false
     @State private var image: UIImage?
     @Environment(\.colorScheme) private var scheme
     private var video: CallVideo { .shared }
@@ -386,6 +406,7 @@ struct CallTile: View {
     var body: some View {
         let p = participant
         let track = video.track(for: p)
+        let avatar: CGFloat = compact ? 40 : (large ? 96 : 64)
         ZStack {
             if let track {
                 // Video instead of the avatar; name and mute icon stay at the bottom.
@@ -396,14 +417,14 @@ struct CallTile: View {
                     Spacer()
                     HStack(spacing: 4) {
                         if p.muted { Image(systemName: "mic.slash.fill").font(.system(size: 11)) }
-                        Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                        Text(p.name).font(.system(size: compact ? 11 : 13, weight: .medium)).lineLimit(1)
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, compact ? 6 : 8)
+                    .padding(.vertical, compact ? 2 : 4)
                     .background(.black.opacity(0.45), in: Capsule())
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .padding(compact ? 4 : 8)
                 }
             } else {
                 VStack(spacing: 8) {
@@ -413,32 +434,33 @@ struct CallTile: View {
                         } else {
                             Format.color(for: p.name)
                             Text(Format.initials(p.name))
-                                .font(.system(size: (large ? 96 : 64) * 0.4, weight: .semibold))
+                                .font(.system(size: avatar * 0.4, weight: .semibold))
                                 .foregroundStyle(.white)
                         }
                     }
-                    .frame(width: large ? 96 : 64, height: large ? 96 : 64)
+                    .frame(width: avatar, height: avatar)
                     .clipShape(Circle())
                     HStack(spacing: 4) {
                         if p.muted {
-                            Image(systemName: "mic.slash.fill").font(.system(size: 12))
+                            Image(systemName: "mic.slash.fill").font(.system(size: compact ? 10 : 12))
                         }
-                        Text(p.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                        Text(p.name).font(.system(size: compact ? 11 : 14, weight: .medium)).lineLimit(1)
                     }
                     .foregroundStyle(.white)
-                    if !p.connected {
+                    .padding(.horizontal, compact ? 4 : 0)
+                    if !p.connected && !compact {
                         Text("Verbinde …").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: large ? 220 : 150)
+        .frame(height: compact ? 112 : (large ? 220 : 150))
         .background(Color.white.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: compact ? 10 : 14))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.white, lineWidth: p.speaking && p.connected ? 3 : 0)
+            RoundedRectangle(cornerRadius: compact ? 10 : 14)
+                .stroke(Color.white, lineWidth: p.speaking && p.connected ? (compact ? 2 : 3) : 0)
         )
         .opacity(p.connected ? 1 : 0.55)
         .animation(.easeOut(duration: 0.2), value: p.speaking)
@@ -457,12 +479,13 @@ struct CallTile: View {
 struct LocalPreview: View {
     let track: RTCVideoTrack
     let mirrored: Bool
+    var size = CGSize(width: 96, height: 128)
     private var controller: CallController { .shared }
 
     var body: some View {
         VideoView(track: track)
             .scaleEffect(x: mirrored ? -1 : 1, y: 1)
-            .frame(width: 96, height: 128)
+            .frame(width: size.width, height: size.height)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.25), lineWidth: 1))
             .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
