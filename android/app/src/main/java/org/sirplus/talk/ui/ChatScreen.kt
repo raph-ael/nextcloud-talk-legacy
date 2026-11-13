@@ -2,6 +2,21 @@ package org.sirplus.talk.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.semantics.heading
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -86,6 +101,8 @@ import uniffi.talk_ffi.SendError
 import org.sirplus.talk.SessionManager
 import org.sirplus.talk.UiMessage
 import org.sirplus.talk.UiState
+import org.sirplus.talk.ChatState
+import org.sirplus.talk.countsUnread
 import uniffi.talk_ffi.MessageKind
 import uniffi.talk_ffi.MessageView
 import uniffi.talk_ffi.RoomView
@@ -135,13 +152,32 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     // Reverse layout: index 0 is the newest message at the bottom.
     val reversed = remember(messages) { messages.asReversed() }
 
+    // Ungelesen-Linie (docs/chat.md): taken in openRoom, placed above the first unread message.
+    val unreadLine = state.unreadLine?.takeIf { it.token == room.token }
+    val (unreadKey, unreadCount) = remember(messages, unreadLine) {
+        val counting = unreadLine?.let { line -> messages.filter { countsUnread(it, line.from) } }.orEmpty()
+        counting.firstOrNull()?.key to maxOf(unreadLine?.base ?: 0, counting.size)
+    }
+    val unreadLabel = if (unreadCount == 1) "1 ungelesene Nachricht" else "$unreadCount ungelesene Nachrichten"
+    // Opening at the line: until positioned, neither the read marker nor the autoscroll interferes.
+    var opening by remember(room.token) { mutableStateOf(unreadLine != null) }
+    LaunchedEffect(room.token) {
+        if (opening) {
+            positionAtUnreadLine(sessions, listState, room.token)
+            opening = false
+        }
+    }
+
     LaunchedEffect(room.token, messages.size, room.unreadMessages) {
-        if (listState.firstVisibleItemIndex <= 1) sessions.markVisibleRead(room.token)
+        if (!opening && listState.firstVisibleItemIndex <= 1) sessions.markVisibleRead(room.token)
     }
     // Arriving back at the bottom (scrolling or the jump button) sets the read marker too.
     LaunchedEffect(listState, room.token) {
-        snapshotFlow { listState.firstVisibleItemIndex <= 1 }
+        snapshotFlow { !opening && listState.firstVisibleItemIndex <= 1 }
             .collect { atBottom -> if (atBottom) sessions.markVisibleRead(room.token) }
+    }
+    LaunchedEffect(listState, room.token) {
+        snapshotFlow { listState.firstVisibleItemIndex <= 1 }.collect { sessions.setChatAtBottom(it) }
     }
     LaunchedEffect(listState, room.token) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
@@ -149,7 +185,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     }
     // Keep the newest message visible when sending / receiving while at the bottom.
     LaunchedEffect(messages.lastOrNull()?.key) {
-        if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
+        if (!opening && listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -206,6 +242,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                             next = reversed.getOrNull(i - 1),
                             isGroup = isGroup,
                             read = m.msg.isOwn && m.status == null && m.msg.id <= lastCommonRead,
+                            unreadLabel = if (m.key == unreadKey) unreadLabel else null,
                             canReact = room.canReact,
                             onReply = { replyTo = it },
                             onReact = react,
@@ -230,6 +267,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                         }
                     }
                 }
+                ScrollDatePill(listState, reversed, enabled = !opening, Modifier.align(Alignment.TopCenter))
                 JumpToEnd(listState, room.unreadMessages.toInt(), Modifier.align(Alignment.BottomEnd))
             }
             if (room.readOnly) {
@@ -252,7 +290,10 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     onOpenCamera = openCamera,
                     onImagePicked = { uri -> overlay = Overlay.Send(uri, fromCamera = false) },
                     voice = sessions.voice,
-                    onVoiceSent = { scope.launch { listState.animateScrollToItem(0) } },
+                    onVoiceSent = {
+                        sessions.clearUnreadLine()
+                        scope.launch { listState.animateScrollToItem(0) }
+                    },
                 )
             }
         }
@@ -312,6 +353,132 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
             onDismiss = { reactionSheet = null },
         )
     }
+    }
+}
+
+/** Oldest delivered message loaded is still after [from]: the first unread one may be missing. */
+private fun gapAfter(chat: ChatState, from: Long): Boolean =
+    chat.hasMore && (chat.messages.firstOrNull { it.status == null }?.msg?.id ?: Long.MAX_VALUE) > from
+
+/**
+ * Opens the chat at the Ungelesen-Linie once the server page is there: loads older pages (at
+ * most 10) until the first unread message is, then scrolls it into the upper quarter, never
+ * past the end. If it is still missing, the oldest loaded message ends up at the top.
+ */
+private suspend fun positionAtUnreadLine(sessions: SessionManager, listState: LazyListState, token: String) {
+    val line = sessions.state.value.unreadLine?.takeIf { it.token == token } ?: return
+    sessions.state.first { it.chats[token]?.synced == true }
+    for (page in 0 until 10) {
+        val chat = sessions.state.value.chats[token] ?: return
+        // Everything after the read marker is loaded once the oldest loaded message is not newer.
+        if (!gapAfter(chat, line.from)) break
+        sessions.loadOlder(token)
+        sessions.state.first { it.chats[token]?.loadingOlder != true }
+    }
+    val chat = sessions.state.value.chats[token] ?: return
+    val messages = chat.messages
+    val first = messages.firstOrNull { countsUnread(it, line.from) }
+    val target = first ?: messages.firstOrNull()?.takeIf { gapAfter(chat, line.from) } ?: return
+    val fromTop = if (first != null) 0.25f else 0f
+    // New messages may arrive meanwhile and the list composes a frame later: look the item up
+    // by key each time and try again when it is not where the index said.
+    repeat(5) {
+        val current = sessions.state.value.chats[token]?.messages ?: return
+        val pos = current.indexOfFirst { it.key == target.key }
+        if (pos < 0) return
+        val index = current.size - 1 - pos
+        withTimeoutOrNull(1000) { snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > index } }
+        listState.scrollToItem(index)
+        val item = withTimeoutOrNull(500) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == target.key } }.filterNotNull().first()
+        } ?: return@repeat
+        val info = listState.layoutInfo
+        val height = info.viewportEndOffset - info.viewportStartOffset - info.beforeContentPadding - info.afterContentPadding
+        // Reverse layout: the item sits at the bottom now; scrolling backwards lifts it.
+        listState.scrollBy(-(height * (1 - fromTop) - item.size))
+        return
+    }
+}
+
+/**
+ * Date of the topmost visible message while scrolling (docs/chat.md „Datum beim Scrollen“):
+ * fades in with the scroll, out 0.4 s after it ends; never at the bottom. Decoration only.
+ */
+@Composable
+private fun ScrollDatePill(listState: LazyListState, reversed: List<UiMessage>, enabled: Boolean, modifier: Modifier) {
+    val colors = LocalTalkColors.current
+    val reduceMotion = rememberReduceMotion()
+    var visible by remember { mutableStateOf(false) }
+    // Only a scroll the user started (drag and its fling), not one caused by new messages.
+    val dragged = listState.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(listState, enabled) {
+        var byUser = false
+        snapshotFlow { Triple(listState.isScrollInProgress, dragged.value, listState.firstVisibleItemIndex <= 1) }
+            .collectLatest { (scrolling, drag, atBottom) ->
+                if (drag) byUser = true
+                when {
+                    !enabled || atBottom -> visible = false
+                    scrolling && byUser -> visible = true
+                    !scrolling -> {
+                        byUser = false
+                        delay(400)
+                        visible = false
+                    }
+                }
+            }
+    }
+    val messages by rememberUpdatedState(reversed)
+    val label by remember(listState) {
+        derivedStateOf {
+            // Reverse layout: the last visible item is the topmost one.
+            val top = listState.layoutInfo.visibleItemsInfo.lastOrNull { it.index < messages.size }
+            top?.let { messages[it.index].msg.timestamp }?.let(::dayLabel).orEmpty()
+        }
+    }
+    AnimatedVisibility(
+        visible = visible && label.isNotEmpty(),
+        modifier = modifier.padding(top = 8.dp).clearAndSetSemantics {},
+        enter = if (reduceMotion) EnterTransition.None else fadeIn(tween(100)) + slideInVertically(tween(100)) { -it / 2 },
+        exit = if (reduceMotion) ExitTransition.None else fadeOut(tween(100)) + slideOutVertically(tween(100)) { -it / 2 },
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = colors.muted,
+            modifier = Modifier
+                .shadow(2.dp, CircleShape)
+                .clip(CircleShape)
+                .background(colors.floating)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/** Full-width line with „N ungelesene Nachrichten“ below (docs/chat.md). */
+@Composable
+private fun UnreadDivider(label: String) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp).semantics(mergeDescendants = true) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        HorizontalDivider(
+            // Across the list's side padding too.
+            Modifier.layout { measurable, constraints ->
+                val extra = 24.dp.roundToPx()
+                val width = constraints.maxWidth + extra
+                val p = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+                layout(constraints.maxWidth, p.height) { p.place(-extra / 2, 0) }
+            },
+            thickness = 1.dp,
+            color = LocalTalkColors.current.muted,
+        )
+        Text(
+            label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 3.dp),
+        )
     }
 }
 
@@ -449,6 +616,7 @@ private fun MessageRow(
     next: UiMessage?,
     isGroup: Boolean,
     read: Boolean,
+    unreadLabel: String?,
     canReact: Boolean,
     onReply: (MessageView) -> Unit,
     onReact: (MessageView, String) -> Unit,
@@ -462,16 +630,17 @@ private fun MessageRow(
     val msg = m.msg
     Column(Modifier.fillMaxWidth()) {
         if (prev == null || !sameDay(prev.msg.timestamp, msg.timestamp)) {
-            Box(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), Alignment.Center) {
-                Text(
-                    dayLabel(msg.timestamp),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colors.muted,
-                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(colors.chip).padding(horizontal = 10.dp, vertical = 3.dp),
-                )
-            }
+            // Plain text like Signal; a heading so screen readers can jump from day to day.
+            Text(
+                dayLabel(msg.timestamp),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.muted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp).semantics { heading() },
+            )
         }
+        if (unreadLabel != null) UnreadDivider(unreadLabel)
         if (msg.kind == MessageKind.SYSTEM) {
             Text(
                 msg.text,

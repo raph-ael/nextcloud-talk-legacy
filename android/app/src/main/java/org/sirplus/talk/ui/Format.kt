@@ -16,8 +16,8 @@ private val de = Locale.GERMANY
 private val timeFmt = DateTimeFormatter.ofPattern("HH:mm", de)
 private val weekdayFmt = DateTimeFormatter.ofPattern("EEE", de)
 private val shortDateFmt = DateTimeFormatter.ofPattern("dd.MM.yy", de)
-private val dayFmt = DateTimeFormatter.ofPattern("EEEE, d. MMMM", de)
-private val dayYearFmt = DateTimeFormatter.ofPattern("EEEE, d. MMMM yyyy", de)
+private val dayFmt = DateTimeFormatter.ofPattern("EEE, d. MMM", de)
+private val dayYearFmt = DateTimeFormatter.ofPattern("d. MMM yyyy", de)
 
 private fun date(unix: Long): LocalDate = Instant.ofEpochSecond(unix).atZone(zone).toLocalDate()
 private fun daysAgo(unix: Long): Long = ChronoUnit.DAYS.between(date(unix), LocalDate.now(zone))
@@ -41,13 +41,14 @@ fun listTime(unix: Long, nowMillis: Long = System.currentTimeMillis()): String {
 
 fun messageTime(unix: Long): String = timeFmt.format(Instant.ofEpochSecond(unix).atZone(zone))
 
+/** Day separator and scroll date (docs/chat.md): Heute · Gestern · Mi., 11. Nov. · 11. Nov. 2025 */
 fun dayLabel(unix: Long): String {
     val d = daysAgo(unix)
     val day = date(unix)
     return when {
         d == 0L -> "Heute"
         d == 1L -> "Gestern"
-        day.year == LocalDate.now(zone).year -> dayFmt.format(day)
+        !day.isBefore(LocalDate.now(zone).minusMonths(6)) -> dayFmt.format(day)
         else -> dayYearFmt.format(day)
     }
 }

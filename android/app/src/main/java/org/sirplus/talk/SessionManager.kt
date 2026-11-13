@@ -95,7 +95,20 @@ data class ChatState(
     val lastCommonRead: Long = 0,
     val loading: Boolean = true,
     val loadingOlder: Boolean = false,
+    /** The server page of this opening has arrived (or failed): more than the cache. */
+    val synced: Boolean = false,
 )
+
+/**
+ * Ungelesen-Linie of the open chat (docs/chat.md „Datum und Ungelesen-Linie“), pure UI state
+ * taken when opening the chat. Place and number derive from the loaded messages: above the
+ * first one that [counts][countsUnread], number `max(base, loaded ones that count)`.
+ */
+data class UnreadLine(val token: String, val from: Long, val base: Int)
+
+/** Counts for the Ungelesen-Linie: delivered, after [from], not own, no system message. */
+fun countsUnread(m: UiMessage, from: Long): Boolean =
+    m.status == null && m.msg.id > from && !m.msg.isOwn && m.msg.kind != MessageKind.SYSTEM
 
 data class UiState(
     val session: SessionState = SessionState.LOADING,
@@ -107,6 +120,7 @@ data class UiState(
     val chats: Map<String, ChatState> = emptyMap(),
     val online: Boolean = true,
     val activeToken: String? = null,
+    val unreadLine: UnreadLine? = null,
 )
 
 /**
@@ -504,6 +518,7 @@ class SessionManager(private val context: Context) : CoreListener {
             is CoreEvent.ParticipantsChanged -> _participants.tryEmit(event.token)
             is CoreEvent.MessagesAdded -> {
                 adoptLocalPreviews(event.messages)
+                trackUnreadLine(event.token, event.messages)
                 updateChat(event.token) { it.copy(messages = merge(it.messages, event.messages)) }
             }
             is CoreEvent.MessagesUpdated -> updateChat(event.token) { c ->
@@ -564,6 +579,38 @@ class SessionManager(private val context: Context) : CoreListener {
             val room = st.rooms.find { it.token == token }?.name ?: "Unterhaltung"
             Notifications.sendFailed(context, token, room)
         }
+    }
+
+    /**
+     * New messages in the open chat. A shown line counts them by itself (they are loaded and
+     * newer). Without one, a line starts above them when the user is not at the bottom or the
+     * app is not in front; otherwise they are simply read, and the hidden snapshot is dropped
+     * so they do not raise a line later.
+     */
+    private fun trackUnreadLine(token: String, incoming: List<MessageView>) {
+        val st = _state.value
+        if (st.activeToken != token) return
+        val chat = st.chats[token] ?: return
+        if (!chat.synced) return
+        val newest = chat.messages.lastOrNull { it.status == null }?.msg?.id ?: return
+        if (incoming.none { it.id > newest && !it.isOwn && it.kind != MessageKind.SYSTEM }) return
+        val line = st.unreadLine?.takeIf { it.token == token }
+        if (line != null && chat.messages.any { countsUnread(it, line.from) }) return
+        val inFront = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        val next = if (!chatAtBottom || !inFront) UnreadLine(token, newest, 0) else null
+        _state.update { it.copy(unreadLine = next) }
+    }
+
+    /** Whether the open chat shows its newest message (reported by the chat screen). */
+    @Volatile private var chatAtBottom = true
+
+    fun setChatAtBottom(atBottom: Boolean) {
+        chatAtBottom = atBottom
+    }
+
+    /** Own message sent (any way): the Ungelesen-Linie goes away. */
+    fun clearUnreadLine() {
+        if (_state.value.unreadLine != null) _state.update { it.copy(unreadLine = null) }
     }
 
     private fun updateChat(token: String, f: (ChatState) -> ChatState) {
@@ -696,14 +743,20 @@ class SessionManager(private val context: Context) : CoreListener {
         previous?.let { s.closeChat(it) }
         // Cached messages and unsent ones (both survive restarts): shown in the first frame.
         val cached = s.cachedChat(token)
+        // Snapshot before anything can set the read marker (docs/chat.md).
+        val line = _state.value.rooms.find { it.token == token }?.takeIf { it.lastReadMessage > 0 }
+            ?.let { UnreadLine(token, it.lastReadMessage, it.unreadMessages.toInt()) }
+        chatAtBottom = true
         _state.update { st ->
             val chat = st.chats[token] ?: ChatState()
             val messages = merge(chat.messages, cached.messages)
             val older = cached.oldestId != null && (chat.oldestId == null || cached.oldestId!! < chat.oldestId!!)
             st.copy(
                 activeToken = token,
+                unreadLine = line,
                 chats = st.chats + (token to chat.copy(
                     loading = messages.none { it.status == null },
+                    synced = false,
                     messages = withPending(messages, s.pending(token)),
                     hasMore = if (older) cached.hasMore else chat.hasMore,
                     oldestId = if (older) cached.oldestId else chat.oldestId,
@@ -716,19 +769,25 @@ class SessionManager(private val context: Context) : CoreListener {
                 val page = s.openChat(token)
                 val room = _state.value.rooms.find { it.token == token }
                 updateChat(token) {
-                    // Outdated cache: drop what was shown (unsent messages stay).
-                    val base = if (page.reset) it.messages.filter { m -> m.status != null } else it.messages
+                    // Outdated cache, or a hole between what was shown and the newest page (more
+                    // than a page arrived meanwhile): drop what was shown (unsent messages stay).
+                    val shownNewest = it.messages.lastOrNull { m -> m.status == null }?.msg?.id
+                    val hole = shownNewest != null && page.oldestId != null && shownNewest < page.oldestId!!
+                    val base = if (page.reset || hole) it.messages.filter { m -> m.status != null } else it.messages
                     it.copy(
                         messages = merge(base, page.messages),
                         hasMore = page.hasMore,
                         oldestId = page.oldestId,
                         lastCommonRead = maxOf(page.lastCommonRead ?: 0, room?.lastCommonReadMessage ?: 0),
                         loading = false,
+                        synced = true,
                     )
                 }
-                markVisibleRead(token)
+                // With a line the chat opens there; the screen marks read once at the bottom.
+                val loaded = _state.value.chats[token]?.messages.orEmpty()
+                if (line == null || loaded.none { countsUnread(it, line.from) }) markVisibleRead(token)
             } catch (e: CoreException) {
-                updateChat(token) { it.copy(loading = false) }
+                updateChat(token) { it.copy(loading = false, synced = true) }
             }
         }
     }
@@ -736,7 +795,7 @@ class SessionManager(private val context: Context) : CoreListener {
     fun closeRoom() {
         val token = _state.value.activeToken ?: return
         session?.closeChat(token)
-        _state.update { it.copy(activeToken = null) }
+        _state.update { it.copy(activeToken = null, unreadLine = null) }
     }
 
     fun loadOlder(token: String) {
@@ -765,6 +824,7 @@ class SessionManager(private val context: Context) : CoreListener {
     /** Queues a text message in the outbox; it shows up at once and is delivered reliably. */
     fun send(token: String, text: String, replyTo: MessageView?) {
         val s = session ?: return
+        clearUnreadLine()
         s.enqueueText(token, text, replyTo?.toReply(), newReferenceId())
         OutboxWorker.schedule(context)
     }
@@ -799,6 +859,7 @@ class SessionManager(private val context: Context) : CoreListener {
      */
     fun sendImage(token: String, image: PreparedImage, caption: String, replyTo: MessageView?) {
         val s = session ?: return
+        clearUnreadLine()
         val ref = newReferenceId()
         scope.launch {
             // Decode first so the pending bubble shows the photo from its first frame.
