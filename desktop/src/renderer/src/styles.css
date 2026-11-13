@@ -882,7 +882,8 @@ a.file-row:hover .file-name {
 .msg.own .reactions {
   align-self: flex-start;
 }
-.reactions span {
+.reactions .reaction-pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -895,8 +896,221 @@ a.file-row:hover .file-name {
   font-size: 14px;
   line-height: 1;
 }
-.reactions span.mine {
+.reactions .reaction-pill.mine {
   background: var(--reaction-mine);
+}
+.reactions .reaction-pill:hover {
+  filter: brightness(0.95);
+}
+.reactions .reaction-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* A newly set pill pops once (docs/chat.md „Reaktionen“). */
+.reactions .reaction-pill.pop {
+  animation: reaction-pop 150ms ease-out;
+}
+@keyframes reaction-pop {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reactions .reaction-pill.pop {
+    animation: none;
+  }
+}
+/* Names on hover. */
+.reaction-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--floating);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.15);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  white-space: normal;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Quick bar: in the hover popover and as the context menu's top row. */
+.reaction-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.reaction-bar-emoji,
+.reaction-bar-more {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+  transition: transform 80ms ease-out;
+}
+.reaction-bar-emoji:hover,
+.reaction-bar-emoji:focus-visible {
+  background: var(--fill);
+  transform: scale(1.12);
+  outline: none;
+}
+.reaction-bar-emoji.on {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.reaction-bar-more {
+  color: var(--text-muted);
+  background: var(--fill);
+  width: 32px;
+  height: 32px;
+  margin-left: 2px;
+}
+.reaction-bar-more:hover,
+.reaction-bar-more:focus-visible {
+  background: var(--fill-pressed);
+  color: var(--text);
+  outline: none;
+}
+.reaction-popover {
+  position: fixed;
+  z-index: 45;
+  padding: 4px 6px;
+  border-radius: 24px;
+  background: var(--floating);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+.reaction-popover.full {
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+}
+.reaction-popover.full .emoji-popover {
+  position: static;
+}
+.reaction-picker-loading {
+  width: 352px;
+  height: 300px;
+  border-radius: 10px;
+  background: var(--floating);
+}
+.menu-header {
+  padding: 0 0 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* „Wer hat reagiert“ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.4);
+}
+.modal {
+  background: var(--floating);
+  color: var(--text);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgb(0 0 0 / 0.3);
+  outline: none;
+}
+.who-reacted {
+  width: min(100%, 360px);
+  max-height: min(480px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+}
+.who-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+.who-tab {
+  flex: none;
+  padding: 8px 10px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.who-tab:hover {
+  color: var(--text);
+}
+.who-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.who-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.who-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-align: left;
+}
+button.who-row:hover,
+button.who-row:focus-visible {
+  background: var(--fill);
+  outline: none;
+}
+.who-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+.who-name small {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.who-emoji {
+  font-size: 20px;
+}
+.who-row.placeholder .who-avatar-ph,
+.who-row.placeholder .who-name-ph {
+  display: block;
+  background: var(--fill-pressed);
+}
+.who-avatar-ph {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+.who-name-ph {
+  width: 120px;
+  height: 12px;
+  border-radius: 6px;
 }
 .reactions small {
   margin-left: 4px;

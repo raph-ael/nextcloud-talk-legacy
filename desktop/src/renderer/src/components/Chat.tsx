@@ -11,6 +11,7 @@ import { isAudioAttachment } from '../voice'
 import { ImageViewer } from './ImageViewer'
 import { MessageMenu, type MenuItem } from './MessageMenu'
 import { OfflineBanner } from './Sidebar'
+import { react, reactable, ReactionBar, ReactionPills, ReactionPopover, WhoReacted } from './Reactions'
 import { CallButton } from '../call/CallScreen'
 import { RecordingBanners } from '../call/RecordingBanners'
 
@@ -46,6 +47,13 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const [replyTo, setReplyTo] = useState<UiMessage | null>(null)
   const [menu, setMenu] = useState<{ msg: UiMessage; x: number; y: number } | null>(null)
   const [viewer, setViewer] = useState<UiMessage | null>(null)
+  const [reacting, setReacting] = useState<{
+    msg: UiMessage
+    anchor: DOMRect
+    toggle: HTMLElement | null
+    full: boolean
+  } | null>(null)
+  const [whoReacted, setWhoReacted] = useState<number | null>(null)
   const [dropping, setDropping] = useState(false)
   const addFiles = useRef<((files: File[]) => void) | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -73,6 +81,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   function onScroll() {
     const el = scroller.current
     if (!el) return
+    setReacting(null)
     setAtBottom(el.scrollTop > -40)
     setShowJump(el.scrollTop < -el.clientHeight / 2)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
@@ -95,6 +104,33 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const openMenu = useCallback((msg: UiMessage, x: number, y: number) => setMenu({ msg, x, y }), [])
   const closeMenu = useCallback(() => setMenu(null), [])
   const closeViewer = useCallback(() => setViewer(null), [])
+  const closeReacting = useCallback(() => setReacting(null), [])
+  const closeWhoReacted = useCallback(() => setWhoReacted(null), [])
+  const openWhoReacted = useCallback((m: UiMessage) => setWhoReacted(m.id), [])
+  const openReacting = useCallback((msg: UiMessage, bubble: HTMLElement, toggle: HTMLElement | null, full = false) => {
+    setReacting((cur) =>
+      cur && cur.msg.id === msg.id && !full ? null : { msg, anchor: bubble.getBoundingClientRect(), toggle, full },
+    )
+  }, [])
+
+  /** The context menu's top row (docs/chat.md „Reaktionen“). */
+  function menuHeader(m: UiMessage) {
+    if (!reactable(room.canReact, m)) return undefined
+    return (
+      <ReactionBar
+        msg={m}
+        onPick={(emoji) => {
+          setMenu(null)
+          react(room.token, m.id, emoji)
+        }}
+        onMore={() => {
+          setMenu(null)
+          const bubble = scroller.current?.querySelector<HTMLElement>(`.bubble[data-id="${m.id}"]`)
+          if (bubble) openReacting(m, bubble, null, true)
+        }}
+      />
+    )
+  }
 
   function menuItems(m: UiMessage): MenuItem[] {
     const items: MenuItem[] = []
@@ -166,7 +202,11 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 isGroup={isGroup}
                 read={m.isOwn && !m.status && m.id <= lastCommonRead}
                 canReply={!room.readOnly}
+                canReact={room.canReact}
+                token={room.token}
                 onReply={setReplyTo}
+                onReact={openReacting}
+                onWhoReacted={openWhoReacted}
                 onMenu={openMenu}
                 onOpenImage={setViewer}
               />
@@ -198,7 +238,27 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           <div>Zum Senden hier ablegen</div>
         </div>
       )}
-      {menu && <MessageMenu x={menu.x} y={menu.y} items={menuItems(menu.msg)} onClose={closeMenu} />}
+      {menu && (
+        <MessageMenu
+          x={menu.x}
+          y={menu.y}
+          header={menuHeader(menu.msg)}
+          items={menuItems(menu.msg)}
+          onClose={closeMenu}
+        />
+      )}
+      {reacting && (
+        <ReactionPopover
+          key={`${reacting.msg.id}/${reacting.full}`}
+          token={room.token}
+          msg={messages.find((m) => m.id === reacting.msg.id) ?? reacting.msg}
+          anchor={reacting.anchor}
+          toggle={reacting.toggle}
+          startFull={reacting.full}
+          onClose={closeReacting}
+        />
+      )}
+      {whoReacted !== null && <WhoReacted token={room.token} messageId={whoReacted} onClose={closeWhoReacted} />}
       {viewer && <ImageViewer msg={viewer} onClose={closeViewer} />}
     </section>
   )
@@ -211,7 +271,11 @@ interface RowProps {
   isGroup: boolean
   read: boolean
   canReply: boolean
+  canReact: boolean
+  token: string
   onReply: (m: UiMessage) => void
+  onReact: (m: UiMessage, bubble: HTMLElement, toggle: HTMLElement | null) => void
+  onWhoReacted: (m: UiMessage) => void
   onMenu: (m: UiMessage, x: number, y: number) => void
   onOpenImage: (m: UiMessage) => void
 }
@@ -233,7 +297,11 @@ const MessageRow = memo(function MessageRow({
   isGroup,
   read,
   canReply,
+  canReact,
+  token,
   onReply,
+  onReact,
+  onWhoReacted,
   onMenu,
   onOpenImage,
 }: RowProps) {
@@ -295,6 +363,7 @@ const MessageRow = memo(function MessageRow({
   const metaInVoice = !!attachment && !image && isAudioAttachment(msg) && !hasText && !deleted
 
   const replyable = canReply && msg.kind === 'text' && !msg.status
+  const canReactHere = reactable(canReact, msg)
 
   return (
     <>
@@ -306,6 +375,7 @@ const MessageRow = memo(function MessageRow({
         <div className="msg-col">
           <div
             className={bubbleCls}
+            data-id={msg.id}
             title={fullTime(msg.timestamp)}
             onDoubleClick={() => replyable && !image && onReply(msg)}
             onClick={() => msg.status === 'failed' && retry(msg)}
@@ -360,18 +430,27 @@ const MessageRow = memo(function MessageRow({
               </div>
             )}
           </div>
-          {reactions.length > 0 && (
-            <div className="reactions">
-              {reactions.map(([emoji, count]) => (
-                <span key={emoji} className={msg.reactionsSelf.includes(emoji) ? 'mine' : ''}>
-                  {emoji}
-                  {count > 1 && <small>{count}</small>}
-                </span>
-              ))}
-            </div>
-          )}
+          <ReactionPills token={token} msg={msg} onOpen={onWhoReacted} />
         </div>
         <div className="msg-actions">
+          {canReactHere && (
+            <button
+              className="msg-action"
+              aria-label="Reagieren"
+              title="Reagieren"
+              onClick={(e) => {
+                const bubble = e.currentTarget.closest('.msg')?.querySelector<HTMLElement>('.bubble')
+                if (bubble) onReact(msg, bubble, e.currentTarget)
+              }}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                <circle cx="9" cy="10" r="1.2" fill="currentColor" />
+                <circle cx="15" cy="10" r="1.2" fill="currentColor" />
+                <path d="M8.3 14a4.3 4.3 0 0 0 7.4 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
           {replyable && (
             <button className="msg-action" aria-label="Antworten" title="Antworten" onClick={() => onReply(msg)}>
               <svg viewBox="0 0 24 24" width="18" height="18">

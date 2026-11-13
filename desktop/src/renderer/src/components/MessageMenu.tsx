@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 export interface MenuItem {
   label: string
@@ -6,8 +6,23 @@ export interface MenuItem {
   danger?: boolean
 }
 
-/** Context menu at a screen position; arrow keys move, Enter selects, Esc/outside click closes. */
-export function MessageMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+/**
+ * Context menu at a screen position; arrow keys move, Enter selects, Esc/outside click closes.
+ * `header` is an optional top row (the reaction bar).
+ */
+export function MessageMenu({
+  x,
+  y,
+  items,
+  header,
+  onClose,
+}: {
+  x: number
+  y: number
+  items: MenuItem[]
+  header?: ReactNode
+  onClose: () => void
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y })
 
@@ -20,7 +35,8 @@ export function MessageMenu({ x, y, items, onClose }: { x: number; y: number; it
       left: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)),
       top: Math.max(8, y + r.height > window.innerHeight - 8 ? y - r.height : y),
     })
-    el.querySelector<HTMLButtonElement>('button')?.focus()
+    const first = el.querySelector<HTMLButtonElement>('.menu-item') ?? el.querySelector<HTMLButtonElement>('button')
+    first?.focus()
   }, [x, y])
 
   useEffect(() => {
@@ -54,6 +70,7 @@ export function MessageMenu({ x, y, items, onClose }: { x: number; y: number; it
 
   return (
     <div className="menu context-menu" role="menu" ref={ref} style={pos}>
+      {header && <div className="menu-header">{header}</div>}
       {items.map((item) => (
         <button
           key={item.label}
