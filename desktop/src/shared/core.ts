@@ -481,6 +481,8 @@ export interface TalkApi {
   groupLink(token: string): Promise<string>
   /** 1 all messages, 2 mentions only, 3 off. */
   setNotificationLevel(token: string, level: number): Promise<string | null>
+  /** Ask when "Gruppe verlassen" is clicked: true → "Neuen Moderator wählen" first. */
+  leaveNeedsModerator(token: string): Promise<boolean>
   leaveGroup(token: string): Promise<string | null>
   deleteGroup(token: string): Promise<string | null>
   setBadge(count: number): void

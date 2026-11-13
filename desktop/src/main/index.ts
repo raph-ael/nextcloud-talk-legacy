@@ -74,6 +74,7 @@ interface NativeSession {
   setGroupLink(token: string, on: boolean): Promise<string | null>
   groupLink(token: string): string
   setNotificationLevel(token: string, level: number): Promise<string | null>
+  leaveNeedsModerator(token: string): Promise<boolean>
   leaveGroup(token: string): Promise<string | null>
   deleteGroup(token: string): Promise<string | null>
   avatar(token: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
@@ -919,6 +920,7 @@ function registerIpc(): void {
   ipcMain.handle('talk:setNotificationLevel', (_e, token: string, level: number) =>
     session ? session.setNotificationLevel(token, level) : NOT_SIGNED_IN,
   )
+  ipcMain.handle('talk:leaveNeedsModerator', (_e, token: string) => requireSession().leaveNeedsModerator(token))
   ipcMain.handle('talk:leaveGroup', (_e, token: string) => (session ? session.leaveGroup(token) : NOT_SIGNED_IN))
   ipcMain.handle('talk:deleteGroup', (_e, token: string) => (session ? session.deleteGroup(token) : NOT_SIGNED_IN))
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))

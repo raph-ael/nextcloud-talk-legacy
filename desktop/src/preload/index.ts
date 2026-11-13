@@ -54,6 +54,7 @@ const api: TalkApi = {
   setGroupLink: (token, on) => ipcRenderer.invoke('talk:setGroupLink', token, on),
   groupLink: (token) => ipcRenderer.invoke('talk:groupLink', token),
   setNotificationLevel: (token, level) => ipcRenderer.invoke('talk:setNotificationLevel', token, level),
+  leaveNeedsModerator: (token) => ipcRenderer.invoke('talk:leaveNeedsModerator', token),
   leaveGroup: (token) => ipcRenderer.invoke('talk:leaveGroup', token),
   deleteGroup: (token) => ipcRenderer.invoke('talk:deleteGroup', token),
   setBadge: (count) => ipcRenderer.send('talk:setBadge', count),

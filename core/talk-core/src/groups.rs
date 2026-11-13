@@ -227,6 +227,14 @@ impl Engine {
         r
     }
 
+    /// Whether we must appoint another moderator before leaving ("Neuen Moderator
+    /// wählen"): we are the only moderator and others are left. Ask this when the user taps
+    /// "Gruppe verlassen"; the server's `canLeaveConversation` does not cover this case.
+    pub async fn leave_needs_moderator(&self, token: &str) -> Result<bool> {
+        let server_says_no = self.state_room(token).is_some_and(|r| !r.can_leave_conversation);
+        Ok(server_says_no || needs_successor(&self.members(token).await?))
+    }
+
     /// Leaves the group for good. Fails (HTTP 400) for its last moderator.
     pub async fn leave_group(&self, token: &str) -> Result<()> {
         self.guard(self.client.leave_conversation(token).await)?;
@@ -286,6 +294,13 @@ fn member_views(list: Vec<Participant>, is_own: impl Fn(&str, &str) -> bool) -> 
             .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     out
+}
+
+/// We are the only moderator and somebody else would stay behind without one.
+fn needs_successor(members: &[MemberView]) -> bool {
+    members.iter().any(|m| m.is_self && m.is_moderator)
+        && !members.iter().any(|m| !m.is_self && m.is_moderator)
+        && members.iter().any(|m| !m.is_self)
 }
 
 /// German text for a failed group action, for a short notice.
@@ -418,6 +433,27 @@ mod tests {
         assert_eq!(names, ["Ich", "bert", "Otto", "Anna", "Zoe"]);
         assert!(v[0].is_self && !v[0].is_moderator);
         assert!(v[2].is_owner && v[2].is_moderator);
+        // "Ich" is no moderator: leaving is fine.
+        assert!(!needs_successor(&v));
+    }
+
+    #[test]
+    fn last_moderator_must_appoint_a_successor() {
+        let parse = |json: &str| {
+            member_views(serde_json::from_str::<Vec<Participant>>(json).unwrap(), |_, id| id == "me")
+        };
+        let me_owner_with_member = parse(
+            r#"[{"attendeeId":1,"actorType":"users","actorId":"me","displayName":"Ich","participantType":1},
+                {"attendeeId":2,"actorType":"users","actorId":"b","displayName":"B","participantType":3}]"#,
+        );
+        assert!(needs_successor(&me_owner_with_member));
+        let two_moderators = parse(
+            r#"[{"attendeeId":1,"actorType":"users","actorId":"me","displayName":"Ich","participantType":1},
+                {"attendeeId":2,"actorType":"users","actorId":"b","displayName":"B","participantType":2}]"#,
+        );
+        assert!(!needs_successor(&two_moderators));
+        let alone = parse(r#"[{"attendeeId":1,"actorType":"users","actorId":"me","displayName":"Ich","participantType":1}]"#);
+        assert!(!needs_successor(&alone));
     }
 
     #[test]

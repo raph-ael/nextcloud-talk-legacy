@@ -382,6 +382,12 @@ impl TalkSession {
         group_err(self.engine.set_notification_level(&token, level).await, core::GroupOp::Mute)
     }
 
+    /// Ask when "Gruppe verlassen" is clicked: `true` → "Neuen Moderator wählen" first.
+    #[napi]
+    pub async fn leave_needs_moderator(&self, token: String) -> Result<bool> {
+        self.engine.leave_needs_moderator(&token).await.map_err(to_napi)
+    }
+
     #[napi]
     pub async fn leave_group(&self, token: String) -> Option<String> {
         group_err(self.engine.leave_group(&token).await, core::GroupOp::Leave)

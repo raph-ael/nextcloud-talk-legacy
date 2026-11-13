@@ -16,7 +16,7 @@ Alle ändernden Aufrufe liefern `null` bei Erfolg, sonst einen kurzen deutschen 
 | Feld | Bedeutung |
 |---|---|
 | `isModerator` | Darf die Gruppe und ihre Mitglieder bearbeiten. |
-| `canLeave` | `false`, wenn man der letzte Moderator ist. Dann muss man vorher jemand anderen ernennen. |
+| `canLeave` | Der Wert des Servers (`canLeaveConversation`). Er deckt den letzten Moderator **nicht** ab, dafür gibt es `leaveNeedsModerator`. |
 | `canDelete` | Darf die Gruppe für alle löschen. |
 | `isPublic` | Der Gruppenlink ist an (Typ 3). |
 | `hasCustomAvatar` | Es ist ein Foto gesetzt, es lässt sich also entfernen. |
@@ -42,6 +42,7 @@ Gruppeneinstellungen gibt es für die Typen 2 und 3.
 | `setGroupLink(token, on)` | Fehlertext | |
 | `groupLink(token)` | Link | Zum Teilen bzw. Kopieren. |
 | `setNotificationLevel(token, level)` | Fehlertext | |
+| `leaveNeedsModerator(token)` | bool | Beim Tippen auf „Gruppe verlassen“ fragen. `true`, wenn man der einzige Moderator ist und andere bleiben: Dann kommt zuerst „Neuen Moderator wählen“. |
 | `leaveGroup(token)` | Fehlertext | Danach fehlt die Gruppe in `roomsChanged`. |
 | `deleteGroup(token)` | Fehlertext | Danach fehlt die Gruppe in `roomsChanged`. |
 
@@ -142,7 +143,7 @@ Gruppeneinstellungen gibt es für die Typen 2 und 3.
 5. **Ganz unten** in `danger`, jeweils mit Bestätigung:
    - **„Gruppe verlassen“**
      - Bestätigung: „Gruppe verlassen? Du erhältst keine Nachrichten mehr aus dieser Gruppe.“
-     - Ist `canLeave` falsch, kommt stattdessen „Neuen Moderator wählen“: „Bevor du gehst, ernenne jemanden zum Moderator.“ mit der Mitgliederliste ohne einen selbst zur Auswahl. Danach `setModerator(…, true)` und `leaveGroup`.
+     - Liefert `leaveNeedsModerator` `true`, kommt stattdessen „Neuen Moderator wählen“: „Bevor du gehst, ernenne jemanden zum Moderator.“ mit der Mitgliederliste ohne einen selbst zur Auswahl. Danach `setModerator(…, true)` und `leaveGroup`.
    - **„Gruppe löschen“**, nur mit `canDelete`.
      - Bestätigung: „Gruppe für alle löschen? Alle Nachrichten gehen verloren.“ mit den Knöpfen „Löschen“ und „Abbrechen“.
    - Nach Verlassen oder Löschen schließen Einstellungen und Chat. Man landet in der Chatliste.
