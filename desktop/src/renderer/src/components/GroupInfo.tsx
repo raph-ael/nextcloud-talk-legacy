@@ -120,6 +120,16 @@ export function GroupInfo({ room }: { room: RoomView }) {
     else toast(res.error ?? 'Chat konnte nicht geöffnet werden')
   }
 
+  /** „Gruppe verlassen“: the core says whether somebody must be appointed first. */
+  async function askLeave() {
+    if (busy) return
+    setBusy(true)
+    const needs = await window.talk.leaveNeedsModerator(token).catch(() => null)
+    setBusy(false)
+    if (needs === null) toast(offline())
+    else setDialog({ kind: needs ? 'newModerator' : 'leave' })
+  }
+
   async function leave() {
     setBusy(true)
     const error = await leaveOrDelete(token, false)
@@ -153,11 +163,6 @@ export function GroupInfo({ room }: { room: RoomView }) {
   }
 
   const count = members?.length
-  // The server still reports „can leave“ for the last moderator (the leave then fails), so the
-  // member list decides as well: nobody else is a moderator, but there are others to promote.
-  const lastModerator =
-    !room.canLeave ||
-    (room.isModerator && !!members && members.length > 1 && !members.some((m) => !m.isSelf && m.isModerator))
   const subtitle =
     count === undefined
       ? 'Gruppe'
@@ -235,7 +240,8 @@ export function GroupInfo({ room }: { room: RoomView }) {
               icon={<LeaveIcon />}
               label="Gruppe verlassen"
               danger
-              onClick={() => setDialog({ kind: lastModerator ? 'newModerator' : 'leave' })}
+              disabled={busy}
+              onClick={() => void askLeave()}
             />
             {room.canDelete && <SettingsRow icon={<TrashIcon />} label="Gruppe löschen" danger onClick={() => setDialog({ kind: 'delete' })} />}
           </Section>
