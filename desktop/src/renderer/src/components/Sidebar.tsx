@@ -1,27 +1,42 @@
-import { forwardRef, memo, useEffect, useMemo, useState } from 'react'
-import { withAttachment, type RoomView } from '@shared/core'
-import { getState, openCompose, openRoom, useStore } from '../store'
+import { forwardRef, memo, useEffect, useState } from 'react'
+import { withAttachment, type RoomView, type SectionView } from '@shared/core'
+import {
+  getState,
+  openCategories,
+  openCompose,
+  openRoom,
+  setQuery,
+  shownRooms,
+  toggleSection,
+  useStore,
+} from '../store'
 import { listTime } from '../format'
 import { Avatar } from './Avatar'
 import { RecordingBanners } from '../call/RecordingBanners'
 import { NewMessage } from './NewMessage'
 
 export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, searchRef) {
-  const rooms = useStore((s) => s.rooms)
+  const sections = useStore((s) => s.sections)
+  const query = useStore((s) => s.query)
   const activeToken = useStore((s) => s.activeToken)
   const online = useStore((s) => s.online)
   const account = useStore((s) => s.account)
   const composing = useStore((s) => s.composing)
-  const [query, setQuery] = useState('')
   const [menu, setMenu] = useState(false)
+  const [canManage, setCanManage] = useState(false)
   const now = useNow(30_000)
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase('de')
-    return rooms.filter((r) => !r.isArchived && (!q || r.name.toLocaleLowerCase('de').includes(q)))
-  }, [rooms, query])
-  const favorites = visible.filter((r) => r.isFavorite)
-  const others = visible.filter((r) => !r.isFavorite)
+  // Known after the first room list: ask again when the menu opens.
+  useEffect(() => {
+    let alive = true
+    window.talk
+      .categoriesSupported()
+      .then((ok) => alive && setCanManage(ok))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [account, menu])
 
   if (composing) {
     return (
@@ -31,7 +46,7 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
     )
   }
 
-  const row = (room: RoomView) => <RoomItem key={room.token} room={room} active={room.token === activeToken} now={now} />
+  const empty = sections.every((s) => s.total === 0)
 
   return (
     <aside className="sidebar">
@@ -65,6 +80,17 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
                 {account?.user}
                 <span className="muted">{account?.server.replace(/^https?:\/\//, '')}</span>
               </div>
+              {canManage && (
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    setMenu(false)
+                    openCategories()
+                  }}
+                >
+                  Kategorien verwalten
+                </button>
+              )}
               <button className="menu-item danger" onClick={() => void window.talk.logout()}>
                 Abmelden
               </button>
@@ -81,8 +107,9 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') setQuery('')
-            if (e.key === 'Enter' && visible[0]) {
-              void openRoom(visible[0].token)
+            const first = sections[0]?.rooms[0]
+            if (e.key === 'Enter' && first) {
+              void openRoom(first.token)
               setQuery('')
             }
           }}
@@ -91,19 +118,45 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
       {!online && <OfflineBanner />}
       <RecordingBanners />
       <nav className="room-list" aria-label="Chats">
-        {favorites.length > 0 && (
-          <>
-            <h3 className="list-section">Favoriten</h3>
-            {favorites.map(row)}
-            {others.length > 0 && <h3 className="list-section">Chats</h3>}
-          </>
-        )}
-        {others.map(row)}
-        {visible.length === 0 && <p className="muted center pad">{query ? 'Keine Treffer' : 'Noch keine Chats'}</p>}
+        {sections.map((section) => (
+          <div key={section.id} role="group" aria-label={section.title || undefined}>
+            {section.title && <SectionHeader section={section} />}
+            {section.rooms.map((room) => (
+              <RoomItem key={`${section.id}:${room.token}`} room={room} active={room.token === activeToken} now={now} />
+            ))}
+          </div>
+        ))}
+        {empty && <p className="muted center pad">{query ? 'Keine Treffer' : 'Noch keine Chats'}</p>}
       </nav>
     </aside>
   )
 })
+
+/** Head of a section: the whole row opens and closes it; the chevron turns down when open. */
+function SectionHeader({ section }: { section: SectionView }) {
+  const hidden = section.collapsed ? section.total - section.rooms.length : 0
+  const label = [
+    section.kind === 'custom' ? `${section.title}, Kategorie` : section.title,
+    hidden > 0 ? (hidden === 1 ? '1 Chat ausgeblendet' : `${hidden} Chats ausgeblendet`) : '',
+  ]
+    .filter(Boolean)
+    .join(', ')
+  return (
+    <h3 className="list-section section-head">
+      <button
+        className="section-toggle"
+        aria-expanded={!section.collapsed}
+        aria-label={label}
+        onClick={() => void toggleSection(section.id)}
+      >
+        <span className="ellipsis">{section.title}</span>
+        <svg className={`chevron${section.collapsed ? '' : ' open'}`} viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+          <path fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M6 3.5l4.5 4.5L6 12.5" />
+        </svg>
+      </button>
+    </h3>
+  )
+}
 
 export function OfflineBanner() {
   return <div className="offline">Keine Verbindung – wird erneut versucht …</div>
@@ -164,10 +217,10 @@ const RoomItem = memo(function RoomItem({ room, active, now }: { room: RoomView;
   )
 })
 
-/** Alt+↑/↓ cycles through the visible conversations. */
+/** Alt+↑/↓ cycles through the conversations shown in the list. */
 export function cycleRoom(delta: number): void {
-  const { rooms, activeToken } = getState()
-  const list = rooms.filter((r) => !r.isArchived)
+  const { activeToken } = getState()
+  const list = shownRooms()
   if (list.length === 0) return
   const i = list.findIndex((r) => r.token === activeToken)
   const next = list[(i + delta + list.length) % list.length] ?? list[0]

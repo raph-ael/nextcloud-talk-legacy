@@ -375,6 +375,41 @@ body.resizing {
   font-weight: 600;
   letter-spacing: -0.08px;
 }
+/* Section heads are buttons (docs/categories.md): title, then a muted chevron. */
+.list-section.section-head {
+  padding: 0;
+}
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px 8px;
+  border-radius: 8px;
+  font: inherit;
+  text-align: left;
+}
+.section-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.section-toggle .chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 150ms ease;
+}
+.section-toggle:hover .chevron {
+  color: var(--text);
+}
+.chevron.open {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .section-toggle .chevron {
+    transition: none;
+  }
+}
 .room {
   display: flex;
   align-items: center;
@@ -3161,6 +3196,28 @@ button.settings-row:focus-visible {
   .check {
     transition: none;
   }
+}
+
+/* Page „Kategorien“: a row is the name button plus ↑ ↓ and the menu. */
+.category-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+}
+.category-row > .settings-row {
+  flex: 1;
+  min-width: 0;
+}
+.category-row .icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+  color: var(--text-muted);
+}
+.icon-spacer {
+  width: 32px;
+  flex-shrink: 0;
 }
 
 /* Dialogs on the shared modal (confirmations, member sheet, choices, edit form) */

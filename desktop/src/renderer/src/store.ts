@@ -11,6 +11,7 @@ import type {
   PendingState,
   ReplyPreview,
   RoomView,
+  SectionView,
   SendError,
   StagedFile,
   TalkEvent,
@@ -47,6 +48,12 @@ export interface State {
   composing: boolean
   /** Token whose group settings replace the chat area. */
   groupInfo: string | null
+  /** The chat list in sections (docs/categories.md), for `query` and the open chat. */
+  sections: SectionView[]
+  /** Search text of the chat list. */
+  query: string
+  /** The page „Kategorien“ replaces the chat area. */
+  categories: boolean
 }
 
 let state: State = {
@@ -58,6 +65,9 @@ let state: State = {
   activeToken: null,
   composing: false,
   groupInfo: null,
+  sections: [],
+  query: '',
+  categories: false,
 }
 const listeners = new Set<() => void>()
 
@@ -136,6 +146,9 @@ export function handleEvent(e: TalkEvent): void {
           activeToken: null,
           composing: false,
           groupInfo: null,
+          sections: [],
+          query: '',
+          categories: false,
         })
       break
     case 'roomsChanged':
@@ -190,6 +203,44 @@ function roomsChanged(rooms: RoomView[]): void {
   for (const t of leaving) if (!rooms.some((r) => r.token === t)) leaving.delete(t)
   set(patch)
   updateBadge()
+  void refreshSections()
+}
+
+let sectionsSeq = 0
+
+/**
+ * Asks the core for the sections again: on `roomsChanged`, a new search text and when
+ * another chat opens. Only the newest answer counts.
+ */
+export async function refreshSections(): Promise<void> {
+  const seq = ++sectionsSeq
+  const sections = await window.talk.roomSections(state.query, state.activeToken).catch(() => null)
+  if (sections && seq === sectionsSeq && state.session === 'ready') set({ sections })
+}
+
+export function setQuery(query: string): void {
+  if (query === state.query) return
+  set({ query })
+  void refreshSections()
+}
+
+/** Opens or closes a section; the list follows via `roomsChanged`, an error comes as a toast. */
+export async function toggleSection(id: string): Promise<void> {
+  const error = await window.talk.toggleSection(id).catch(() => 'Keine Verbindung')
+  if (error) toast(error)
+}
+
+/** The rows in the order shown, each chat once (Alt+↑/↓, Enter in the search). */
+export function shownRooms(): RoomView[] {
+  const seen = new Set<string>()
+  const list: RoomView[] = []
+  for (const section of state.sections)
+    for (const r of section.rooms)
+      if (!seen.has(r.token)) {
+        seen.add(r.token)
+        list.push(r)
+      }
+  return list
 }
 
 type ParticipantsListener = (token: string) => void
@@ -223,6 +274,12 @@ export function openGroupInfo(token: string): void {
 export function closeGroupInfo(): void {
   set({ groupInfo: null })
 }
+export function openCategories(): void {
+  set({ categories: true, groupInfo: null })
+}
+export function closeCategories(): void {
+  set({ categories: false })
+}
 
 function updateBadge(): void {
   const total = state.rooms.filter((r) => !r.isArchived && r.unreadMessages > 0).length
@@ -244,17 +301,19 @@ export async function boot(): Promise<void> {
   }
   set({ session: 'ready', account, rooms: await window.talk.rooms() })
   updateBadge()
+  void refreshSections()
 }
 
 export async function openRoom(token: string): Promise<void> {
   const previous = state.activeToken
   if (previous === token) {
-    // Clicking the open chat in the list leaves its settings.
-    if (state.groupInfo) set({ groupInfo: null })
+    // Clicking the open chat in the list leaves its settings (or the page „Kategorien“).
+    if (state.groupInfo || state.categories) set({ groupInfo: null, categories: false })
     return
   }
   if (previous) void window.talk.closeChat(previous)
-  set({ activeToken: token, groupInfo: null })
+  set({ activeToken: token, groupInfo: null, categories: false })
+  void refreshSections()
   setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status) }))
   try {
     // Unsent messages survive restarts: show them from the first frame.
@@ -294,6 +353,7 @@ export async function openRoom(token: string): Promise<void> {
 export function closeRoom(): void {
   if (state.activeToken) void window.talk.closeChat(state.activeToken)
   set({ activeToken: null, groupInfo: null })
+  void refreshSections()
 }
 
 export async function loadOlder(token: string): Promise<void> {

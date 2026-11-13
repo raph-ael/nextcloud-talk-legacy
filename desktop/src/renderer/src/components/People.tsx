@@ -76,10 +76,12 @@ export function PlaceholderRows({ count = 3 }: { count?: number }) {
   )
 }
 
-/** A person: avatar 40, name and a muted second line; `trailing` on the right. */
+/** A person (or with `token` a chat): avatar 40, name and a muted second line; `trailing` on the right. */
 export function PersonRow({
   name,
   userId,
+  token,
+  avatarVersion,
   subline,
   trailing,
   onClick,
@@ -88,6 +90,8 @@ export function PersonRow({
 }: {
   name: string
   userId?: string
+  token?: string
+  avatarVersion?: string
   subline?: string
   trailing?: ReactNode
   onClick?: () => void
@@ -96,7 +100,7 @@ export function PersonRow({
 }) {
   const body = (
     <>
-      <Avatar name={name} userId={userId} size={40} />
+      <Avatar name={name} userId={userId} token={token} version={avatarVersion} size={40} />
       <span className="person-text">
         <span className="person-name">{name}</span>
         {subline && <span className="person-sub">{subline}</span>}
@@ -137,14 +141,22 @@ export function RoundIcon({ children }: { children: ReactNode }) {
   )
 }
 
-export function Chips({ users, onRemove }: { users: UserView[]; onRemove: (u: UserView) => void }) {
-  if (users.length === 0) return null
+/** Something chosen: a person (`id` is the user id) or, with `token`, a chat. */
+export interface ChipItem {
+  id: string
+  name: string
+  token?: string
+  avatarVersion?: string
+}
+
+export function Chips({ items, onRemove }: { items: ChipItem[]; onRemove: (id: string) => void }) {
+  if (items.length === 0) return null
   return (
     <div className="chips">
-      {users.map((u) => (
-        <button key={u.id} className="chip" onClick={() => onRemove(u)} aria-label={`${u.name} entfernen`} title={u.name}>
-          <Avatar name={u.name} userId={u.id} size={24} />
-          <span className="ellipsis">{u.name.split(' ')[0]}</span>
+      {items.map((c) => (
+        <button key={c.id} className="chip" onClick={() => onRemove(c.id)} aria-label={`${c.name} entfernen`} title={c.name}>
+          <Avatar name={c.name} userId={c.token ? undefined : c.id} token={c.token} version={c.avatarVersion} size={24} />
+          <span className="ellipsis">{c.token ? c.name : c.name.split(' ')[0]}</span>
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
             <path stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M7 7l10 10M17 7L7 17" />
           </svg>
@@ -315,7 +327,13 @@ export function MemberPicker({
           }}
         />
       </div>
-      <Chips users={selected} onRemove={toggle} />
+      <Chips
+        items={selected}
+        onRemove={(id) => {
+          const u = selected.find((s) => s.id === id)
+          if (u) toggle(u)
+        }}
+      />
       <div className="people-list">
         <UserResults
           {...search}
