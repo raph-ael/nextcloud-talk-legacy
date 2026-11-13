@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
 import { withAttachment, type RoomView, type SendError } from '@shared/core'
-import { discard, loadOlder, markVisibleRead, retry, useStore, type UiMessage } from '../store'
+import { discard, loadOlder, markVisibleRead, openGroupInfo, retry, useStore, type UiMessage } from '../store'
+import { isGroupRoom } from './GroupInfo'
 import { colorFor, dayLabel, fullTime, isJumboEmoji, messageTime, sameDay, splitLinks } from '../format'
 import { Markdown, plain } from './Markdown'
 import { Avatar } from './Avatar'
@@ -35,6 +36,18 @@ function JumpButton({ shown, unread, onJump }: { shown: boolean; unread: number;
       </svg>
       {unread > 0 && <span className="jump-badge">{unread > 99 ? '99+' : unread}</span>}
     </button>
+  )
+}
+
+function ChatTitle({ room }: { room: RoomView }) {
+  return (
+    <>
+      <Avatar key={room.avatarVersion} name={room.name} token={room.token} version={room.avatarVersion} size={32} />
+      <div className="chat-title">
+        <h2>{room.name}</h2>
+        {room.description && <span className="muted ellipsis">{plain(room.description)}</span>}
+      </div>
+    </>
   )
 }
 
@@ -176,11 +189,20 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
       }}
     >
       <header className="chat-header">
-        <Avatar name={room.name} token={room.token} version={room.avatarVersion} size={32} />
-        <div className="chat-title">
-          <h2>{room.name}</h2>
-          {room.description && <span className="muted ellipsis">{plain(room.description)}</span>}
-        </div>
+        {isGroupRoom(room) ? (
+          <button
+            className="chat-header-main"
+            onClick={() => openGroupInfo(room.token)}
+            title="Gruppeneinstellungen"
+            aria-label={`${room.name}, Gruppeneinstellungen`}
+          >
+            <ChatTitle room={room} />
+          </button>
+        ) : (
+          <div className="chat-header-main">
+            <ChatTitle room={room} />
+          </div>
+        )}
         <div className="chat-header-actions">
           <CallButton room={room} />
         </div>

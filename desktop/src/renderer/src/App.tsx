@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { closeRoom, useStore } from './store'
+import { closeRoom, getState, openCompose, useStore } from './store'
+import { GroupInfo } from './components/GroupInfo'
 import { Login } from './components/Login'
 import { cycleRoom, Sidebar } from './components/Sidebar'
 import { Chat } from './components/Chat'
@@ -71,6 +72,7 @@ export function App() {
   const session = useStore((s) => s.session)
   const activeToken = useStore((s) => s.activeToken)
   const room = useStore((s) => s.rooms.find((r) => r.token === s.activeToken) ?? null)
+  const groupInfo = useStore((s) => s.groupInfo)
   const search = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const { width, handle } = useSidebarWidth()
@@ -78,7 +80,10 @@ export function App() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const mod = e.ctrlKey || e.metaKey
-      if (mod && (e.key === 'k' || e.key === 'f')) {
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        openCompose()
+      } else if (mod && (e.key === 'k' || e.key === 'f')) {
         e.preventDefault()
         search.current?.focus()
         search.current?.select()
@@ -86,13 +91,15 @@ export function App() {
         e.preventDefault()
         cycleRoom(e.key === 'ArrowUp' ? -1 : 1)
       } else if (e.key === 'Escape' && document.activeElement === document.body) {
-        closeRoom()
+        // Steps of „Neue Nachricht“ and the group settings handle Esc themselves.
+        if (!e.defaultPrevented && !getState().composing && !getState().groupInfo) closeRoom()
       } else if (
         // Typing anywhere goes into the message field (like Signal).
         !mod &&
         !e.altKey &&
         e.key.length === 1 &&
         composer.current &&
+        !getState().groupInfo &&
         !(document.activeElement instanceof HTMLInputElement) &&
         !(document.activeElement instanceof HTMLTextAreaElement)
       ) {
@@ -120,7 +127,13 @@ export function App() {
         {...handle}
       />
       {room ? (
-        <Chat key={room.token} room={room} ref={composer} />
+        <div className="chat-pane">
+          {/* The chat stays mounted under the settings (scroll position, draft). */}
+          <div className="chat-slot" inert={groupInfo === room.token}>
+            <Chat key={room.token} room={room} ref={composer} />
+          </div>
+          {groupInfo === room.token && <GroupInfo key={room.token} room={room} />}
+        </div>
       ) : (
         <section className="chat empty">
           <p className="muted">Wähle einen Chat aus.</p>

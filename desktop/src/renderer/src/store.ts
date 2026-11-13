@@ -2,6 +2,7 @@
 // A tiny external store (no framework) consumed via useSyncExternalStore.
 
 import { useSyncExternalStore } from 'react'
+import { toast } from './call/store'
 import type {
   AccountInfo,
   ChatPage,
@@ -42,6 +43,10 @@ export interface State {
   chats: Record<string, ChatState>
   online: boolean
   activeToken: string | null
+  /** „Neue Nachricht“ replaces the conversation list (docs/groups.md). */
+  composing: boolean
+  /** Token whose group settings replace the chat area. */
+  groupInfo: string | null
 }
 
 let state: State = {
@@ -51,6 +56,8 @@ let state: State = {
   chats: {},
   online: true,
   activeToken: null,
+  composing: false,
+  groupInfo: null,
 }
 const listeners = new Set<() => void>()
 
@@ -120,11 +127,22 @@ export function handleEvent(e: TalkEvent): void {
   switch (e.type) {
     case 'session':
       if (e.state === 'ready') set({ session: 'ready', account: e.account })
-      else set({ session: 'loggedOut', account: null, rooms: [], chats: {}, activeToken: null })
+      else
+        set({
+          session: 'loggedOut',
+          account: null,
+          rooms: [],
+          chats: {},
+          activeToken: null,
+          composing: false,
+          groupInfo: null,
+        })
       break
     case 'roomsChanged':
-      set({ rooms: e.rooms })
-      updateBadge()
+      roomsChanged(e.rooms)
+      break
+    case 'participantsChanged':
+      participantListeners.forEach((l) => l(e.token))
       break
     case 'messagesAdded':
       if (state.chats[e.token]) setChat(e.token, (c) => ({ ...c, messages: merge(c.messages, e.messages) }))
@@ -148,6 +166,62 @@ export function handleEvent(e: TalkEvent): void {
     case 'authFailed':
       break
   }
+}
+
+/** Groups we leave or delete ourselves: no „nicht mehr in dieser Gruppe“ notice for them. */
+const leaving = new Set<string>()
+
+/**
+ * New conversation list. When the open chat (or open group settings) disappears from it –
+ * we were removed, the group was deleted, or we left – both close (docs/groups.md).
+ */
+function roomsChanged(rooms: RoomView[]): void {
+  const gone = (token: string | null): token is string =>
+    !!token && state.rooms.some((r) => r.token === token) && !rooms.some((r) => r.token === token)
+  const patch: Partial<State> = { rooms }
+  if (gone(state.groupInfo)) patch.groupInfo = null
+  if (gone(state.activeToken)) {
+    const token = state.activeToken
+    void window.talk.closeChat(token)
+    patch.activeToken = null
+    patch.groupInfo = null
+    if (!leaving.has(token)) toast('Du bist nicht mehr in dieser Gruppe')
+  }
+  for (const t of leaving) if (!rooms.some((r) => r.token === t)) leaving.delete(t)
+  set(patch)
+  updateBadge()
+}
+
+type ParticipantsListener = (token: string) => void
+const participantListeners = new Set<ParticipantsListener>()
+
+/** Called on `participantsChanged` (reload the member list). Returns the unsubscribe function. */
+export function onParticipantsChanged(l: ParticipantsListener): () => void {
+  participantListeners.add(l)
+  return () => participantListeners.delete(l)
+}
+
+/** Leave or delete a group ourselves (no notice when it disappears). Resolves to an error text or null. */
+export async function leaveOrDelete(token: string, del: boolean): Promise<string | null> {
+  leaving.add(token)
+  const error = await (del ? window.talk.deleteGroup(token) : window.talk.leaveGroup(token)).catch(
+    () => 'Keine Verbindung',
+  )
+  if (error) leaving.delete(token)
+  return error
+}
+
+export function openCompose(): void {
+  set({ composing: true })
+}
+export function closeCompose(): void {
+  set({ composing: false })
+}
+export function openGroupInfo(token: string): void {
+  set({ groupInfo: token })
+}
+export function closeGroupInfo(): void {
+  set({ groupInfo: null })
 }
 
 function updateBadge(): void {
@@ -174,9 +248,13 @@ export async function boot(): Promise<void> {
 
 export async function openRoom(token: string): Promise<void> {
   const previous = state.activeToken
-  if (previous === token) return
+  if (previous === token) {
+    // Clicking the open chat in the list leaves its settings.
+    if (state.groupInfo) set({ groupInfo: null })
+    return
+  }
   if (previous) void window.talk.closeChat(previous)
-  set({ activeToken: token })
+  set({ activeToken: token, groupInfo: null })
   setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status) }))
   try {
     // Unsent messages survive restarts: show them from the first frame.
@@ -215,7 +293,7 @@ export async function openRoom(token: string): Promise<void> {
 
 export function closeRoom(): void {
   if (state.activeToken) void window.talk.closeChat(state.activeToken)
-  set({ activeToken: null })
+  set({ activeToken: null, groupInfo: null })
 }
 
 export async function loadOlder(token: string): Promise<void> {

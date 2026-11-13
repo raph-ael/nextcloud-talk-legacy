@@ -1,15 +1,17 @@
 import { forwardRef, memo, useEffect, useMemo, useState } from 'react'
 import { withAttachment, type RoomView } from '@shared/core'
-import { getState, openRoom, useStore } from '../store'
+import { getState, openCompose, openRoom, useStore } from '../store'
 import { listTime } from '../format'
 import { Avatar } from './Avatar'
 import { RecordingBanners } from '../call/RecordingBanners'
+import { NewMessage } from './NewMessage'
 
 export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, searchRef) {
   const rooms = useStore((s) => s.rooms)
   const activeToken = useStore((s) => s.activeToken)
   const online = useStore((s) => s.online)
   const account = useStore((s) => s.account)
+  const composing = useStore((s) => s.composing)
   const [query, setQuery] = useState('')
   const [menu, setMenu] = useState(false)
   const now = useNow(30_000)
@@ -21,6 +23,14 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
   const favorites = visible.filter((r) => r.isFavorite)
   const others = visible.filter((r) => !r.isFavorite)
 
+  if (composing) {
+    return (
+      <aside className="sidebar">
+        <NewMessage />
+      </aside>
+    )
+  }
+
   const row = (room: RoomView) => <RoomItem key={room.token} room={room} active={room.token === activeToken} now={now} />
 
   return (
@@ -30,6 +40,17 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
           <Avatar name={account?.user ?? '?'} size={28} />
         </button>
         <h2>Chats</h2>
+        <button
+          className="icon-button"
+          aria-label="Neue Nachricht"
+          title={`Neue Nachricht (${navigator.platform.startsWith('Mac') ? '⌘' : 'Strg+'}N)`}
+          onClick={openCompose}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round">
+            <path d="M12 4.5H6A1.5 1.5 0 0 0 4.5 6v12A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5v-6" />
+            <path d="M17.5 3.8l2.7 2.7-8.4 8.4-3.3.6.6-3.3z" />
+          </svg>
+        </button>
         <div className="menu-anchor">
           <button className="icon-button" aria-label="Menü" title="Menü" onClick={() => setMenu((m) => !m)}>
             <svg viewBox="0 0 24 24" width="20" height="20">
