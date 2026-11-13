@@ -42,12 +42,19 @@ export interface ChatState {
 /**
  * The unread line of the open chat (docs/chat.md, „Ungelesen-Linie“): taken when the chat
  * opens, before anything moves the read marker; gone after an own message or leaving.
+ * Place and number come from the loaded messages (`countsAsUnread`), not from counting.
  */
 export interface UnreadLine {
   token: string
-  /** The line goes above the first foreign, non-system message with a higher id. */
+  /** Messages after this id count (foreign, not system); the line goes above the first one. */
   from: number
-  count: number
+  /** The room's unread number when opening: the line shows at least this. */
+  base: number
+}
+
+/** Whether `m` counts for the unread line starting after `from`. */
+export function countsAsUnread(m: UiMessage, from: number): boolean {
+  return !m.status && m.id > from && !m.isOwn && m.kind !== 'system'
 }
 
 export interface State {
@@ -341,9 +348,10 @@ export async function openRoom(token: string): Promise<void> {
   if (previous) void window.talk.closeChat(previous)
   // The snapshot comes first: the chat marks itself read as soon as it shows the end.
   const opened = state.rooms.find((r) => r.token === token)
+  // Always, also without unread messages: the list may not know the newest ones yet.
   const unreadLine =
-    opened && opened.unreadMessages > 0
-      ? { token, from: opened.lastReadMessage, count: opened.unreadMessages }
+    opened && opened.lastReadMessage > 0
+      ? { token, from: opened.lastReadMessage, base: opened.unreadMessages }
       : null
   set({ activeToken: token, groupInfo: null, categories: false, unreadLine })
   void refreshSections()
@@ -482,28 +490,20 @@ export function setChatAtBottom(atBottom: boolean): void {
   chatAtBottom = atBottom
 }
 
-function countsAsUnread(m: MessageView): boolean {
-  return !m.isOwn && m.kind !== 'system'
-}
-
 /**
- * New messages in the open chat: the line counts them, or a new line starts above them
- * when they arrive out of sight (scrolled up or window in the background).
+ * New messages in the open chat. A shown line counts them by itself. Without one (once the
+ * opening is through), they start a new line when they arrive out of sight (scrolled up or
+ * window in the background); in sight they are simply read.
  */
 function countUnread(token: string, incoming: MessageView[]): void {
   if (state.activeToken !== token) return
   const chat = state.chats[token]
-  if (!chat) return
-  const known = new Set(chat.messages.map((m) => m.id))
-  const added = incoming.filter((m) => !known.has(m.id) && countsAsUnread(m))
-  if (added.length === 0) return
-  const line = state.unreadLine
-  if (line?.token === token) {
-    set({ unreadLine: { ...line, count: line.count + added.length } })
-    return
-  }
-  const visible = chatAtBottom && document.hasFocus() && document.visibilityState === 'visible'
+  const line = state.unreadLine?.token === token ? state.unreadLine : null
+  // While opening, everything after the snapshot counts (the list may have been behind).
+  if (!chat || (line && !chat.synced)) return
+  if (line && chat.messages.some((m) => countsAsUnread(m, line.from))) return
   const newest = chat.messages.findLast((m) => !m.status)
-  if (visible || !newest) return
-  set({ unreadLine: { token, from: newest.id, count: added.length } })
+  if (!newest || !incoming.some((m) => countsAsUnread(m, newest.id))) return
+  const visible = chatAtBottom && document.hasFocus() && document.visibilityState === 'visible'
+  set({ unreadLine: visible ? null : { token, from: newest.id, base: 0 } })
 }

@@ -6,6 +6,7 @@ import {
   markVisibleRead,
   openGroupInfo,
   retry,
+  countsAsUnread,
   setChatAtBottom,
   useStore,
   type UiMessage,
@@ -119,6 +120,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const placed = useRef(false)
   const pagesLoaded = useRef(0)
   const ownScroll = useRef(false)
+  const lastHeight = useRef(0)
 
   const isGroup = room.roomType !== 1 && room.roomType !== 6
   const messages = chat?.messages ?? []
@@ -126,11 +128,13 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
 
   // The line goes above the first foreign, non-system message after the snapshot, but only
   // once the snapshot itself is loaded (or the whole history): else it would sit too low.
+  // Number and place come from what is loaded (robust against a list that was behind and
+  // messages arriving twice): at least the room's number when opening.
+  const counting = unreadLine ? messages.filter((m) => countsAsUnread(m, unreadLine.from)) : []
   const lineCovered =
     !!unreadLine && (!chat?.hasMore || messages.some((m) => !m.status && m.id <= unreadLine.from))
-  const lineAt = lineCovered
-    ? messages.find((m) => !m.status && m.id > unreadLine.from && !m.isOwn && m.kind !== 'system')?.id
-    : undefined
+  const lineAt = lineCovered ? counting[0]?.id : undefined
+  const unreadCount = Math.max(unreadLine?.base ?? 0, counting.length)
 
   useEffect(() => setReplyTo(null), [room.token])
 
@@ -161,7 +165,8 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
       return
     }
     if (!chat.synced || chat.loadingOlder) return
-    if (!lineCovered && chat.hasMore && chat.oldestId != null && pagesLoaded.current < MAX_PAGES_TO_LINE) {
+    const wanted = counting.length > 0 && !lineCovered && chat.hasMore && chat.oldestId != null
+    if (wanted && pagesLoaded.current < MAX_PAGES_TO_LINE) {
       pagesLoaded.current += 1
       void loadOlder(room.token)
       return
@@ -172,7 +177,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     // message on top. Nothing foreign among the new ones: the end, as without a line.
     const target = line
       ? Math.min(0, el.scrollTop + line.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight / 4)
-      : lineCovered
+      : lineCovered || counting.length === 0
         ? 0
         : el.clientHeight - el.scrollHeight
     if (Math.abs(target - el.scrollTop) >= 1) {
@@ -207,9 +212,12 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     const bottom = el.scrollTop > -40
     updateAtBottom(bottom)
     setShowJump(el.scrollTop < -el.clientHeight / 2)
-    // Our own positioning when opening is no scrolling by the user.
+    // Our own positioning when opening, and the shift by a new message while scrolled up,
+    // are no scrolling by the user.
+    const grew = el.scrollHeight !== lastHeight.current
+    lastHeight.current = el.scrollHeight
     if (ownScroll.current) ownScroll.current = false
-    else showDatePill(el, bottom)
+    else if (!grew || bottom) showDatePill(el, bottom)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
   }
 
@@ -335,7 +343,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 prev={messages[i - 1]}
                 next={messages[i + 1]}
                 isGroup={isGroup}
-                unread={m.id === lineAt ? unreadLine!.count : 0}
+                unread={m.id === lineAt ? unreadCount : 0}
                 read={m.isOwn && !m.status && m.id <= lastCommonRead}
                 canReply={!room.readOnly}
                 canReact={room.canReact}
