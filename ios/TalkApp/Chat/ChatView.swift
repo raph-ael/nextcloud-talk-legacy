@@ -14,6 +14,11 @@ struct ChatView: View {
     @State private var scrollTick = 0
     @State private var atBottom = true
     @State private var showJump = false
+    /// Floating date while scrolling (docs/chat.md, "Datum beim Scrollen").
+    @State private var pillDate = ""
+    @State private var pillShown = false
+    @State private var pillHide: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var panelOpen = false
     @State private var camera = false
     @State private var sending: PreparedImage?
@@ -31,6 +36,16 @@ struct ChatView: View {
         let footer: MessageList.Footer = chat?.loadingOlder == true || chat?.loading == true
             ? .loading
             : (chat != nil && chat?.hasMore == false && !messages.isEmpty ? .start : .none)
+        let line = store.unreadLine?.token == token ? store.unreadLine : nil
+        let unread = line?.place(in: messages)
+        let openAt: OpenAt = {
+            guard store.activeToken == token, let chat, !chat.loading else { return .wait }
+            guard let line else { return .bottom }
+            // Only once the server page is in: the cache may not hold the new messages yet.
+            guard line.settled else { return .wait }
+            if let unread { return .row(unread.row.key) }
+            return line.base > 0 ? .oldest : .bottom
+        }()
 
         VStack(spacing: 0) {
             if !store.online { OfflineBanner() }
@@ -41,6 +56,9 @@ struct ChatView: View {
                 lastCommonRead: lastCommonRead,
                 footer: footer,
                 highlighted: menuFor?.m.key,
+                unreadKey: unread?.row.key,
+                unreadCount: unread?.count ?? 0,
+                openAt: openAt,
                 scrollToBottom: scrollTick,
                 actions: MessageListActions(
                     onReply: { replyTo = $0 },
@@ -51,12 +69,32 @@ struct ChatView: View {
                     onNearTop: { store.loadOlder(token) },
                     onBottomChanged: { bottom in
                         atBottom = bottom
-                        if bottom { store.markVisibleRead(token) }
+                        store.setChatAtBottom(token, bottom)
                     },
-                    onFarChanged: { showJump = $0 }
+                    onFarChanged: { showJump = $0 },
+                    onScrollDate: { date in
+                        pillHide?.cancel()
+                        if let date { pillDate = date }
+                        pillShown = date != nil
+                    },
+                    onScrollEnded: {
+                        pillHide?.cancel()
+                        pillHide = Task {
+                            try? await Task.sleep(for: .milliseconds(400))
+                            if !Task.isCancelled { pillShown = false }
+                        }
+                    }
                 )
             )
             .background(Talk.background)
+            .overlay(alignment: .top) {
+                if pillShown {
+                    DatePill(text: pillDate)
+                        .padding(.top, 8)
+                        .transition(.opacity)
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: pillShown)
             .overlay(alignment: .bottomTrailing) {
                 if showJump {
                     JumpToBottomButton(unread: Int(room?.unreadMessages ?? 0)) { scrollTick += 1 }
@@ -82,7 +120,10 @@ struct ChatView: View {
                         scrollTick += 1
                     },
                     onOpenCamera: { camera = true },
-                    onVoiceSent: { scrollTick += 1 }
+                    onVoiceSent: {
+                        store.clearUnreadLine(token)
+                        scrollTick += 1
+                    }
                 )
                 if panelOpen {
                     AttachPanel(
@@ -243,6 +284,24 @@ struct ChatView: View {
             list.append(MenuAction(id: "delete", label: "Löschen", icon: "trash", destructive: true) { store.discard(msg) })
         }
         return list
+    }
+}
+
+/// The date of the topmost visible message while scrolling: decoration only, so hidden from
+/// VoiceOver (the day dividers are headings).
+private struct DatePill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Talk.muted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Talk.floating, in: Capsule())
+            .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

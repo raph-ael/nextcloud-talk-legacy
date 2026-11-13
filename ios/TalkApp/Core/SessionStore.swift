@@ -29,6 +29,31 @@ struct ChatState: Equatable {
     var loadingOlder = false
 }
 
+/// "N ungelesene Nachrichten" of the open chat (docs/chat.md, "Ungelesen-Linie"): taken when
+/// the chat opens, before anything moves the read marker, and kept until we send or leave.
+/// Place and number follow from the loaded messages (`counted`), so a stale chat list or a
+/// message arriving twice cannot make them wrong.
+struct UnreadLine: Equatable {
+    let token: String
+    /// Messages after this id count unless they are ours or system messages.
+    var from: Int64
+    /// `unreadMessages` of the room at the snapshot (0 for a line made while open).
+    var base: Int
+    /// The server page is in and older pages are loaded up to the first unread (at most 10):
+    /// the list may position.
+    var settled = false
+
+    func counts(_ m: UiMessage) -> Bool {
+        m.status == nil && m.msg.id > from && !m.msg.isOwn && m.msg.kind != .system
+    }
+
+    /// The message the line goes above and the number on it; nil while none counts.
+    func place(in messages: [UiMessage]) -> (row: UiMessage, count: Int)? {
+        guard let first = messages.first(where: counts) else { return nil }
+        return (first, max(base, messages.reduce(0) { $0 + (counts($1) ? 1 : 0) }))
+    }
+}
+
 enum SessionPhase {
     case loading, loggedOut, ready
 }
@@ -50,6 +75,10 @@ final class SessionStore {
     private(set) var chats: [String: ChatState] = [:]
     private(set) var online = true
     private(set) var activeToken: String?
+    private(set) var unreadLine: UnreadLine?
+    /// The open chat's list shows its newest message; until then nothing is marked read
+    /// (opening at the unread line must not read what is below it).
+    @ObservationIgnored private var chatAtBottom = true
     /// The group settings of the active chat are pushed on top of it (docs/groups.md).
     private(set) var groupInfoOpen = false
     /// Bumped per conversation on `participantsChanged`: open member lists reload.
@@ -251,6 +280,7 @@ final class SessionStore {
             Notifications.setBadge(rooms.filter { !$0.isArchived }.reduce(0) { $0 + Int($1.unreadMessages) })
         case .messagesAdded(let token, let messages):
             media.adoptLocalPreviews(messages)
+            if token == activeToken { countUnread(token, messages) }
             updateChat(token) { $0.messages = Self.merge($0.messages, messages) }
         case .messagesUpdated(let token, let messages):
             let byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
@@ -366,6 +396,15 @@ final class SessionStore {
             voice.interrupt()
             s.closeChat(token: previous)
         }
+        // The snapshot comes first, always: the read marker moves as soon as anything is
+        // marked read, and the list may not know the newest message yet. Nothing is read
+        // until the list has opened (at the line or at the bottom) and says where it is.
+        if let room = room(token), room.lastReadMessage > 0 {
+            unreadLine = UnreadLine(token: token, from: room.lastReadMessage, base: Int(room.unreadMessages))
+        } else {
+            unreadLine = nil
+        }
+        chatAtBottom = false
         // Cached messages and unsent ones (both survive restarts): shown in the first frame.
         let cached = s.cachedChat(token: token)
         var chat = chats[token] ?? ChatState()
@@ -395,9 +434,11 @@ final class SessionStore {
                     c.lastCommonRead = max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
                     c.loading = false
                 }
+                await loadToUnreadLine(token)
                 markVisibleRead(token)
             } catch {
                 updateChat(token) { $0.loading = false }
+                settleUnreadLine(token)
             }
         }
     }
@@ -407,7 +448,69 @@ final class SessionStore {
         voice.interrupt()
         session?.closeChat(token: token)
         activeToken = nil
+        unreadLine = nil
+        chatAtBottom = true
         groupInfoOpen = false
+    }
+
+    // MARK: - Unread line (docs/chat.md)
+
+    /// More than a page unread: older pages until the first unread message is loaded (≤ 10).
+    private func loadToUnreadLine(_ token: String) async {
+        var pages = 0, waits = 0
+        while pages < 10, waits < 100 {
+            // Loaded messages all newer than the marker: earlier unread ones are still missing.
+            guard let line = unreadLine, line.token == token, activeToken == token, line.base > 0,
+                  let chat = chats[token], chat.hasMore, let oldest = chat.oldestId,
+                  oldest > line.from else { break }
+            if chat.loadingOlder {
+                // A page the list asked for is on its way.
+                waits += 1
+                try? await Task.sleep(for: .milliseconds(100))
+                continue
+            }
+            guard await fetchOlder(token) else { break }
+            pages += 1
+        }
+        settleUnreadLine(token)
+    }
+
+    private func settleUnreadLine(_ token: String) {
+        guard unreadLine?.token == token else { return }
+        unreadLine?.settled = true
+    }
+
+    /// Gone once we send anything (text, file, voice) into the open chat.
+    func clearUnreadLine(_ token: String) {
+        guard unreadLine?.token == token else { return }
+        unreadLine = nil
+    }
+
+    /// The list reports whether it shows the newest message; at the bottom it is read.
+    func setChatAtBottom(_ token: String, _ bottom: Bool) {
+        guard activeToken == token else { return }
+        chatAtBottom = bottom
+        if bottom { markVisibleRead(token) }
+    }
+
+    /// New messages in the open chat. A shown line counts them by itself. Without one, a chat
+    /// that is not at the bottom (or not in front) gets a new line above them; at the bottom
+    /// they are read, and a snapshot that showed nothing is dropped.
+    private func countUnread(_ token: String, _ messages: [MessageView]) {
+        guard let chat = chats[token], let newest = chat.messages.last(where: { $0.status == nil })?.msg.id,
+              messages.contains(where: { $0.id > newest && !$0.isOwn && $0.kind != .system }) else { return }
+        if let line = unreadLine, line.token == token {
+            // A shown line counts them; while opening (server page not in) nothing changes.
+            guard line.settled, line.place(in: chat.messages) == nil else { return }
+            // A snapshot without a line: seen at the bottom, they must not raise one.
+            if chatAtBottom && foreground {
+                unreadLine = nil
+            } else {
+                unreadLine = UnreadLine(token: token, from: newest, base: 0, settled: true)
+            }
+        } else if !chatAtBottom || !foreground {
+            unreadLine = UnreadLine(token: token, from: newest, base: 0, settled: true)
+        }
     }
 
     func showGroupInfo(_ open: Bool) {
@@ -415,27 +518,34 @@ final class SessionStore {
     }
 
     func loadOlder(_ token: String) {
+        Task { await fetchOlder(token) }
+    }
+
+    /// One older page; false when there is none or it failed.
+    @discardableResult
+    private func fetchOlder(_ token: String) async -> Bool {
         guard let s = session, let chat = chats[token], let before = chat.oldestId,
-              chat.hasMore, !chat.loadingOlder, !chat.loading else { return }
+              chat.hasMore, !chat.loadingOlder, !chat.loading else { return false }
         updateChat(token) { $0.loadingOlder = true }
-        Task {
-            do {
-                let page = try await s.loadOlder(token: token, beforeId: before)
-                updateChat(token) { c in
-                    c.messages = Self.merge(c.messages, page.messages)
-                    c.hasMore = page.hasMore
-                    c.oldestId = page.oldestId ?? c.oldestId
-                    c.loadingOlder = false
-                }
-            } catch {
-                updateChat(token) { $0.loadingOlder = false }
+        do {
+            let page = try await s.loadOlder(token: token, beforeId: before)
+            updateChat(token) { c in
+                c.messages = Self.merge(c.messages, page.messages)
+                c.hasMore = page.hasMore
+                c.oldestId = page.oldestId ?? c.oldestId
+                c.loadingOlder = false
             }
+            return true
+        } catch {
+            updateChat(token) { $0.loadingOlder = false }
+            return false
         }
     }
 
     /// Queues a text message in the outbox; it shows up at once and is delivered reliably.
     func send(_ token: String, text: String, replyTo: MessageView?) {
         guard let s = session else { return }
+        clearUnreadLine(token)
         _ = s.enqueueText(token: token, text: text, replyTo: replyTo?.toReply, referenceId: newReferenceId())
         Notifications.askOnce()
         BackgroundSender.shared.queued()
@@ -445,6 +555,7 @@ final class SessionStore {
     /// bubble shows the local image until the server message replaces it without flicker.
     func sendImage(_ token: String, image: PreparedImage, caption: String, replyTo: MessageView?) {
         guard let s = session else { return }
+        clearUnreadLine(token)
         let ref = newReferenceId()
         media.setLocalPreview(ref, path: image.url.path)
         do {
@@ -578,7 +689,7 @@ final class SessionStore {
 
     /// Marks the newest message read while the chat is visible and the app is in front.
     func markVisibleRead(_ token: String) {
-        guard let s = session, foreground, activeToken == token, let room = room(token),
+        guard let s = session, foreground, chatAtBottom, activeToken == token, let room = room(token),
               let newest = chats[token]?.messages.last(where: { $0.status == nil })?.msg else { return }
         if room.unreadMessages > 0 || newest.id > room.lastReadMessage {
             Task { try? await s.markRead(token: token, messageId: newest.id) }

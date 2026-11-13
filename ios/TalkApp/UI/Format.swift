@@ -22,8 +22,8 @@ enum Format {
     private static let weekday = formatter("EEE")
     private static let shortDate = formatter("dd.MM.yy")
     private static let monthDay = formatter("d. MMM")
-    private static let day = formatter("EEEE, d. MMMM")
-    private static let dayYear = formatter("EEEE, d. MMMM yyyy")
+    private static let day = formatter("EEE, d. MMM")
+    private static let dayYear = formatter("d. MMM yyyy")
     private static let fileStamp: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -53,12 +53,15 @@ enum Format {
 
     static func messageTime(_ unix: Int64) -> String { time.string(from: date(unix)) }
 
-    static func dayLabel(_ unix: Int64) -> String {
-        let d = daysAgo(unix)
+    /// Day dividers and the floating date (docs/chat.md): Heute · Gestern · Mi., 11. Nov.
+    /// (up to six months back) · 11. Nov. 2025.
+    static func dayLabel(_ unix: Int64, now: Date = Date()) -> String {
+        let c = calendar
         let value = date(unix)
+        let d = c.dateComponents([.day], from: c.startOfDay(for: value), to: c.startOfDay(for: now)).day ?? 0
         if d == 0 { return "Heute" }
         if d == 1 { return "Gestern" }
-        if calendar.component(.year, from: value) == calendar.component(.year, from: Date()) {
+        if let limit = c.date(byAdding: .month, value: -6, to: c.startOfDay(for: now)), value >= limit {
             return day.string(from: value)
         }
         return dayYear.string(from: value)

@@ -27,6 +27,23 @@ struct MessageListActions {
     /// The list moved more than half its height away from the newest message (true) or came
     /// back (false): shows the "Zum Ende springen" button. Independent of `onBottomChanged`.
     var onFarChanged: (Bool) -> Void = { _ in }
+    /// The user scrolls away from the bottom: the date of the topmost visible message for the
+    /// floating pill; nil hides it at once (back at the bottom).
+    var onScrollDate: (String?) -> Void = { _ in }
+    /// The user's scrolling came to rest: the pill goes 0.4 s later.
+    var onScrollEnded: () -> Void = {}
+}
+
+/// Where the chat opens (docs/chat.md, "Öffnen an der Linie"), decided once per chat.
+enum OpenAt: Equatable {
+    /// Not known yet (chat or older pages still loading).
+    case wait
+    /// No unread line: the newest message, as always.
+    case bottom
+    /// The row carrying the unread line goes to the upper quarter.
+    case row(String)
+    /// The first unread message is beyond the pages loaded: the oldest loaded one at the top.
+    case oldest
 }
 
 /// The message list: a vertically flipped `UICollectionView` (newest message at the bottom,
@@ -38,6 +55,10 @@ struct MessageList: UIViewRepresentable {
     let lastCommonRead: Int64
     let footer: Footer
     let highlighted: String?
+    /// The row with "N ungelesene Nachrichten" above it, and N.
+    var unreadKey: String? = nil
+    var unreadCount = 0
+    var openAt: OpenAt = .bottom
     /// Changes whenever the chat wants to jump to the newest message (own send).
     let scrollToBottom: Int
     let actions: MessageListActions
@@ -87,6 +108,11 @@ struct MessageList: UIViewRepresentable {
         private var lastScrollRequest = 0
         private var atBottom = true
         private var farFromBottom = false
+        private var opened = false
+        private var openQueued = false
+        /// What the date pill was last told: its label, and whether it is up.
+        private var pillDate: String?
+        private var pillUp = false
         private let replyIcon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
         private var swipeCell: UICollectionViewCell?
         private var swipeMessage: MessageView?
@@ -138,6 +164,7 @@ struct MessageList: UIViewRepresentable {
                     MessageRow(
                         m: m, prev: prev, next: next, isGroup: parent.isGroup, read: read,
                         highlighted: parent.highlighted == m.key,
+                        unread: parent.unreadKey == m.key ? parent.unreadCount : nil,
                         onRetry: actions.onRetry, onOpenImage: actions.onOpenImage,
                         onShowReactions: actions.onShowReactions
                     )
@@ -155,6 +182,7 @@ struct MessageList: UIViewRepresentable {
             let changed = old == nil || old!.messages != new.messages || old!.footer != new.footer
                 || old!.lastCommonRead != new.lastCommonRead || old!.highlighted != new.highlighted
                 || old!.isGroup != new.isGroup
+                || old!.unreadKey != new.unreadKey || old!.unreadCount != new.unreadCount
             let newestBefore = rows.first?.key
             rows = newRows
             index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.key, $0) })
@@ -177,6 +205,51 @@ struct MessageList: UIViewRepresentable {
             } else if newestNow != newestBefore, newestBefore != nil, atBottom {
                 scrollToNewest(animated: true)
             }
+            if !opened, !openQueued, new.openAt != .wait {
+                // After this view update: scrolling reports to SwiftUI state ("Zum Ende springen").
+                openQueued = true
+                DispatchQueue.main.async { [weak self] in self?.open() }
+            }
+        }
+
+        /// Opening at the unread line: the line in the upper quarter, never past the newest
+        /// message. Rows have estimated heights, so the offset is refined a few times.
+        private func open() {
+            openQueued = false
+            guard let view, !opened, let at = parent?.openAt, at != .wait else { return }
+            guard view.bounds.height > 0 else {
+                openQueued = true
+                DispatchQueue.main.async { [weak self] in self?.open() }
+                return
+            }
+            opened = true
+            switch at {
+            case .wait, .bottom:
+                break
+            case .row(let key):
+                guard let i = index[key] else { break }
+                let path = IndexPath(item: i, section: 0)
+                view.layoutIfNeeded()
+                view.scrollToItem(at: path, at: .centeredVertically, animated: false)
+                for _ in 0..<3 {
+                    view.layoutIfNeeded()
+                    guard let frame = view.layoutAttributesForItem(at: path)?.frame else { break }
+                    // Flipped: the row's top on screen is its maxY in content coordinates.
+                    let h = view.bounds.height
+                    view.setContentOffset(CGPoint(x: 0, y: clamp(frame.maxY - h * 0.75, view)), animated: false)
+                }
+            case .oldest:
+                view.layoutIfNeeded()
+                view.setContentOffset(CGPoint(x: 0, y: clamp(.greatestFiniteMagnitude, view)), animated: false)
+            }
+            // Report even when nothing moved (at the bottom, or all new messages fit): the store
+            // marks read only now.
+            atBottom = view.contentOffset.y <= 40
+            parent?.actions.onBottomChanged(atBottom)
+        }
+
+        private func clamp(_ y: CGFloat, _ view: UICollectionView) -> CGFloat {
+            min(max(0, y), max(0, view.contentSize.height - view.bounds.height))
         }
 
         /// Far away (more than ~15 rows), the list first jumps to about a screen before the end
@@ -208,6 +281,38 @@ struct MessageList: UIViewRepresentable {
             let remaining = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.height
             // Roughly 40 messages before the top (~60 pt each).
             if remaining < 2400 { parent?.actions.onNearTop() }
+            // The date pill follows the user's own scrolling only, never while at the bottom.
+            if bottom {
+                if pillUp { parent?.actions.onScrollDate(nil) }
+                pillUp = false
+            } else if scrollView.isTracking || scrollView.isDecelerating, let date = topDate() {
+                if !pillUp || date != pillDate { parent?.actions.onScrollDate(date) }
+                pillUp = true
+                pillDate = date
+            }
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { scrollEnded() }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { scrollEnded() }
+
+        private func scrollEnded() {
+            guard pillUp else { return }
+            pillUp = false
+            parent?.actions.onScrollEnded()
+        }
+
+        /// Day of the message at the top edge: the oldest (highest index) visible row that
+        /// starts below the top (flipped: the top of the screen is `bounds.maxY`).
+        private func topDate() -> String? {
+            guard let view else { return nil }
+            let top = view.bounds.maxY
+            let i = view.indexPathsForVisibleItems
+                .filter { $0.item < rows.count && (view.layoutAttributesForItem(at: $0)?.frame.minY ?? .infinity) < top }
+                .map(\.item).max()
+            return i.map { Format.dayLabel(rows[$0].msg.timestamp) }
         }
 
         func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {

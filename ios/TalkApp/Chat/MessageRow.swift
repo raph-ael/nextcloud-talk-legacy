@@ -13,7 +13,7 @@ func continues(_ a: UiMessage?, _ b: UiMessage?) -> Bool {
 /// Width of photos in chat bubbles.
 let chatImageWidth: CGFloat = 260
 
-/// One message with its day chip (port of `MessageRow` in Android `ChatScreen.kt`).
+/// One message with its day divider and, for the first unread one, the unread line (port of `MessageRow` in Android `ChatScreen.kt`).
 struct MessageRow: View {
     let m: UiMessage
     let prev: UiMessage?
@@ -21,6 +21,8 @@ struct MessageRow: View {
     let isGroup: Bool
     let read: Bool
     let highlighted: Bool
+    /// "N ungelesene Nachrichten" goes above this message.
+    var unread: Int? = nil
     let onRetry: (MessageView) -> Void
     let onOpenImage: (String, UIImage?) -> Void
     var onShowReactions: (MessageView) -> Void = { _ in }
@@ -29,15 +31,15 @@ struct MessageRow: View {
         let msg = m.msg
         VStack(spacing: 0) {
             if prev == nil || !Format.sameDay(prev!.msg.timestamp, msg.timestamp) {
+                // Like Signal: plain muted text; a heading, so VoiceOver can jump day by day.
                 Text(Format.dayLabel(msg.timestamp))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Talk.muted)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 3)
-                    .background(Talk.chip, in: RoundedRectangle(cornerRadius: 10))
-                    .padding(.top, 14)
+                    .padding(.top, 16)
                     .padding(.bottom, 8)
+                    .accessibilityAddTraits(.isHeader)
             }
+            if let unread { UnreadDivider(count: unread) }
             if msg.kind == .system {
                 Text(msg.text)
                     .font(.system(size: 13))
@@ -55,6 +57,31 @@ struct MessageRow: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// The unread line (docs/chat.md): 1 pt `muted` across the whole list, the count in bold
+/// below it.
+struct UnreadDivider: View {
+    let count: Int
+
+    var body: some View {
+        let text = count == 1 ? "1 ungelesene Nachricht" : "\(count) ungelesene Nachrichten"
+        VStack(spacing: 3) {
+            Rectangle()
+                .fill(Talk.muted)
+                .frame(height: 1)
+                // The list rows are inset by 12; the line spans the full width.
+                .padding(.horizontal, -12)
+            Text(text)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Talk.onSurface)
+        }
+        .padding(.top, 24)
+        .padding(.bottom, 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+        .accessibilityIdentifier("unread-line")
     }
 }
 
