@@ -1,0 +1,105 @@
+/* Wolkenfunk – Basis-Styles. Keine externen Fonts/Skripte (Datenschutz, Tempo). */
+
+:root {
+  --brand: #1F63DE;
+  --brand-1: #2F7BF5;
+  --brand-2: #1650C4;
+  --on-brand: #FFFFFF;
+  --bg: #F6F8FC;
+  --surface: #FFFFFF;
+  --text: #142033;
+  --muted: #55657D;
+  --border: #DCE3EE;
+  --link: #1650C4;
+  --ok: #1E9E5A;
+  --hero-1: var(--brand-1);
+  --hero-2: var(--brand-2);
+  --radius: 16px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0E1522;
+    --surface: #162033;
+    --text: #E3EAF5;
+    --muted: #9AA8BE;
+    --border: #253250;
+    --link: #7AAEFF;
+    --ok: #3CCB7F;
+    --hero-1: #1E58C8;
+    --hero-2: #10337E;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 1.0625rem/1.6 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--link); text-underline-offset: 0.15em; }
+a:focus-visible, .button:focus-visible { outline: 3px solid var(--brand-1); outline-offset: 3px; border-radius: 6px; }
+
+.wrap { width: min(100% - 32px, 960px); margin-inline: auto; }
+
+.skip {
+  position: absolute; left: 16px; top: -100px;
+  background: var(--surface); color: var(--text); padding: 8px 12px; border-radius: 8px;
+}
+.skip:focus { top: 16px; }
+
+/* Hero */
+.hero {
+  background: linear-gradient(135deg, var(--hero-1), var(--hero-2));
+  color: var(--on-brand);
+  text-align: center;
+  padding: clamp(56px, 10vw, 112px) 0 clamp(48px, 8vw, 88px);
+}
+.logo { width: clamp(88px, 16vw, 128px); height: auto; display: block; margin: 0 auto 20px; color: var(--on-brand); }
+.hero h1 { margin: 0; font-size: clamp(2.5rem, 7vw, 4.25rem); line-height: 1.05; letter-spacing: -0.02em; font-weight: 750; }
+.lead { margin: 14px auto 0; max-width: 40ch; font-size: clamp(1.15rem, 2.6vw, 1.5rem); opacity: 0.92; }
+
+.platforms { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 28px 0 0; padding: 0; }
+.platforms li {
+  padding: 4px 14px; border-radius: 999px; font-size: 0.95rem;
+  background: rgb(255 255 255 / 0.14); border: 1px solid rgb(255 255 255 / 0.28);
+}
+
+.status { margin: 24px 0 0; font-size: 0.95rem; opacity: 0.9; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #7CF0B0; margin-right: 6px; vertical-align: 1px; }
+
+/* Inhalt */
+main { padding: clamp(40px, 7vw, 72px) 0 24px; }
+
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.features article {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 22px 22px 18px;
+}
+.features h2 { margin: 0 0 6px; font-size: 1.15rem; line-height: 1.3; }
+.features p { margin: 0; color: var(--muted); }
+
+.cta { text-align: center; margin: 40px 0 0; }
+.button {
+  display: inline-block; padding: 12px 22px; border-radius: 999px; font-weight: 600; text-decoration: none;
+  background: var(--brand); color: var(--on-brand);
+}
+.button:hover { background: var(--brand-2); }
+
+.footer { padding: 32px 0 40px; color: var(--muted); font-size: 0.9rem; text-align: center; }
+.footer p { margin: 0 auto; max-width: 60ch; }
+
+/* 404 */
+.notfound { min-height: 100vh; display: grid; place-content: center; text-align: center; gap: 8px; padding: 32px 16px; }
+.notfound .logo { color: var(--brand); width: 72px; margin-bottom: 8px; }
+.notfound h1 { margin: 0; font-size: 2rem; }
+.notfound p { margin: 0; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

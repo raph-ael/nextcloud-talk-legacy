@@ -1,0 +1,5 @@
+# Sicherheitslücken bitte vertraulich über GitHub melden.
+Contact: https://github.com/raph-ael/nextcloud-talk-legacy/security/advisories/new
+Expires: 2027-11-13T00:00:00Z
+Preferred-Languages: de, en
+Canonical: https://wolkenfunk.org/.well-known/security.txt
