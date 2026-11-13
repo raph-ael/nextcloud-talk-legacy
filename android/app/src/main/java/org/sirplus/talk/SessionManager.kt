@@ -65,6 +65,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import uniffi.talk_ffi.ReplyPreview
 import uniffi.talk_ffi.RoomView
+import uniffi.talk_ffi.SectionView
 import uniffi.talk_ffi.SendError
 import uniffi.talk_ffi.TalkSession
 import uniffi.talk_ffi.newReferenceId
@@ -101,6 +102,8 @@ data class UiState(
     val server: String = "",
     val user: String = "",
     val rooms: List<RoomView> = emptyList(),
+    /** Bumped on every `RoomsChanged`: sections may change (collapsed, categories) with equal rooms. */
+    val roomsRev: Int = 0,
     val chats: Map<String, ChatState> = emptyMap(),
     val online: Boolean = true,
     val activeToken: String? = null,
@@ -587,7 +590,7 @@ class SessionManager(private val context: Context) : CoreListener {
      */
     private fun onRooms(rooms: List<RoomView>) {
         val before = _state.value
-        _state.update { it.copy(rooms = rooms) }
+        _state.update { it.copy(rooms = rooms, roomsRev = it.roomsRev + 1) }
         val active = before.activeToken ?: return
         val gone = before.rooms.find { it.token == active } ?: return
         if (rooms.any { it.token == active }) return
@@ -877,6 +880,18 @@ class SessionManager(private val context: Context) : CoreListener {
     }
 
     fun refresh() = scope.launch { runCatching { session?.refreshRooms() } }
+
+    /** The chat list in sections (docs/categories.md): filtered, collapsed ones already reduced. */
+    fun roomSections(query: String, activeToken: String?): List<SectionView> =
+        session?.roomSections(query, activeToken).orEmpty()
+
+    /** Opens or closes a section; the list follows via `RoomsChanged`, an error comes as a toast. */
+    fun toggleSection(id: String) {
+        val s = session ?: return
+        scope.launch {
+            s.toggleSection(id)?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+        }
+    }
 
     /** Already decoded avatar, for drawing the first frame without the initials flashing. */
     fun cachedAvatar(token: String, version: String, dark: Boolean): ImageBitmap? =

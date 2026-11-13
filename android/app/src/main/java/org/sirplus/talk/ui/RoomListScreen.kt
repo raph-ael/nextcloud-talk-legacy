@@ -1,5 +1,9 @@
 package org.sirplus.talk.ui
 
+import android.provider.Settings
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -48,9 +53,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -64,6 +76,7 @@ import kotlinx.coroutines.launch
 import org.sirplus.talk.SessionManager
 import org.sirplus.talk.UiState
 import uniffi.talk_ffi.RoomView
+import uniffi.talk_ffi.SectionView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,11 +88,11 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
 
-    val rooms = remember(state.rooms, query) {
-        val q = query.trim().lowercase()
-        state.rooms.filter { !it.isArchived && (q.isEmpty() || it.name.lowercase().contains(q)) }
+    // Sections come from the core (filtered, collapsed ones reduced); recomputed on every
+    // RoomsChanged (roomsRev), new search text and another open chat.
+    val sections = remember(state.roomsRev, state.rooms, query, state.activeToken) {
+        sessions.roomSections(query.trim(), state.activeToken)
     }
-    val (favorites, others) = remember(rooms) { rooms.partition { it.isFavorite } }
     // Relative times ("5 Min.") need a clock.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -180,17 +193,17 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
                 if (query.isEmpty()) item(key = "recordings", contentType = "recordings") {
                     RecordingBanners(sessions) { sessions.openRoom(it) }
                 }
-                if (favorites.isNotEmpty()) {
-                    item(key = "h-fav", contentType = "header") { SectionHeader("Favoriten") }
-                    items(favorites, key = { it.token }, contentType = { "room" }) { room ->
+                for (section in sections) {
+                    if (section.title.isNotEmpty()) {
+                        item(key = "h-${section.id}", contentType = "header") {
+                            SectionHeader(section) { sessions.toggleSection(section.id) }
+                        }
+                    }
+                    items(section.rooms, key = { "${section.id}:${it.token}" }, contentType = { "room" }) { room ->
                         RoomRow(room, sessions, now) { sessions.openRoom(room.token) }
                     }
-                    if (others.isNotEmpty()) item(key = "h-chats", contentType = "header") { SectionHeader("Chats") }
                 }
-                items(others, key = { it.token }, contentType = { "room" }) { room ->
-                    RoomRow(room, sessions, now) { sessions.openRoom(room.token) }
-                }
-                if (rooms.isEmpty()) {
+                if (sections.isEmpty()) {
                     item {
                         Text(
                             if (query.isNotEmpty()) "Keine Treffer" else "Noch keine Chats",
@@ -219,13 +232,59 @@ fun OfflineBanner() {
     )
 }
 
+/**
+ * Section title („Favoriten“, a category, „Chats“), tappable over the full width to collapse it.
+ * A small muted chevron next to the title points right when collapsed, down when open.
+ */
 @Composable
-private fun SectionHeader(title: String) {
-    Text(
-        title,
-        style = ListType.section,
-        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 8.dp),
+private fun SectionHeader(section: SectionView, onToggle: () -> Unit) {
+    val reduceMotion = rememberReduceMotion()
+    val angle by animateFloatAsState(
+        targetValue = if (section.collapsed) 0f else 90f,
+        animationSpec = if (reduceMotion) snap() else tween(150),
+        label = "chevron",
     )
+    val hidden = section.total.toInt() - section.rooms.size
+    val label = buildString {
+        append(section.title)
+        if (section.kind == "custom") append(", Kategorie")
+        if (section.collapsed && hidden > 0) append(if (hidden == 1) ", 1 Chat ausgeblendet" else ", $hidden Chats ausgeblendet")
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .clearAndSetSemantics {
+                contentDescription = label
+                role = Role.Button
+                stateDescription = if (section.collapsed) "eingeklappt" else "ausgeklappt"
+            }
+            .padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 8.dp),
+    ) {
+        Text(
+            section.title,
+            style = ListType.section,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = LocalTalkColors.current.muted,
+            modifier = Modifier.padding(start = 4.dp).size(20.dp).rotate(angle),
+        )
+    }
+}
+
+/** System setting „Animationen entfernen“ (animator duration scale 0). */
+@Composable
+private fun rememberReduceMotion(): Boolean {
+    val context = LocalContext.current
+    return remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    }
 }
 
 /** One conversation, laid out with Signal's metrics (48dp avatar, 2-line summary, 84dp min height). */
