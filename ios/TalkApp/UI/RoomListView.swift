@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Conversation list with Signal's layout: favorites first, 48 pt avatars, two-line previews,
+/// Conversation list with Signal's layout: sections from the core (Favoriten, categories,
+/// Chats), each collapsible, 48 pt avatars, two-line previews,
 /// unread badges, relative times (port of Android `RoomListScreen.kt`).
 struct RoomListView: View {
     @Bindable var store: SessionStore
@@ -8,15 +9,9 @@ struct RoomListView: View {
     @State private var confirmLogout = false
     @State private var newMessage = false
 
-    private var visible: [RoomView] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return store.rooms.filter { !$0.isArchived && (q.isEmpty || $0.name.lowercased().contains(q)) }
-    }
-
     var body: some View {
-        let rooms = visible
-        let favorites = rooms.filter(\.isFavorite)
-        let others = rooms.filter { !$0.isFavorite }
+        // Sections from the core (docs/categories.md): filtered, collapsed ones reduced.
+        let sections = store.sections(query.trimmingCharacters(in: .whitespaces))
         // Relative times ("5 Min.") need a clock.
         TimelineView(.periodic(from: .now, by: 30)) { context in
             List {
@@ -31,23 +26,18 @@ struct RoomListView: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(Talk.background)
                 }
-                if !favorites.isEmpty {
-                    Section {
-                        ForEach(favorites, id: \.token) { row($0, now: context.date) }
-                    } header: {
-                        SectionTitle("Favoriten")
-                    }
-                    if !others.isEmpty {
+                ForEach(sections, id: \.id) { section in
+                    if section.title.isEmpty {
+                        rows(section, now: context.date)
+                    } else {
                         Section {
-                            ForEach(others, id: \.token) { row($0, now: context.date) }
+                            rows(section, now: context.date)
                         } header: {
-                            SectionTitle("Chats")
+                            SectionTitle(section: section) { store.toggleSection(section.id) }
                         }
                     }
-                } else {
-                    ForEach(others, id: \.token) { row($0, now: context.date) }
                 }
-                if rooms.isEmpty {
+                if sections.isEmpty {
                     Text(query.isEmpty ? "Noch keine Chats" : "Keine Treffer")
                         .foregroundStyle(Talk.muted)
                         .frame(maxWidth: .infinity)
@@ -90,6 +80,11 @@ struct RoomListView: View {
         }
     }
 
+    /// A chat may stand in several sections, so the row ids carry the section.
+    private func rows(_ section: SectionView, now: Date) -> some View {
+        ForEach(section.rooms.map { (key: "\(section.id):\($0.token)", room: $0) }, id: \.key) { row($0.room, now: now) }
+    }
+
     private func row(_ room: RoomView, now: Date) -> some View {
         // A button instead of a NavigationLink: no disclosure chevron (Signal shows none);
         // the store's active token drives the navigation stack.
@@ -111,16 +106,45 @@ private struct RowPressStyle: ButtonStyle {
     }
 }
 
+/// Section head: the title with a small muted chevron that points down while open. The
+/// whole head toggles the section (docs/categories.md); no counts, no lines.
 private struct SectionTitle: View {
-    let title: String
-    init(_ title: String) { self.title = title }
+    let section: SectionView
+    let onToggle: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(Talk.onSurface)
-            .textCase(nil)
+        Button(action: onToggle) {
+            HStack(spacing: 6) {
+                Text(section.title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Talk.onSurface)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(section.collapsed ? 0 : 90))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: section.collapsed)
+                Spacer(minLength: 0)
+            }
             .padding(.leading, 8)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .textCase(nil)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(section.collapsed ? "eingeklappt" : "ausgeklappt")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("section:\(section.title)")
+    }
+
+    private var label: String {
+        var l = section.kind == "custom" ? "\(section.title), Kategorie" : section.title
+        let hidden = Int(section.total) - section.rooms.count
+        if section.collapsed && hidden > 0 { l += ", \(hidden) \(hidden == 1 ? "Chat" : "Chats") ausgeblendet" }
+        return l
     }
 }
 

@@ -44,6 +44,9 @@ final class SessionStore {
     private(set) var server = ""
     private(set) var user = ""
     private(set) var rooms: [RoomView] = []
+    /// Bumped on every `RoomsChanged`: a collapsed section leaves `rooms` equal, and
+    /// Observation skips equal assignments, so the sections read this instead.
+    private(set) var roomsEvents = 0
     private(set) var chats: [String: ChatState] = [:]
     private(set) var online = true
     private(set) var activeToken: String?
@@ -237,6 +240,7 @@ final class SessionStore {
                 rooms.contains { $0.token == t } ? nil : self.rooms.first { $0.token == t }
             }
             self.rooms = rooms
+            roomsEvents &+= 1
             if let gone {
                 // Removed, deleted or left: chat and settings close (docs/groups.md).
                 closeRoom()
@@ -488,6 +492,23 @@ final class SessionStore {
     func reactions(_ token: String, _ messageId: Int64) async throws -> [ReactionView] {
         guard let s = session else { throw CancellationError() }
         return try await s.reactions(token: token, messageId: messageId)
+    }
+
+    // MARK: - Sections (docs/categories.md)
+
+    /// "Favoriten", categories and "Chats" from the core, already filtered and with collapsed
+    /// sections reduced. Reads `roomsEvents` and `activeToken`, so a view using it redraws on
+    /// every `RoomsChanged` (also a toggle) and when another chat opens.
+    func sections(_ query: String) -> [SectionView] {
+        _ = roomsEvents
+        return session?.roomSections(query: query, activeToken: activeToken) ?? []
+    }
+
+    /// Opens or closes a section; the core shows it at once and saves it on the server
+    /// (for all devices and Talk-Web). An error comes back as a toast.
+    func toggleSection(_ id: String) {
+        guard let s = session else { return }
+        Task { if let err = await s.toggleSection(id: id) { Toast.show(err) } }
     }
 
     // MARK: - Groups (docs/groups.md)
