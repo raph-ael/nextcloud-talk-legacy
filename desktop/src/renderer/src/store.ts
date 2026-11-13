@@ -35,6 +35,19 @@ export interface ChatState {
   lastCommonRead: number
   loading: boolean
   loadingOlder: boolean
+  /** The server page of this opening has arrived (not only the cache). */
+  synced: boolean
+}
+
+/**
+ * The unread line of the open chat (docs/chat.md, „Ungelesen-Linie“): taken when the chat
+ * opens, before anything moves the read marker; gone after an own message or leaving.
+ */
+export interface UnreadLine {
+  token: string
+  /** The line goes above the first foreign, non-system message with a higher id. */
+  from: number
+  count: number
 }
 
 export interface State {
@@ -54,6 +67,7 @@ export interface State {
   query: string
   /** The page „Kategorien“ replaces the chat area. */
   categories: boolean
+  unreadLine: UnreadLine | null
 }
 
 let state: State = {
@@ -68,6 +82,7 @@ let state: State = {
   sections: [],
   query: '',
   categories: false,
+  unreadLine: null,
 }
 const listeners = new Set<() => void>()
 
@@ -82,7 +97,7 @@ function setChat(token: string, update: (c: ChatState) => ChatState): void {
 }
 
 function emptyChat(): ChatState {
-  return { messages: [], hasMore: true, oldestId: null, lastCommonRead: 0, loading: true, loadingOlder: false }
+  return { messages: [], hasMore: true, oldestId: null, lastCommonRead: 0, loading: true, loadingOlder: false, synced: false }
 }
 
 export const getState = (): State => state
@@ -113,6 +128,13 @@ function merge(existing: UiMessage[], incoming: MessageView[]): UiMessage[] {
     }
   }
   return [...[...byId.values()].sort((a, b) => a.id - b.id), ...pending]
+}
+
+/** Whether the shown messages reach the page, so merging them leaves no hole. */
+function joins(shown: UiMessage[], page: ChatPage): boolean {
+  const newest = shown.findLast((m) => !m.status)
+  const oldest = page.oldestId ?? page.messages[0]?.id
+  return !newest || oldest == null || newest.id >= oldest
 }
 
 function toUi(p: PendingMessage): UiMessage {
@@ -149,6 +171,7 @@ export function handleEvent(e: TalkEvent): void {
           sections: [],
           query: '',
           categories: false,
+          unreadLine: null,
         })
       break
     case 'roomsChanged':
@@ -158,7 +181,10 @@ export function handleEvent(e: TalkEvent): void {
       participantListeners.forEach((l) => l(e.token))
       break
     case 'messagesAdded':
-      if (state.chats[e.token]) setChat(e.token, (c) => ({ ...c, messages: merge(c.messages, e.messages) }))
+      if (state.chats[e.token]) {
+        countUnread(e.token, e.messages)
+        setChat(e.token, (c) => ({ ...c, messages: merge(c.messages, e.messages) }))
+      }
       break
     case 'messagesUpdated':
       if (state.chats[e.token]) setChat(e.token, (c) => ({ ...c, messages: updateOnly(c.messages, e.messages) }))
@@ -198,6 +224,7 @@ function roomsChanged(rooms: RoomView[]): void {
     void window.talk.closeChat(token)
     patch.activeToken = null
     patch.groupInfo = null
+    patch.unreadLine = null
     if (!leaving.has(token)) toast('Du bist nicht mehr in dieser Gruppe')
   }
   for (const t of leaving) if (!rooms.some((r) => r.token === t)) leaving.delete(t)
@@ -312,9 +339,15 @@ export async function openRoom(token: string): Promise<void> {
     return
   }
   if (previous) void window.talk.closeChat(previous)
-  set({ activeToken: token, groupInfo: null, categories: false })
+  // The snapshot comes first: the chat marks itself read as soon as it shows the end.
+  const opened = state.rooms.find((r) => r.token === token)
+  const unreadLine =
+    opened && opened.unreadMessages > 0
+      ? { token, from: opened.lastReadMessage, count: opened.unreadMessages }
+      : null
+  set({ activeToken: token, groupInfo: null, categories: false, unreadLine })
   void refreshSections()
-  setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status) }))
+  setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status), synced: false }))
   try {
     // Unsent messages survive restarts: show them from the first frame.
     const pending = await window.talk.pending(token)
@@ -338,21 +371,23 @@ export async function openRoom(token: string): Promise<void> {
     const room = state.rooms.find((r) => r.token === token)
     setChat(token, (c) => ({
       ...c,
-      // Outdated cache: drop what was shown (unsent messages stay).
-      messages: merge(page.reset ? c.messages.filter((m) => m.status) : c.messages, page.messages),
+      // Outdated cache, or more new messages than one page: drop what was shown, else a hole
+      // would stay between it and the new page (unsent messages stay).
+      messages: merge(page.reset || !joins(c.messages, page) ? c.messages.filter((m) => m.status) : c.messages, page.messages),
       hasMore: page.hasMore,
       oldestId: page.oldestId,
       lastCommonRead: Math.max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0),
       loading: false,
+      synced: true,
     }))
   } catch {
-    setChat(token, (c) => ({ ...c, loading: false }))
+    setChat(token, (c) => ({ ...c, loading: false, synced: true }))
   }
 }
 
 export function closeRoom(): void {
   if (state.activeToken) void window.talk.closeChat(state.activeToken)
-  set({ activeToken: null, groupInfo: null })
+  set({ activeToken: null, groupInfo: null, unreadLine: null })
   void refreshSections()
 }
 
@@ -389,6 +424,8 @@ export function toReply(m: UiMessage | null): ReplyPreview | null {
 
 /** Shows a queued message at once (the outbox event may arrive a moment later). */
 export function showQueued(token: string, p: PendingMessage): void {
+  // Every way of sending (text, files, voice) ends here: an own message ends the unread line.
+  if (state.unreadLine?.token === token) set({ unreadLine: null })
   setChat(token, (c) =>
     c.messages.some((m) => m.status && m.referenceId === p.message.referenceId)
       ? c
@@ -436,4 +473,37 @@ export function markVisibleRead(token: string): void {
   if (room.unreadMessages > 0 || newest.id > room.lastReadMessage) {
     void window.talk.markRead(token, newest.id)
   }
+}
+
+/** Whether the open chat shows its end (the tight threshold of the read marker). */
+let chatAtBottom = true
+
+export function setChatAtBottom(atBottom: boolean): void {
+  chatAtBottom = atBottom
+}
+
+function countsAsUnread(m: MessageView): boolean {
+  return !m.isOwn && m.kind !== 'system'
+}
+
+/**
+ * New messages in the open chat: the line counts them, or a new line starts above them
+ * when they arrive out of sight (scrolled up or window in the background).
+ */
+function countUnread(token: string, incoming: MessageView[]): void {
+  if (state.activeToken !== token) return
+  const chat = state.chats[token]
+  if (!chat) return
+  const known = new Set(chat.messages.map((m) => m.id))
+  const added = incoming.filter((m) => !known.has(m.id) && countsAsUnread(m))
+  if (added.length === 0) return
+  const line = state.unreadLine
+  if (line?.token === token) {
+    set({ unreadLine: { ...line, count: line.count + added.length } })
+    return
+  }
+  const visible = chatAtBottom && document.hasFocus() && document.visibilityState === 'visible'
+  const newest = chat.messages.findLast((m) => !m.status)
+  if (visible || !newest) return
+  set({ unreadLine: { token, from: newest.id, count: added.length } })
 }

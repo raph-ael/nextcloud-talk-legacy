@@ -1,8 +1,8 @@
 const time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' })
 const weekday = new Intl.DateTimeFormat('de-DE', { weekday: 'short' })
 const shortDate = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })
-const longDay = new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })
-const longDayYear = new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+const dayInHalfYear = new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: 'numeric', month: 'short' })
+const dayWithYear = new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short', year: 'numeric' })
 const full = new Intl.DateTimeFormat('de-DE', { dateStyle: 'full', timeStyle: 'short' })
 
 function startOfDay(d: Date): number {
@@ -43,13 +43,18 @@ export function fullTime(unix: number): string {
   return full.format(new Date(unix * 1000))
 }
 
-/** Day separators in the timeline. */
-export function dayLabel(unix: number): string {
-  const d = daysAgo(unix)
+/**
+ * Day separators and the floating date (docs/chat.md): Heute · Gestern · Mi., 11. Nov.
+ * (up to six months back) · 11. Nov. 2025
+ */
+export function dayLabel(unix: number, nowMs: number = Date.now()): string {
   const date = new Date(unix * 1000)
+  const now = new Date(nowMs)
+  const d = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000)
   if (d === 0) return 'Heute'
   if (d === 1) return 'Gestern'
-  return date.getFullYear() === new Date().getFullYear() ? longDay.format(date) : longDayYear.format(date)
+  const halfYear = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
+  return date >= halfYear ? dayInHalfYear.format(date) : dayWithYear.format(date)
 }
 
 export function sameDay(a: number, b: number): boolean {

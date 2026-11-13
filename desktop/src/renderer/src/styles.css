@@ -600,19 +600,60 @@ body.resizing {
   color: var(--text-muted);
   padding: 16px 0;
 }
+/* Day separator: plain centered text, a heading for screen readers (docs/chat.md). */
 .day {
-  display: flex;
-  justify-content: center;
-  margin: 14px 0 8px;
+  margin: 16px 0 8px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
-.day span {
+/* Unread line: full width of the timeline, 1 px muted, bold count 3 px below. */
+.unread-line {
+  margin: 24px -16px 16px;
+  border-top: 1px solid var(--text-muted);
+  padding-top: 3px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+/* Date of the topmost visible message while scrolling; like the jump button, only decoration. */
+.date-pill {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--floating);
+  box-shadow:
+    0 0 2px rgb(0 0 0 / 0.2),
+    0 2px 6px rgb(0 0 0 / 0.12);
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 16px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 10px;
-  background: var(--fill);
-  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.25s ease,
+    visibility 0s linear 0.25s;
+}
+.date-pill.shown {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.25s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .date-pill,
+  .date-pill.shown {
+    transition: none;
+  }
 }
 .system-msg {
   align-self: center;

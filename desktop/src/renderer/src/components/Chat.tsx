@@ -1,6 +1,15 @@
 import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
 import { withAttachment, type RoomView, type SendError } from '@shared/core'
-import { discard, loadOlder, markVisibleRead, openGroupInfo, retry, useStore, type UiMessage } from '../store'
+import {
+  discard,
+  loadOlder,
+  markVisibleRead,
+  openGroupInfo,
+  retry,
+  setChatAtBottom,
+  useStore,
+  type UiMessage,
+} from '../store'
 import { isGroupRoom } from './GroupInfo'
 import { colorFor, dayLabel, fullTime, isJumboEmoji, messageTime, sameDay, splitLinks } from '../format'
 import { Markdown, plain } from './Markdown'
@@ -39,6 +48,34 @@ function JumpButton({ shown, unread, onJump }: { shown: boolean; unread: number;
   )
 }
 
+/** „N ungelesene Nachrichten“ above the first unread message (docs/chat.md). */
+function unreadText(count: number): string {
+  return count === 1 ? '1 ungelesene Nachricht' : `${count} ungelesene Nachrichten`
+}
+
+/** At most this many pages are loaded to reach the first unread message when opening. */
+const MAX_PAGES_TO_LINE = 10
+/** The floating date disappears this long after the last scroll event (Desktop). */
+const DATE_PILL_MS = 3000
+
+/** The row (message or system message) at the top edge of the visible timeline. */
+function topRow(el: HTMLElement): HTMLElement | null {
+  const rows = el.querySelectorAll<HTMLElement>('[data-ts]')
+  const top = el.getBoundingClientRect().top
+  // Rows are in time order, top to bottom: the first one reaching below the top edge.
+  let lo = 0
+  let hi = rows.length - 1
+  let found: HTMLElement | null = null
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (rows[mid].getBoundingClientRect().bottom > top) {
+      found = rows[mid]
+      hi = mid - 1
+    } else lo = mid + 1
+  }
+  return found
+}
+
 function ChatTitle({ room }: { room: RoomView }) {
   return (
     <>
@@ -74,29 +111,105 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   // for the read marker, `showJump` shows the button only half a screen away from the end.
   const [atBottom, setAtBottom] = useState(true)
   const [showJump, setShowJump] = useState(false)
+  // The ref is what the read marker trusts: it is right in the same frame as a scroll we make.
+  const atBottomRef = useRef(true)
+  const [datePill, setDatePill] = useState<{ label: string; shown: boolean }>({ label: '', shown: false })
+  const datePillTimer = useRef(0)
+  // Opening at the unread line: done once per opening; until then the read marker waits.
+  const placed = useRef(false)
+  const pagesLoaded = useRef(0)
+  const ownScroll = useRef(false)
 
   const isGroup = room.roomType !== 1 && room.roomType !== 6
   const messages = chat?.messages ?? []
+  const unreadLine = useStore((s) => (s.unreadLine?.token === room.token ? s.unreadLine : null))
+
+  // The line goes above the first foreign, non-system message after the snapshot, but only
+  // once the snapshot itself is loaded (or the whole history): else it would sit too low.
+  const lineCovered =
+    !!unreadLine && (!chat?.hasMore || messages.some((m) => !m.status && m.id <= unreadLine.from))
+  const lineAt = lineCovered
+    ? messages.find((m) => !m.status && m.id > unreadLine.from && !m.isOwn && m.kind !== 'system')?.id
+    : undefined
 
   useEffect(() => setReplyTo(null), [room.token])
 
+  function updateAtBottom(value: boolean) {
+    atBottomRef.current = value
+    setChatAtBottom(value)
+    setAtBottom(value)
+  }
+  useEffect(() => () => setChatAtBottom(true), [])
+
   // Read marker: whenever new messages are visible in the focused window.
   useEffect(() => {
-    if (atBottom) markVisibleRead(room.token)
+    if (placed.current && atBottomRef.current) markVisibleRead(room.token)
   }, [room.token, messages.length, atBottom, room.unreadMessages])
   useEffect(() => {
-    const onFocus = () => markVisibleRead(room.token)
+    const onFocus = () => placed.current && atBottomRef.current && markVisibleRead(room.token)
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [room.token])
+
+  // Open at the unread line (docs/chat.md „Öffnen an der Linie“): wait for the server page,
+  // load older pages until the line is there, then put it in the upper quarter.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (placed.current || !el || !chat) return
+    if (!unreadLine) {
+      placed.current = true
+      return
+    }
+    if (!chat.synced || chat.loadingOlder) return
+    if (!lineCovered && chat.hasMore && chat.oldestId != null && pagesLoaded.current < MAX_PAGES_TO_LINE) {
+      pagesLoaded.current += 1
+      void loadOlder(room.token)
+      return
+    }
+    placed.current = true
+    const line = el.querySelector<HTMLElement>('.unread-line')
+    // Never further than the end (scrollTop 0). Not reached after all pages: the oldest loaded
+    // message on top. Nothing foreign among the new ones: the end, as without a line.
+    const target = line
+      ? Math.min(0, el.scrollTop + line.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight / 4)
+      : lineCovered
+        ? 0
+        : el.clientHeight - el.scrollHeight
+    if (Math.abs(target - el.scrollTop) >= 1) {
+      ownScroll.current = true
+      el.scrollTop = target
+    }
+    const bottom = el.scrollTop > -40
+    updateAtBottom(bottom)
+    setShowJump(el.scrollTop < -el.clientHeight / 2)
+    if (bottom) markVisibleRead(room.token)
+  }, [chat, unreadLine, lineCovered, room.token])
+
+  useEffect(() => () => window.clearTimeout(datePillTimer.current), [])
+
+  /** Floating date of the topmost visible message while scrolling, never at the end. */
+  function showDatePill(el: HTMLElement, bottom: boolean) {
+    window.clearTimeout(datePillTimer.current)
+    const row = bottom ? null : topRow(el)
+    if (!row) {
+      setDatePill((p) => (p.shown ? { ...p, shown: false } : p))
+      return
+    }
+    setDatePill({ label: dayLabel(Number(row.dataset.ts)), shown: true })
+    datePillTimer.current = window.setTimeout(() => setDatePill((p) => ({ ...p, shown: false })), DATE_PILL_MS)
+  }
 
   // The scroller is column-reverse: scrollTop 0 is the bottom, negative values go up.
   function onScroll() {
     const el = scroller.current
     if (!el) return
     setReacting(null)
-    setAtBottom(el.scrollTop > -40)
+    const bottom = el.scrollTop > -40
+    updateAtBottom(bottom)
     setShowJump(el.scrollTop < -el.clientHeight / 2)
+    // Our own positioning when opening is no scrolling by the user.
+    if (ownScroll.current) ownScroll.current = false
+    else showDatePill(el, bottom)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
   }
 
@@ -222,6 +335,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 prev={messages[i - 1]}
                 next={messages[i + 1]}
                 isGroup={isGroup}
+                unread={m.id === lineAt ? unreadLine!.count : 0}
                 read={m.isOwn && !m.status && m.id <= lastCommonRead}
                 canReply={!room.readOnly}
                 canReact={room.canReact}
@@ -235,6 +349,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
             ))}
             {chat?.loading && <div className="spinner" />}
           </div>
+        </div>
+        <div className={`date-pill${datePill.shown ? ' shown' : ''}`} aria-hidden="true">
+          {datePill.label}
         </div>
         <JumpButton shown={showJump} unread={room.unreadMessages} onJump={scrollToBottom} />
       </div>
@@ -291,6 +408,8 @@ interface RowProps {
   prev?: UiMessage
   next?: UiMessage
   isGroup: boolean
+  /** Above this message: the unread line with this count (0: none). */
+  unread: number
   read: boolean
   canReply: boolean
   canReact: boolean
@@ -317,6 +436,7 @@ const MessageRow = memo(function MessageRow({
   prev,
   next,
   isGroup,
+  unread,
   read,
   canReply,
   canReact,
@@ -328,9 +448,14 @@ const MessageRow = memo(function MessageRow({
   onOpenImage,
 }: RowProps) {
   const showDay = !prev || !sameDay(prev.timestamp, msg.timestamp)
+  const line = unread > 0 && (
+    <div className="unread-line" role="separator" aria-label={unreadText(unread)}>
+      <span aria-hidden="true">{unreadText(unread)}</span>
+    </div>
+  )
   const day = showDay && (
-    <div className="day">
-      <span>{dayLabel(msg.timestamp)}</span>
+    <div className="day" role="heading" aria-level={3}>
+      {dayLabel(msg.timestamp)}
     </div>
   )
 
@@ -338,7 +463,7 @@ const MessageRow = memo(function MessageRow({
     return (
       <>
         {day}
-        <div className="system-msg" title={fullTime(msg.timestamp)}>
+        <div className="system-msg" data-ts={msg.timestamp} title={fullTime(msg.timestamp)}>
           {msg.text}
         </div>
       </>
@@ -389,8 +514,9 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <>
+      {line}
       {day}
-      <div className={cls}>
+      <div className={cls} data-ts={msg.timestamp}>
         {isGroup && !own && (
           <div className="msg-avatar">{last && <Avatar name={msg.author} size={28} />}</div>
         )}
