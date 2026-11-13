@@ -30,7 +30,104 @@ Ein runder, schwebender Knopf unten rechts in der Nachrichtenliste. Er erscheint
 - Bezeichnung: „Zum Ende springen“, mit Zähler „Zum Ende springen, 3 neue Nachrichten“ (bei einer: „1 neue Nachricht“).
 - Am Desktop gibt es zusätzlich `title` als Tooltip.
 
-**Nicht im Umfang:** „Zur ersten ungelesenen Nachricht“ und ein eigener Knopf für @-Erwähnungen.
+**Nicht im Umfang:** ein eigener Knopf für @-Erwähnungen. Zur ersten ungelesenen Nachricht springt der Chat schon beim Öffnen (siehe „Ungelesen-Linie“).
+
+## Datum und Ungelesen-Linie (wie Signal)
+
+Das Muster stammt von Signal (Desktop, Android, iOS). Übernommen wird nur das Muster, kein Code und keine Texte. Der Kern ändert sich nicht: `RoomView` hat schon `lastReadMessage`/`unreadMessages`, Nachrichten haben `id`, `timestamp`, Absender und `kind`.
+
+### Tagestrenner
+**Aussehen:**
+- zentrierter Text, 13 px/sp/pt, Medium, Farbe `muted`
+- kein Hintergrund, keine Linien (die frühere Pille entfällt)
+- Abstand 16 oben, 8 unten
+
+**Beschriftung** (`dayLabel`, auf allen Plattformen gleich):
+
+| Wann | Text |
+|---|---|
+| heute | „Heute“ |
+| gestern | „Gestern“ |
+| bis 6 Monate zurück | „Mi., 11. Nov.“ (Wochentag kurz, Tag, Monat kurz) |
+| älter | „11. Nov. 2025“ |
+
+**Wo:** über der ersten Nachricht und bei jedem Tageswechsel, wie bisher.
+
+**Barrierefreiheit:** Der Trenner ist eine Überschrift (Android `heading()`, iOS `.isHeader`, Desktop `role="heading"`). So kann man mit dem Screenreader von Tag zu Tag springen.
+
+### Datum beim Scrollen
+**Aussehen:** eine kleine schwebende Pille oben mittig, 8–10 unter der Kopfleiste.
+- Oberfläche `floating` mit leichtem Schatten, wie „Zum Ende springen“.
+- Text 12, `muted`, Abstand innen 10×4, ganz rund.
+
+**Inhalt:** das Datum der obersten sichtbaren Nachricht, Text wie beim Tagestrenner.
+
+**Wann:**
+- Sie erscheint beim Scrollen, aber nicht, solange man unten ist (die enge Schwelle der Lesemarke). Neue Nachrichten und Tippen lösen sie also nicht aus.
+- **Desktop:** sie verschwindet 3 s nach dem letzten Scroll-Ereignis und blendet in 250 ms aus.
+- **Android/iOS:** sie blendet beim Scrollen in 100 ms ein und 0,4 s nach dem Ende des Scrollens in 100 ms aus. Scrollt man vorher weiter, bleibt sie.
+- Bei „Bewegung reduzieren“ ohne Animation.
+
+Sie ist reine Deko: nicht anklickbar und für Screenreader verborgen.
+
+### Ungelesen-Linie
+**Aussehen:**
+- eine Linie über die ganze Breite der Nachrichtenliste, 1 px/dp/pt, Farbe `muted`, also kräftiger als die übrigen Trenner
+- 3 darunter zentriert der Text, 12–13, fett, Farbe `onSurface`
+- Abstand 24 oben, 16 unten
+- gleich auf allen Plattformen
+
+**Text:** „1 ungelesene Nachricht“ bzw. „N ungelesene Nachrichten“.
+
+**Festlegen beim Öffnen:**
+- Ist `room.unreadMessages > 0`, merkt sich die Plattform beim Öffnen:
+  - `unreadFrom = room.lastReadMessage`
+  - `unreadCount = room.unreadMessages`
+- Das geschieht im `openRoom` (Store, SessionManager, SessionStore), **bevor** irgendetwas die Lesemarke setzt.
+- Es ist reiner UI-Zustand, nur für den gerade offenen Chat.
+
+**Platz:** über der ersten geladenen Nachricht mit `id > unreadFrom`, die nicht von einem selbst stammt und keine Systemnachricht ist. Ist sie (noch) nicht geladen, gibt es (noch) keine Linie.
+
+**Bleibt stehen:** Die Linie bleibt, auch wenn die Lesemarke inzwischen gesetzt ist.
+
+**Neue Nachrichten, während der Chat offen ist:**
+- Gibt es die Linie, steigt `unreadCount` um jede neue fremde Nachricht, die keine Systemnachricht ist.
+- Gibt es keine, und man ist nicht unten oder das Fenster hat keinen Fokus, entsteht eine neue Linie: `unreadFrom` = die bisher neueste Nachricht, `unreadCount` = 1.
+
+**Weg ist sie:**
+- sobald man selbst etwas sendet (Text, Datei, Sprachnachricht, Umfrage …),
+- wenn man den Chat verlässt oder einen anderen öffnet.
+
+Beim nächsten Öffnen ist alles gelesen, also gibt es keine Linie mehr.
+
+**Sprachnachrichten** zählen ganz normal mit. Einen eigenen „nicht angehört“-Punkt gibt es nicht.
+
+**Barrierefreiheit:**
+- Der Text wird vorgelesen.
+- Desktop: `role="separator"` mit `aria-label` = Text.
+
+### Öffnen an der Linie
+**Wohin:**
+- Gibt es eine Linie, öffnet der Chat so, dass sie im oberen Viertel des Sichtbereichs steht.
+- Weiter als ganz unten geht es nie. Passen alle neuen Nachrichten auf den Schirm, bleibt die Liste unten wie bisher.
+
+**Erste ungelesene Nachricht noch nicht geladen** (mehr als eine Seite, also über 50):
+- Die Plattform ruft `loadOlder` auf, bis sie da ist, höchstens 10 Seiten.
+- Reicht das nicht, steht die älteste geladene Nachricht oben. Die Linie erscheint, sobald man weiter hochscrollt.
+
+**Lesemarke:**
+- Es bleibt bei „unten → `markVisibleRead`“. Wer an der Linie öffnet, liest erst, wenn er unten ankommt.
+- Bis dahin zeigt „Zum Ende springen“ die Zahl wie bisher.
+
+### Test
+Nur mit Bots unter `bot-lock.sh`, nur in `CALL_TEST_ROOM_TOKEN`/`TEST_ROOM_TOKEN`, keine echten Chats.
+
+1. Bot B sendet drei Nachrichten: `talk-cli -a b send <CALL_TEST_ROOM_TOKEN> "Test 1"` …
+2. Bot A öffnet den Chat: Die Linie „3 ungelesene Nachrichten“ steht über „Test 1“.
+3. Bot B sendet noch eine: Die Zahl wird 4. Bot A sendet selbst: Die Linie ist weg.
+4. Verlassen und wieder öffnen: keine Linie.
+5. 60 Nachrichten von Bot B: Der Chat öffnet an der Linie über der ersten. Die Lesemarke (`talk-cli -a a rooms --json`, `lastReadMessage`) bleibt alt, bis man unten ist.
+6. Hochscrollen über Tageswechsel: Die Trenner sind reiner Text, die Pille zeigt das passende Datum und verschwindet danach. Ganz unten erscheint sie nicht.
 
 ## Reaktionen
 
