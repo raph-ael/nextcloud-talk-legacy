@@ -67,6 +67,8 @@ export interface RoomView {
   canDelete: boolean
   /** Group link on (room type 3). */
   isPublic: boolean
+  /** Our categories it is in (docs/categories.md); the list uses `roomSections`. */
+  tagIds: string[]
 }
 
 export interface ReplyPreview {
@@ -131,6 +133,30 @@ export interface UserView {
   name: string
   /** May be empty. */
   subline: string
+}
+
+/** One section of the chat list (docs/categories.md). */
+export interface SectionView {
+  /** For `toggleSection`; row keys are section id + token (a chat may be in several). */
+  id: string
+  kind: 'favorites' | 'custom' | 'other'
+  /** Empty when it is the only section: then no header. */
+  title: string
+  collapsed: boolean
+  /** Rows to show (collapsed: only the open chat, unread ones and ones with a call). */
+  rooms: RoomView[]
+  /** All chats in the section, hidden ones included. */
+  total: number
+}
+
+/** A category on the page "Kategorien" (docs/categories.md). */
+export interface CategoryView {
+  id: string
+  /** Only `custom` can be renamed, deleted and filled. */
+  kind: 'favorites' | 'custom' | 'other'
+  name: string
+  roomCount: number
+  collapsed: boolean
 }
 
 /** Opening or creating a conversation: its token, or a German error text. */
@@ -458,6 +484,23 @@ export interface TalkApi {
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
   /** Who reacted: own first, then newest first. */
   reactions(token: string, messageId: number): Promise<ReactionView[]>
+
+  // --- categories (docs/categories.md); changes resolve to a German error text or null ---
+  /** The chat list in sections; again on `roomsChanged`, a new search text or another open chat. */
+  roomSections(query: string, activeToken: string | null): Promise<SectionView[]>
+  /** Opens or closes a section (saved on the server; the list follows via `roomsChanged`). */
+  toggleSection(id: string): Promise<string | null>
+  /** The server keeps categories: offer "Kategorien verwalten". */
+  categoriesSupported(): Promise<boolean>
+  /** All categories in order, "Favoriten" and "Chats" included. */
+  categories(): Promise<CategoryView[]>
+  createCategory(name: string, tokens: string[]): Promise<{ id: string | null; error: string | null }>
+  renameCategory(id: string, name: string): Promise<string | null>
+  deleteCategory(id: string): Promise<string | null>
+  /** -1 up, 1 down. */
+  moveCategory(id: string, offset: number): Promise<string | null>
+  /** Exactly these chats are in the category afterwards. */
+  setCategoryRooms(id: string, tokens: string[]): Promise<string | null>
 
   // --- groups (docs/groups.md); changes resolve to a German error text or null ---
   /** Whether "Neue Gruppe" is offered. */

@@ -937,6 +937,61 @@ impl TalkClient {
         Ok(())
     }
 
+    // --- categories (conversation tags, docs/categories.md) ---------------------------
+
+    /// All our categories, including the built-in `favorites` and `other` (the server
+    /// creates those on the first call).
+    pub async fn tags(&self) -> Result<Vec<crate::models::ConversationTag>> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v4/tags"));
+        Ok(self.ocs(rb).await?.0)
+    }
+
+    /// 400 `{"error":"name"}` empty, too long or taken; `{"error":"limit"}` too many.
+    pub async fn create_tag(&self, name: &str) -> Result<crate::models::ConversationTag> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v4/tags"))
+            .json(&serde_json::json!({ "name": name }));
+        Ok(self.ocs(rb).await?.0)
+    }
+
+    /// Own categories only (400 `type` for the built-in ones).
+    pub async fn rename_tag(&self, id: &str, name: &str) -> Result<crate::models::ConversationTag> {
+        let rb = self
+            .request(Method::PUT, &format!("{SPREED}/v4/tags/{id}"))
+            .json(&serde_json::json!({ "name": name }));
+        Ok(self.ocs(rb).await?.0)
+    }
+
+    /// Own categories only; their conversations lose the category.
+    pub async fn delete_tag(&self, id: &str) -> Result<()> {
+        let rb = self.request(Method::DELETE, &format!("{SPREED}/v4/tags/{id}"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// New order of all categories (built-in ones included); returns them all.
+    pub async fn reorder_tags(&self, ordered_ids: &[String]) -> Result<Vec<crate::models::ConversationTag>> {
+        let rb = self
+            .request(Method::PUT, &format!("{SPREED}/v4/tags/reorder"))
+            .json(&serde_json::json!({ "orderedIds": ordered_ids }));
+        Ok(self.ocs(rb).await?.0)
+    }
+
+    pub async fn set_tag_collapsed(&self, id: &str, collapsed: bool) -> Result<crate::models::ConversationTag> {
+        let rb = self
+            .request(Method::PUT, &format!("{SPREED}/v4/tags/{id}/collapsed"))
+            .json(&serde_json::json!({ "collapsed": collapsed }));
+        Ok(self.ocs(rb).await?.0)
+    }
+
+    /// Replaces the categories of one conversation (empty: none); returns the conversation.
+    pub async fn set_room_tags(&self, token: &str, tag_ids: &[String]) -> Result<Room> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v4/room/{token}/tags"))
+            .json(&serde_json::json!({ "tagIds": tag_ids }));
+        Ok(self.ocs(rb).await?.0)
+    }
+
     /// Starts recording the running call (moderators). `video`: the recording server
     /// records the call view (avatars, screen shares); otherwise audio only.
     pub async fn start_recording(&self, token: &str, video: bool) -> Result<()> {

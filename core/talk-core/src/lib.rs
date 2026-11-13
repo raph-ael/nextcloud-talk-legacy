@@ -13,6 +13,7 @@
 //! - [`push`]: push notifications (device key, registration, decryption)
 
 pub mod call;
+pub mod categories;
 pub(crate) mod cache;
 pub mod client;
 pub mod engine;
@@ -33,12 +34,13 @@ pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };
 pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReactionView, ReplyPreview, RoomView, reaction_error_text};
+pub use categories::{CategoryOp, CategoryView, SectionView, category_error_text};
 pub use error::{Error, Result};
 pub use groups::{GroupOp, MemberView, UserView, group_error_text, square_photo};
 pub use push::{PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
 pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};
-pub use models::{ChatMessage, FileAttachment, IceServer, LoginCredentials, Participant, Reaction, Reactions, Room, RoomType, SignalingSettings};
+pub use models::{ChatMessage, ConversationTag, FileAttachment, IceServer, LoginCredentials, Participant, Reaction, Reactions, Room, RoomType, SignalingSettings};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

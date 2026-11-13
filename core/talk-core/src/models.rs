@@ -101,6 +101,9 @@ pub struct Room {
     pub can_leave_conversation: bool,
     #[serde(default)]
     pub can_delete_conversation: bool,
+    /// Our own categories this conversation is in (`conversation-tags`, docs/categories.md).
+    #[serde(default, deserialize_with = "id_list")]
+    pub tag_ids: Vec<String>,
     /// Status of the other user in 1:1 conversations (only with `includeStatus=true`).
     #[serde(default)]
     pub status: Option<String>,
@@ -306,6 +309,23 @@ pub struct Participant {
     pub participant_type: u8,
 }
 
+/// One of our categories (`GET /tags`, docs/categories.md). The server keeps one each of
+/// type `favorites` and `other` ("Chats") besides our own (`custom`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationTag {
+    #[serde(deserialize_with = "id_string")]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default)]
+    pub collapsed: bool,
+    #[serde(default, rename = "type")]
+    pub kind: String,
+}
+
 fn yes() -> bool {
     true
 }
@@ -313,6 +333,30 @@ fn yes() -> bool {
 /// `null` as empty string.
 pub(crate) fn string_or_null<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
+/// An id the server may send as number or string.
+fn id_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    match Value::deserialize(d)? {
+        Value::String(s) => Ok(s),
+        Value::Number(n) => Ok(n.to_string()),
+        v => Err(serde::de::Error::custom(format!("id: {v}"))),
+    }
+}
+
+/// A list of ids (strings or numbers); `null` or anything else as empty.
+fn id_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::Array(a) => a
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 
 /// Talk returns `[]` instead of `null`/`{}` for empty objects.

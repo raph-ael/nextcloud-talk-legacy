@@ -185,6 +185,8 @@ pub struct RoomView {
     pub can_delete: bool,
     /// Group link on: anyone with `group_link` can join (room type 3).
     pub is_public: bool,
+    /// Our own categories it is in (docs/categories.md); use `room_sections` for the list.
+    pub tag_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,6 +287,8 @@ pub struct Engine {
     reaction_lock: tokio::sync::Mutex<()>,
     /// The server lets this user create conversations (`config.conversations.can-create`).
     pub(crate) can_create: AtomicBool,
+    /// Categories from the server and the locally kept collapsed state (docs/categories.md).
+    pub(crate) categories: Mutex<crate::categories::Categories>,
     pub(crate) outbox: Outbox,
     pub(crate) cache: Cache,
     pub(crate) voice: Arc<VoiceStore>,
@@ -321,6 +325,7 @@ impl Engine {
             ),
             reaction_lock: tokio::sync::Mutex::new(()),
             can_create: AtomicBool::new(cache.meta("can_create").is_none_or(|v| v == "true")),
+            categories: Mutex::new(crate::categories::Categories::load(&cache)),
             outbox: Outbox::open(data_dir.as_deref()),
             voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
             cache,
@@ -354,11 +359,13 @@ impl Engine {
             }
         });
         // User id, room list and server features in parallel: saves round trips on cold start.
-        let (user, rooms, caps) = tokio::join!(
+        let (user, rooms, caps, tags) = tokio::join!(
             self.client.current_user(),
             self.client.rooms(None, false),
-            self.client.capabilities()
+            self.client.capabilities(),
+            self.client.tags()
         );
+        self.apply_tags(tags);
         if let Ok(caps) = caps {
             self.apply_capabilities(&caps);
         }
@@ -410,6 +417,7 @@ impl Engine {
         let Some(features) = caps.pointer("/capabilities/spreed/features").and_then(|f| f.as_array()) else {
             return;
         };
+        self.set_categories_supported(features.iter().any(|f| f == "conversation-tags"));
         let bit = if features.iter().any(|f| f == "react-permission") {
             PERMISSION_REACT
         } else {
@@ -473,13 +481,28 @@ impl Engine {
 
     /// Puts one conversation (fresh from the server) into the list and the cache.
     pub(crate) fn put_room(&self, room: Room) {
-        self.cache.put_rooms(vec![room.clone()], false);
+        self.put_rooms(vec![room]);
+    }
+
+    /// Several conversations fresh from the server, with one `RoomsChanged`.
+    pub(crate) fn put_rooms(&self, rooms: Vec<Room>) {
+        if rooms.is_empty() {
+            return;
+        }
+        self.cache.put_rooms(rooms.clone(), false);
         let rooms = {
             let mut st = self.state.lock().unwrap();
-            st.rooms.insert(room.token.clone(), room);
+            for room in rooms {
+                st.rooms.insert(room.token.clone(), room);
+            }
             self.sorted_views(&st.rooms)
         };
         self.sink.emit(Event::RoomsChanged { rooms });
+    }
+
+    /// Sends the current list again (e.g. after a category change).
+    pub(crate) fn emit_rooms(&self) {
+        self.sink.emit(Event::RoomsChanged { rooms: self.rooms() });
     }
 
     pub(crate) fn state_room(&self, token: &str) -> Option<Room> {
@@ -584,7 +607,15 @@ impl Engine {
         } else {
             self.state.lock().unwrap().modified_before
         };
-        let batch = self.guard(self.client.rooms(since, true).await)?;
+        let batch = if full {
+            // Categories change rarely: with every full refresh (docs/categories.md).
+            let (batch, tags) = tokio::join!(self.client.rooms(since, true), self.client.tags());
+            self.apply_tags(tags);
+            batch
+        } else {
+            self.client.rooms(since, true).await
+        };
+        let batch = self.guard(batch)?;
         self.apply_rooms(batch, since.is_none());
         Ok(())
     }
@@ -1170,6 +1201,7 @@ impl Engine {
             can_leave: r.can_leave_conversation,
             can_delete: r.can_delete_conversation,
             is_public: r.room_type == RoomType::Public,
+            tag_ids: r.tag_ids.clone(),
         }
     }
 

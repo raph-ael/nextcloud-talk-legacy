@@ -60,6 +60,15 @@ interface NativeSession {
   markRead(token: string, messageId: number): Promise<void>
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
   reactions(token: string, messageId: number): Promise<unknown>
+  roomSections(query: string, activeToken: string | null): unknown
+  toggleSection(id: string): Promise<string | null>
+  categoriesSupported(): boolean
+  categories(): unknown
+  createCategory(name: string, tokens: string[]): Promise<unknown>
+  renameCategory(id: string, name: string): Promise<string | null>
+  deleteCategory(id: string): Promise<string | null>
+  moveCategory(id: string, offset: number): Promise<string | null>
+  setCategoryRooms(id: string, tokens: string[]): Promise<string | null>
   canCreateGroups(): boolean
   searchUsers(query: string, excludeToken: string | null): Promise<unknown>
   openDirect(userId: string): Promise<unknown>
@@ -881,8 +890,28 @@ function registerIpc(): void {
   )
   ipcMain.handle('talk:reactions', (_e, token: string, messageId: number) => session?.reactions(token, messageId) ?? [])
 
-  // Groups (docs/groups.md): changes resolve to a German error text or null.
+  // Groups (docs/groups.md) and categories (docs/categories.md): changes resolve to a
+  // German error text or null.
   const NOT_SIGNED_IN = 'Nicht angemeldet'
+  ipcMain.handle('talk:roomSections', (_e, query: string, activeToken: string | null) =>
+    session ? session.roomSections(query, activeToken) : [],
+  )
+  ipcMain.handle('talk:toggleSection', (_e, id: string) => (session ? session.toggleSection(id) : NOT_SIGNED_IN))
+  ipcMain.handle('talk:categoriesSupported', () => session?.categoriesSupported() ?? false)
+  ipcMain.handle('talk:categories', () => (session ? session.categories() : []))
+  ipcMain.handle('talk:createCategory', (_e, name: string, tokens: string[]) =>
+    session ? session.createCategory(name, tokens) : { id: null, error: NOT_SIGNED_IN },
+  )
+  ipcMain.handle('talk:renameCategory', (_e, id: string, name: string) =>
+    session ? session.renameCategory(id, name) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:deleteCategory', (_e, id: string) => (session ? session.deleteCategory(id) : NOT_SIGNED_IN))
+  ipcMain.handle('talk:moveCategory', (_e, id: string, offset: number) =>
+    session ? session.moveCategory(id, offset) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:setCategoryRooms', (_e, id: string, tokens: string[]) =>
+    session ? session.setCategoryRooms(id, tokens) : NOT_SIGNED_IN,
+  )
   const bytes = (data: Uint8Array | null) => (data ? Buffer.from(data) : null)
   ipcMain.handle('talk:canCreateGroups', () => session?.canCreateGroups() ?? false)
   ipcMain.handle('talk:searchUsers', (_e, query: string, excludeToken: string | null) =>

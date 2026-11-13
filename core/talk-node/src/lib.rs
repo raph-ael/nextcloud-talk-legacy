@@ -36,6 +36,10 @@ fn group_err(r: core::Result<()>, op: core::GroupOp) -> Option<String> {
     r.err().map(|e| core::group_error_text(op, &e))
 }
 
+fn cat_err(r: core::Result<()>, op: core::CategoryOp) -> Option<String> {
+    r.err().map(|e| core::category_error_text(op, &e))
+}
+
 fn reply_preview(v: Option<Value>) -> Result<Option<core::ReplyPreview>> {
     match v {
         None | Some(Value::Null) => Ok(None),
@@ -300,6 +304,63 @@ impl TalkSession {
             .await
             .err()
             .map(|e| core::reaction_error_text(&e))
+    }
+
+    // --- categories (docs/categories.md); changes resolve to a German error or `null` --
+
+    /// `SectionView[]`: the chat list in sections. Again on `roomsChanged`, a new search
+    /// text or another open chat.
+    #[napi(ts_return_type = "any")]
+    pub fn room_sections(&self, query: String, active_token: Option<String>) -> Result<Value> {
+        json(&self.engine.room_sections(&query, active_token.as_deref()))
+    }
+
+    #[napi]
+    pub async fn toggle_section(&self, id: String) -> Option<String> {
+        cat_err(self.engine.toggle_section(&id).await, core::CategoryOp::Collapse)
+    }
+
+    /// Whether the server keeps categories (show "Kategorien verwalten").
+    #[napi]
+    pub fn categories_supported(&self) -> bool {
+        self.engine.categories_supported()
+    }
+
+    /// `CategoryView[]` in order, built-in "Favoriten" and "Chats" included.
+    #[napi(ts_return_type = "any")]
+    pub fn categories(&self) -> Result<Value> {
+        json(&self.engine.categories())
+    }
+
+    /// `{id, error}`.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn create_category(&self, name: String, tokens: Vec<String>) -> Result<Value> {
+        Ok(match self.engine.create_category(&name, &tokens).await {
+            Ok(id) => serde_json::json!({ "id": id, "error": null }),
+            Err(e) => serde_json::json!({ "id": null, "error": core::category_error_text(core::CategoryOp::Create, &e) }),
+        })
+    }
+
+    #[napi]
+    pub async fn rename_category(&self, id: String, name: String) -> Option<String> {
+        cat_err(self.engine.rename_category(&id, &name).await, core::CategoryOp::Rename)
+    }
+
+    #[napi]
+    pub async fn delete_category(&self, id: String) -> Option<String> {
+        cat_err(self.engine.delete_category(&id).await, core::CategoryOp::Delete)
+    }
+
+    /// `offset`: -1 up, 1 down.
+    #[napi]
+    pub async fn move_category(&self, id: String, offset: i32) -> Option<String> {
+        cat_err(self.engine.move_category(&id, offset).await, core::CategoryOp::Move)
+    }
+
+    /// Exactly these chats are in the category afterwards.
+    #[napi]
+    pub async fn set_category_rooms(&self, id: String, tokens: Vec<String>) -> Option<String> {
+        cat_err(self.engine.set_category_rooms(&id, &tokens).await, core::CategoryOp::Assign)
     }
 
     // --- groups (docs/groups.md); changes resolve to a German error text or `null` ----

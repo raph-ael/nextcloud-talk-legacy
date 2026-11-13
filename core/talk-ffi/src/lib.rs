@@ -188,6 +188,8 @@ pub struct RoomView {
     pub can_delete: bool,
     /// Group link on (room type 3).
     pub is_public: bool,
+    /// Our categories it is in (docs/categories.md); the list uses `room_sections`.
+    pub tag_ids: Vec<String>,
 }
 
 impl From<core::RoomView> for RoomView {
@@ -221,6 +223,7 @@ impl From<core::RoomView> for RoomView {
             can_leave: r.can_leave,
             can_delete: r.can_delete,
             is_public: r.is_public,
+            tag_ids: r.tag_ids,
         }
     }
 }
@@ -293,6 +296,35 @@ pub struct UserView {
 impl From<core::UserView> for UserView {
     fn from(u: core::UserView) -> Self {
         Self { id: u.id, name: u.name, subline: u.subline }
+    }
+}
+
+/// One section of the chat list (docs/categories.md).
+#[derive(uniffi::Record)]
+pub struct SectionView {
+    /// For `toggle_section`; row keys are section id + token (a chat may be in several).
+    pub id: String,
+    /// `favorites`, `custom` or `other`.
+    pub kind: String,
+    /// Empty when it is the only section: then no header.
+    pub title: String,
+    pub collapsed: bool,
+    /// Rows to show (collapsed: only the open chat, unread ones and ones with a call).
+    pub rooms: Vec<RoomView>,
+    /// All chats in the section, hidden ones included.
+    pub total: u32,
+}
+
+impl From<core::SectionView> for SectionView {
+    fn from(s: core::SectionView) -> Self {
+        Self {
+            id: s.id,
+            kind: s.kind,
+            title: s.title,
+            collapsed: s.collapsed,
+            rooms: s.rooms.into_iter().map(Into::into).collect(),
+            total: s.total,
+        }
     }
 }
 
@@ -780,6 +812,24 @@ impl TalkSession {
             .into_iter()
             .map(Into::into)
             .collect())
+    }
+
+    // --- categories (docs/categories.md) ---------------------------------------------
+
+    /// The chat list in sections ("Favoriten", categories, "Chats"). Call again on
+    /// `RoomsChanged`, when the search text or the open chat changes.
+    pub fn room_sections(&self, query: String, active_token: Option<String>) -> Vec<SectionView> {
+        self.engine.room_sections(&query, active_token.as_deref()).into_iter().map(Into::into).collect()
+    }
+
+    /// Opens or closes a section (saved on the server). German error text or `None`;
+    /// the list updates via `RoomsChanged` either way.
+    pub async fn toggle_section(&self, id: String) -> Option<String> {
+        self.engine
+            .toggle_section(&id)
+            .await
+            .err()
+            .map(|e| core::category_error_text(core::CategoryOp::Collapse, &e))
     }
 
     // --- groups (docs/groups.md); changes return a German error text or `None` -------

@@ -16,8 +16,8 @@ mod callbot;
 #[cfg(feature = "call-bot")]
 mod chromebot;
 use talk_core::{
-    Account, ChatMessage, Engine, Event, EventSink, GroupOp, LoginFlow, Platform, TalkClient,
-    group_error_text, new_reference_id,
+    Account, CategoryOp, ChatMessage, Engine, Event, EventSink, GroupOp, LoginFlow, Platform, TalkClient,
+    category_error_text, group_error_text, new_reference_id,
 };
 
 #[derive(Parser)]
@@ -34,6 +34,26 @@ struct Cli {
     data_dir: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum CategoryCmd {
+    /// All categories in order (with "Favoriten" and "Chats")
+    List,
+    /// Create a category with these chats; prints its id
+    Create { name: String, tokens: Vec<String> },
+    Rename { id: String, name: String },
+    Delete { id: String },
+    /// Move one place up (-1) or down (1)
+    Move {
+        id: String,
+        #[arg(allow_hyphen_values = true)]
+        offset: i32,
+    },
+    /// Open or close a section (id from `sections`)
+    Collapse { id: String },
+    /// Exactly these chats are in the category afterwards
+    Set { id: String, tokens: Vec<String> },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +137,18 @@ enum Cmd {
     Group {
         #[command(subcommand)]
         op: GroupCmd,
+    },
+    /// The chat list in sections like the apps (docs/categories.md)
+    Sections {
+        query: Option<String>,
+        /// The open chat (stays visible in a collapsed section)
+        #[arg(long)]
+        active: Option<String>,
+    },
+    /// Categories in the chat list (docs/categories.md)
+    Category {
+        #[command(subcommand)]
+        op: CategoryCmd,
     },
     /// Upload a file to the Talk attachment folder and share it into a conversation
     SendFile {
@@ -402,6 +434,9 @@ async fn main() -> Result<()> {
     if let Cmd::Group { op } = &cli.cmd {
         return group_cmd(client, op).await;
     }
+    if let Cmd::Sections { .. } | Cmd::Category { .. } = &cli.cmd {
+        return category_cmd(client, &cli.cmd).await;
+    }
     if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
         // Push registration needs an app password (token login), like the apps have.
         let app_password = client.get_app_password().await?;
@@ -439,7 +474,8 @@ async fn main() -> Result<()> {
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
         | Cmd::Fetch { .. }
-        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Group { .. } => {
+        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Group { .. }
+        | Cmd::Sections { .. } | Cmd::Category { .. } => {
             unreachable!()
         }
         Cmd::Rooms { json } => {
@@ -617,6 +653,53 @@ fn talk_core_null_sink() -> NullSink {
 /// Prints outbox state changes (deduplicated per message).
 struct PrintSink {
     last: Mutex<HashMap<String, String>>,
+}
+
+async fn category_cmd(client: TalkClient, cmd: &Cmd) -> Result<()> {
+    let engine = Engine::new(client, Arc::new(talk_core_null_sink()), None);
+    engine.start().await?;
+    let fail = |op: CategoryOp| move |e: talk_core::Error| anyhow::anyhow!("{} ({e})", category_error_text(op, &e));
+    let result: Result<()> = async {
+        match cmd {
+            Cmd::Sections { query, active } => {
+                for s in engine.room_sections(query.as_deref().unwrap_or(""), active.as_deref()) {
+                    let title = if s.title.is_empty() { "(ohne Kopf)" } else { &s.title };
+                    let arrow = if s.collapsed { ">" } else { "v" };
+                    println!("{arrow} {title} [{} {}] {}/{} sichtbar", s.kind, s.id, s.rooms.len(), s.total);
+                    for r in &s.rooms {
+                        let unread = if r.unread_messages > 0 { format!(" ({} neu)", r.unread_messages) } else { String::new() };
+                        println!("    {:<12} {}{unread}", r.token, r.name);
+                    }
+                }
+            }
+            Cmd::Category { op } => match op {
+                CategoryCmd::List => {
+                    if !engine.categories_supported() {
+                        eprintln!("Server ohne conversation-tags");
+                    }
+                    for c in engine.categories() {
+                        let state = if c.collapsed { "eingeklappt" } else { "offen" };
+                        println!("{:<8} {:<10} {} · {} Chats · {state}", c.id, c.kind, c.name, c.room_count);
+                    }
+                }
+                CategoryCmd::Create { name, tokens } => {
+                    println!("{}", engine.create_category(name, tokens).await.map_err(fail(CategoryOp::Create))?);
+                }
+                CategoryCmd::Rename { id, name } => engine.rename_category(id, name).await.map_err(fail(CategoryOp::Rename))?,
+                CategoryCmd::Delete { id } => engine.delete_category(id).await.map_err(fail(CategoryOp::Delete))?,
+                CategoryCmd::Move { id, offset } => engine.move_category(id, *offset).await.map_err(fail(CategoryOp::Move))?,
+                CategoryCmd::Collapse { id } => engine.toggle_section(id).await.map_err(fail(CategoryOp::Collapse))?,
+                CategoryCmd::Set { id, tokens } => {
+                    engine.set_category_rooms(id, tokens).await.map_err(fail(CategoryOp::Assign))?
+                }
+            },
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+    .await;
+    engine.shutdown();
+    result
 }
 
 async fn group_cmd(client: TalkClient, op: &GroupCmd) -> Result<()> {
