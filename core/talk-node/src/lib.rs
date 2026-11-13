@@ -25,6 +25,17 @@ fn json<T: serde::Serialize>(v: &T) -> Result<Value> {
     serde_json::to_value(v).map_err(|e| Error::from_reason(e.to_string()))
 }
 
+fn open_result(r: core::Result<String>, op: core::GroupOp) -> Value {
+    match r {
+        Ok(token) => serde_json::json!({ "token": token, "error": null }),
+        Err(e) => serde_json::json!({ "token": null, "error": core::group_error_text(op, &e) }),
+    }
+}
+
+fn group_err(r: core::Result<()>, op: core::GroupOp) -> Option<String> {
+    r.err().map(|e| core::group_error_text(op, &e))
+}
+
 fn reply_preview(v: Option<Value>) -> Result<Option<core::ReplyPreview>> {
     match v {
         None | Some(Value::Null) => Ok(None),
@@ -289,6 +300,96 @@ impl TalkSession {
             .await
             .err()
             .map(|e| core::reaction_error_text(&e))
+    }
+
+    // --- groups (docs/groups.md); changes resolve to a German error text or `null` ----
+
+    #[napi]
+    pub fn can_create_groups(&self) -> bool {
+        self.engine.can_create_groups()
+    }
+
+    /// `UserView[]` for "Neue Nachricht"; with `excludeToken` without that group's members.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn search_users(&self, query: String, exclude_token: Option<String>) -> Result<Value> {
+        json(&self.engine.search_users(&query, exclude_token.as_deref()).await.map_err(to_napi)?)
+    }
+
+    /// `{token, error}`: the one-to-one chat with a user (created when missing).
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn open_direct(&self, user_id: String) -> Result<Value> {
+        Ok(open_result(self.engine.open_direct(&user_id).await, core::GroupOp::OpenDirect))
+    }
+
+    /// `{token, error}`; `photo`: any image bytes (cropped to a square by the core).
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn create_group(&self, name: String, user_ids: Vec<String>, photo: Option<Buffer>) -> Result<Value> {
+        let photo = photo.map(|b| b.to_vec());
+        Ok(open_result(self.engine.create_group(&name, &user_ids, photo).await, core::GroupOp::Create))
+    }
+
+    /// `MemberView[]`: ourselves first, then moderators, then alphabetically.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn members(&self, token: String) -> Result<Value> {
+        json(&self.engine.members(&token).await.map_err(to_napi)?)
+    }
+
+    #[napi]
+    pub async fn add_members(&self, token: String, user_ids: Vec<String>) -> Option<String> {
+        group_err(self.engine.add_members(&token, &user_ids).await, core::GroupOp::AddMembers)
+    }
+
+    #[napi]
+    pub async fn remove_member(&self, token: String, attendee_id: i64) -> Option<String> {
+        group_err(self.engine.remove_member(&token, attendee_id).await, core::GroupOp::RemoveMember)
+    }
+
+    #[napi]
+    pub async fn set_moderator(&self, token: String, attendee_id: i64, moderator: bool) -> Option<String> {
+        group_err(self.engine.set_moderator(&token, attendee_id, moderator).await, core::GroupOp::SetModerator)
+    }
+
+    #[napi]
+    pub async fn rename_group(&self, token: String, name: String) -> Option<String> {
+        group_err(self.engine.rename_group(&token, &name).await, core::GroupOp::Rename)
+    }
+
+    #[napi]
+    pub async fn set_description(&self, token: String, description: String) -> Option<String> {
+        group_err(self.engine.set_description(&token, &description).await, core::GroupOp::Describe)
+    }
+
+    /// New group picture (any image bytes), or `null` to remove it.
+    #[napi]
+    pub async fn set_group_photo(&self, token: String, photo: Option<Buffer>) -> Option<String> {
+        let photo = photo.map(|b| b.to_vec());
+        group_err(self.engine.set_group_photo(&token, photo).await, core::GroupOp::Photo)
+    }
+
+    #[napi]
+    pub async fn set_group_link(&self, token: String, on: bool) -> Option<String> {
+        group_err(self.engine.set_group_link(&token, on).await, core::GroupOp::Link)
+    }
+
+    #[napi]
+    pub fn group_link(&self, token: String) -> String {
+        self.engine.group_link(&token)
+    }
+
+    /// 1 all messages, 2 mentions only, 3 off.
+    #[napi]
+    pub async fn set_notification_level(&self, token: String, level: u8) -> Option<String> {
+        group_err(self.engine.set_notification_level(&token, level).await, core::GroupOp::Mute)
+    }
+
+    #[napi]
+    pub async fn leave_group(&self, token: String) -> Option<String> {
+        group_err(self.engine.leave_group(&token).await, core::GroupOp::Leave)
+    }
+
+    #[napi]
+    pub async fn delete_group(&self, token: String) -> Option<String> {
+        group_err(self.engine.delete_group(&token).await, core::GroupOp::Delete)
     }
 
     /// Who reacted: `ReactionView[]`, own first, then newest first.

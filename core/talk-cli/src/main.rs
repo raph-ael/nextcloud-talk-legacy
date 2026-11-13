@@ -16,8 +16,8 @@ mod callbot;
 #[cfg(feature = "call-bot")]
 mod chromebot;
 use talk_core::{
-    Account, ChatMessage, Engine, Event, EventSink, LoginFlow, Platform, TalkClient,
-    new_reference_id,
+    Account, ChatMessage, Engine, Event, EventSink, GroupOp, LoginFlow, Platform, TalkClient,
+    group_error_text, new_reference_id,
 };
 
 #[derive(Parser)]
@@ -34,6 +34,50 @@ struct Cli {
     data_dir: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum GroupCmd {
+    /// Create a group; prints its token
+    Create {
+        name: String,
+        /// User id of a member (repeatable)
+        #[arg(short, long)]
+        member: Vec<String>,
+        /// Picture (any image; cropped to a square)
+        #[arg(long)]
+        photo: Option<PathBuf>,
+    },
+    /// The one-to-one chat with a user (created when missing); prints its token
+    Direct { user: String },
+    /// Group settings as the apps see them
+    Info { token: String },
+    Members { token: String },
+    Add { token: String, users: Vec<String> },
+    Remove { token: String, attendee: i64 },
+    Promote { token: String, attendee: i64 },
+    Demote { token: String, attendee: i64 },
+    Rename { token: String, name: String },
+    Describe { token: String, text: String },
+    /// Set the picture, or remove it with --remove
+    Photo {
+        token: String,
+        path: Option<PathBuf>,
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Group link on or off
+    Link { token: String, on: String },
+    /// Notifications: 1 all, 2 mentions only, 3 off
+    Mute { token: String, level: u8 },
+    Leave { token: String },
+    Delete { token: String },
+    /// Open the chat and print member/room changes as the apps receive them
+    Watch {
+        token: String,
+        #[arg(long, default_value_t = 30)]
+        seconds: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -62,6 +106,18 @@ enum Cmd {
     },
     /// List who reacted to a message
     Reactions { token: String, id: i64 },
+    /// Search users like "Neue Nachricht" (all listable users without a query)
+    Users {
+        query: Option<String>,
+        /// Leave out the members of this conversation ("Mitglieder hinzufügen")
+        #[arg(long)]
+        exclude: Option<String>,
+    },
+    /// Groups like the apps (docs/groups.md)
+    Group {
+        #[command(subcommand)]
+        op: GroupCmd,
+    },
     /// Upload a file to the Talk attachment folder and share it into a conversation
     SendFile {
         token: String,
@@ -331,6 +387,21 @@ async fn main() -> Result<()> {
         eprintln!("{} Reaktionen", list.len());
         return Ok(());
     }
+    if let Cmd::Users { query, exclude } = &cli.cmd {
+        let engine = Engine::new(client, Arc::new(talk_core_null_sink()), None);
+        engine.start().await?;
+        let r = engine.search_users(query.as_deref().unwrap_or(""), exclude.as_deref()).await;
+        engine.shutdown();
+        let list = r.map_err(|e| anyhow::anyhow!("{} ({e})", group_error_text(GroupOp::Search, &e)))?;
+        for u in &list {
+            println!("{:<24} {}{}", u.id, u.name, if u.subline.is_empty() { String::new() } else { format!(" · {}", u.subline) });
+        }
+        eprintln!("{} Nutzer", list.len());
+        return Ok(());
+    }
+    if let Cmd::Group { op } = &cli.cmd {
+        return group_cmd(client, op).await;
+    }
     if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
         // Push registration needs an app password (token login), like the apps have.
         let app_password = client.get_app_password().await?;
@@ -368,7 +439,9 @@ async fn main() -> Result<()> {
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
         | Cmd::Fetch { .. }
-        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } => unreachable!(),
+        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Group { .. } => {
+            unreachable!()
+        }
         Cmd::Rooms { json } => {
             let t = Instant::now();
             let mut batch = client.rooms(None, true).await?;
@@ -544,6 +617,111 @@ fn talk_core_null_sink() -> NullSink {
 /// Prints outbox state changes (deduplicated per message).
 struct PrintSink {
     last: Mutex<HashMap<String, String>>,
+}
+
+async fn group_cmd(client: TalkClient, op: &GroupCmd) -> Result<()> {
+    let watched = match op {
+        GroupCmd::Watch { token, .. } => Some(token.clone()),
+        _ => None,
+    };
+    let engine = Engine::new(client, Arc::new(GroupSink { token: watched, last: Mutex::new(None) }), None);
+    engine.start().await?;
+    let fail = |op: GroupOp| move |e: talk_core::Error| anyhow::anyhow!("{} ({e})", group_error_text(op, &e));
+    let read = |p: &PathBuf| std::fs::read(p).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()));
+    let result: Result<()> = async {
+        match op {
+            GroupCmd::Create { name, member, photo } => {
+                let photo = photo.as_ref().map(read).transpose()?;
+                let token = engine.create_group(name, member, photo).await.map_err(fail(GroupOp::Create))?;
+                println!("{token}");
+            }
+            GroupCmd::Direct { user } => {
+                println!("{}", engine.open_direct(user).await.map_err(fail(GroupOp::OpenDirect))?);
+            }
+            GroupCmd::Info { token } => {
+                let r = engine
+                    .rooms()
+                    .into_iter()
+                    .find(|r| &r.token == token)
+                    .ok_or_else(|| anyhow::anyhow!("nicht in der Liste"))?;
+                println!(
+                    "{} · Typ {} · Moderator {} · verlassen {} · löschen {} · Link {} · Bild {} · Benachrichtigung {}",
+                    r.name, r.room_type, r.is_moderator, r.can_leave, r.can_delete, r.is_public, r.has_custom_avatar, r.notification_level
+                );
+                if !r.description.is_empty() {
+                    println!("Beschreibung: {}", r.description);
+                }
+                if r.is_public {
+                    println!("Link: {}", engine.group_link(token));
+                }
+            }
+            GroupCmd::Members { token } => {
+                for m in engine.members(token).await.map_err(fail(GroupOp::Members))? {
+                    let role = if m.is_owner { "Besitzer" } else if m.is_moderator { "Moderator" } else { "" };
+                    println!("{:<6} {:<8} {:<20} {}{} {role}", m.attendee_id, m.actor_type, m.actor_id, m.name, if m.is_self { " (du)" } else { "" });
+                }
+            }
+            GroupCmd::Add { token, users } => engine.add_members(token, users).await.map_err(fail(GroupOp::AddMembers))?,
+            GroupCmd::Remove { token, attendee } => engine.remove_member(token, *attendee).await.map_err(fail(GroupOp::RemoveMember))?,
+            GroupCmd::Promote { token, attendee } => {
+                engine.set_moderator(token, *attendee, true).await.map_err(fail(GroupOp::SetModerator))?
+            }
+            GroupCmd::Demote { token, attendee } => {
+                engine.set_moderator(token, *attendee, false).await.map_err(fail(GroupOp::SetModerator))?
+            }
+            GroupCmd::Rename { token, name } => engine.rename_group(token, name).await.map_err(fail(GroupOp::Rename))?,
+            GroupCmd::Describe { token, text } => engine.set_description(token, text).await.map_err(fail(GroupOp::Describe))?,
+            GroupCmd::Photo { token, path, remove } => {
+                let photo = if *remove { None } else { Some(read(path.as_ref().ok_or_else(|| anyhow::anyhow!("Bild fehlt (oder --remove)"))?)?) };
+                engine.set_group_photo(token, photo).await.map_err(fail(GroupOp::Photo))?
+            }
+            GroupCmd::Link { token, on } => {
+                engine.set_group_link(token, matches!(on.as_str(), "on" | "an" | "1" | "true")).await.map_err(fail(GroupOp::Link))?
+            }
+            GroupCmd::Mute { token, level } => engine.set_notification_level(token, *level).await.map_err(fail(GroupOp::Mute))?,
+            GroupCmd::Leave { token } => engine.leave_group(token).await.map_err(fail(GroupOp::Leave))?,
+            GroupCmd::Delete { token } => engine.delete_group(token).await.map_err(fail(GroupOp::Delete))?,
+            GroupCmd::Watch { token, seconds } => {
+                let engine = engine.clone();
+                engine.open_chat(token).await?;
+                tokio::time::sleep(Duration::from_secs(*seconds)).await;
+            }
+        }
+        Ok(())
+    }
+    .await;
+    engine.shutdown();
+    if result.is_ok() && !matches!(op, GroupCmd::Create { .. } | GroupCmd::Direct { .. } | GroupCmd::Info { .. } | GroupCmd::Members { .. }) {
+        eprintln!("ok");
+    }
+    result
+}
+
+/// Prints member changes and the state of one conversation as the apps receive them.
+struct GroupSink {
+    token: Option<String>,
+    last: Mutex<Option<String>>,
+}
+
+impl EventSink for GroupSink {
+    fn emit(&self, event: Event) {
+        let Some(token) = &self.token else { return };
+        match event {
+            Event::ParticipantsChanged { token: t } if &t == token => eprintln!("Mitglieder geändert"),
+            Event::RoomsChanged { rooms } => {
+                let line = match rooms.iter().find(|r| &r.token == token) {
+                    Some(r) => format!("{} · Typ {} · Moderator {} · Bild {}", r.name, r.room_type, r.is_moderator, r.avatar_version),
+                    None => "nicht mehr in der Liste".into(),
+                };
+                let mut last = self.last.lock().unwrap();
+                if last.as_deref() != Some(&line) {
+                    eprintln!("Raum: {line}");
+                    *last = Some(line);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Prints the reactions of one message whenever it changes.

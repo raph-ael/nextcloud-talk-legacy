@@ -179,6 +179,15 @@ pub struct RoomView {
     /// 0 default, 1 always, 2 mentions only, 3 never.
     pub notification_level: u8,
     pub avatar_version: String,
+    /// A picture was set (it can be removed). docs/groups.md
+    pub has_custom_avatar: bool,
+    /// Owner or moderator: may edit the group and its members.
+    pub is_moderator: bool,
+    /// `false` when we are the last moderator: promote somebody first.
+    pub can_leave: bool,
+    pub can_delete: bool,
+    /// Group link on (room type 3).
+    pub is_public: bool,
 }
 
 impl From<core::RoomView> for RoomView {
@@ -207,6 +216,11 @@ impl From<core::RoomView> for RoomView {
             has_call: r.has_call,
             notification_level: r.notification_level,
             avatar_version: r.avatar_version,
+            has_custom_avatar: r.has_custom_avatar,
+            is_moderator: r.is_moderator,
+            can_leave: r.can_leave,
+            can_delete: r.can_delete,
+            is_public: r.is_public,
         }
     }
 }
@@ -240,6 +254,64 @@ impl From<core::ReactionView> for ReactionView {
             timestamp: r.timestamp,
         }
     }
+}
+
+/// A member of a group (docs/groups.md).
+#[derive(uniffi::Record, Clone)]
+pub struct MemberView {
+    pub attendee_id: i64,
+    pub actor_type: String,
+    pub actor_id: String,
+    pub name: String,
+    pub is_self: bool,
+    pub is_moderator: bool,
+    pub is_owner: bool,
+}
+
+impl From<core::MemberView> for MemberView {
+    fn from(m: core::MemberView) -> Self {
+        Self {
+            attendee_id: m.attendee_id,
+            actor_type: m.actor_type,
+            actor_id: m.actor_id,
+            name: m.name,
+            is_self: m.is_self,
+            is_moderator: m.is_moderator,
+            is_owner: m.is_owner,
+        }
+    }
+}
+
+/// A user from the search ("Neue Nachricht", "Mitglieder hinzufügen").
+#[derive(uniffi::Record, Clone)]
+pub struct UserView {
+    pub id: String,
+    pub name: String,
+    pub subline: String,
+}
+
+impl From<core::UserView> for UserView {
+    fn from(u: core::UserView) -> Self {
+        Self { id: u.id, name: u.name, subline: u.subline }
+    }
+}
+
+/// Result of opening or creating a conversation: its `token`, or a German `error` text.
+#[derive(uniffi::Record, Clone)]
+pub struct OpenResult {
+    pub token: Option<String>,
+    pub error: Option<String>,
+}
+
+fn open_result(r: core::Result<String>, op: core::GroupOp) -> OpenResult {
+    match r {
+        Ok(token) => OpenResult { token: Some(token), error: None },
+        Err(e) => OpenResult { token: None, error: Some(core::group_error_text(op, &e)) },
+    }
+}
+
+fn group_err(r: core::Result<()>, op: core::GroupOp) -> Option<String> {
+    r.err().map(|e| core::group_error_text(op, &e))
 }
 
 #[derive(uniffi::Record, Clone)]
@@ -441,6 +513,8 @@ pub enum CoreEvent {
     CallMissed { token: String, room_name: String, caller_name: String, is_group: bool },
     /// Finished call recordings waiting for the user: the full current list.
     RecordingsChanged { items: Vec<call::RecordingNotice> },
+    /// Members or roles of a group changed: reload `members` if shown (docs/groups.md).
+    ParticipantsChanged { token: String },
 }
 
 impl From<core::Event> for CoreEvent {
@@ -487,6 +561,7 @@ impl From<core::Event> for CoreEvent {
             core::Event::RecordingsChanged { items } => Self::RecordingsChanged {
                 items: items.into_iter().map(Into::into).collect(),
             },
+            core::Event::ParticipantsChanged { token } => Self::ParticipantsChanged { token },
         }
     }
 }
@@ -705,6 +780,80 @@ impl TalkSession {
             .into_iter()
             .map(Into::into)
             .collect())
+    }
+
+    // --- groups (docs/groups.md); changes return a German error text or `None` -------
+
+    /// Whether "Neue Gruppe" is offered.
+    pub fn can_create_groups(&self) -> bool {
+        self.engine.can_create_groups()
+    }
+
+    /// Users for "Neue Nachricht" (all listable ones for an empty `query`); with
+    /// `exclude_token` without the members of that group ("Mitglieder hinzufügen").
+    pub async fn search_users(&self, query: String, exclude_token: Option<String>) -> Result<Vec<UserView>, CoreError> {
+        Ok(self.engine.search_users(&query, exclude_token.as_deref()).await?.into_iter().map(Into::into).collect())
+    }
+
+    /// The one-to-one chat with a user (created when missing).
+    pub async fn open_direct(&self, user_id: String) -> OpenResult {
+        open_result(self.engine.open_direct(&user_id).await, core::GroupOp::OpenDirect)
+    }
+
+    /// Creates a group; `photo`: any image bytes (cropped to a square by the core).
+    pub async fn create_group(&self, name: String, user_ids: Vec<String>, photo: Option<Vec<u8>>) -> OpenResult {
+        open_result(self.engine.create_group(&name, &user_ids, photo).await, core::GroupOp::Create)
+    }
+
+    /// Members: ourselves first, then moderators, then alphabetically.
+    pub async fn members(&self, token: String) -> Result<Vec<MemberView>, CoreError> {
+        Ok(self.engine.members(&token).await?.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn add_members(&self, token: String, user_ids: Vec<String>) -> Option<String> {
+        group_err(self.engine.add_members(&token, &user_ids).await, core::GroupOp::AddMembers)
+    }
+
+    pub async fn remove_member(&self, token: String, attendee_id: i64) -> Option<String> {
+        group_err(self.engine.remove_member(&token, attendee_id).await, core::GroupOp::RemoveMember)
+    }
+
+    pub async fn set_moderator(&self, token: String, attendee_id: i64, moderator: bool) -> Option<String> {
+        group_err(self.engine.set_moderator(&token, attendee_id, moderator).await, core::GroupOp::SetModerator)
+    }
+
+    pub async fn rename_group(&self, token: String, name: String) -> Option<String> {
+        group_err(self.engine.rename_group(&token, &name).await, core::GroupOp::Rename)
+    }
+
+    pub async fn set_description(&self, token: String, description: String) -> Option<String> {
+        group_err(self.engine.set_description(&token, &description).await, core::GroupOp::Describe)
+    }
+
+    /// New group picture (any image bytes), or `None` to remove it.
+    pub async fn set_group_photo(&self, token: String, photo: Option<Vec<u8>>) -> Option<String> {
+        group_err(self.engine.set_group_photo(&token, photo).await, core::GroupOp::Photo)
+    }
+
+    pub async fn set_group_link(&self, token: String, on: bool) -> Option<String> {
+        group_err(self.engine.set_group_link(&token, on).await, core::GroupOp::Link)
+    }
+
+    pub fn group_link(&self, token: String) -> String {
+        self.engine.group_link(&token)
+    }
+
+    /// 1 all messages, 2 mentions only, 3 off.
+    pub async fn set_notification_level(&self, token: String, level: u8) -> Option<String> {
+        group_err(self.engine.set_notification_level(&token, level).await, core::GroupOp::Mute)
+    }
+
+    pub async fn leave_group(&self, token: String) -> Option<String> {
+        group_err(self.engine.leave_group(&token).await, core::GroupOp::Leave)
+    }
+
+    pub async fn delete_group(&self, token: String) -> Option<String> {
+        group_err(self.engine.delete_group(&token).await, core::GroupOp::Delete)
     }
 
     pub async fn mark_read(&self, token: String, message_id: i64) -> Result<(), CoreError> {

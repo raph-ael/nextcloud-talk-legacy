@@ -58,6 +58,15 @@ export interface RoomView {
   /** 0 default, 1 always, 2 mentions only, 3 never */
   notificationLevel: number
   avatarVersion: string
+  /** A picture was set (it can be removed). docs/groups.md */
+  hasCustomAvatar: boolean
+  /** Owner or moderator: may edit the group and its members. */
+  isModerator: boolean
+  /** `false` when we are the last moderator: promote somebody first. */
+  canLeave: boolean
+  canDelete: boolean
+  /** Group link on (room type 3). */
+  isPublic: boolean
 }
 
 export interface ReplyPreview {
@@ -98,6 +107,36 @@ export interface ReactionView {
   name: string
   isOwn: boolean
   timestamp: number
+}
+
+/** A member of a group (docs/groups.md). */
+export interface MemberView {
+  /** For removeMember / setModerator. */
+  attendeeId: number
+  /** users, groups, guests, emails, federated_users … */
+  actorType: string
+  /** The user id for `users` (avatar, openDirect). */
+  actorId: string
+  name: string
+  isSelf: boolean
+  /** Owner or moderator. */
+  isModerator: boolean
+  /** The owner's rights cannot be changed and they cannot be removed. */
+  isOwner: boolean
+}
+
+/** A user from the search ("Neue Nachricht", "Mitglieder hinzufügen"). */
+export interface UserView {
+  id: string
+  name: string
+  /** May be empty. */
+  subline: string
+}
+
+/** Opening or creating a conversation: its token, or a German error text. */
+export interface OpenResult {
+  token: string | null
+  error: string | null
 }
 
 export interface ChatPage {
@@ -180,6 +219,8 @@ export type CoreEvent =
   | { type: 'callMissed'; token: string; roomName: string; callerName: string; isGroup: boolean }
   /** The whole list of recording notices (docs/calls.md, „Aufnahme“). */
   | { type: 'recordingsChanged'; items: RecordingNotice[] }
+  /** Members or roles of a group changed: reload `members` if shown (docs/groups.md). */
+  | { type: 'participantsChanged'; token: string }
 
 // --- Calls (docs/calls.md, talk-core/src/call/mod.rs) ------------------------------
 
@@ -417,6 +458,31 @@ export interface TalkApi {
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
   /** Who reacted: own first, then newest first. */
   reactions(token: string, messageId: number): Promise<ReactionView[]>
+
+  // --- groups (docs/groups.md); changes resolve to a German error text or null ---
+  /** Whether "Neue Gruppe" is offered. */
+  canCreateGroups(): Promise<boolean>
+  /** Users for "Neue Nachricht" (all listable ones for an empty query); with `excludeToken` without that group's members. */
+  searchUsers(query: string, excludeToken: string | null): Promise<UserView[]>
+  /** The one-to-one chat with a user (created when missing). */
+  openDirect(userId: string): Promise<OpenResult>
+  /** Creates a group; `photo`: any image bytes (the core crops it to a square). */
+  createGroup(name: string, userIds: string[], photo: Uint8Array | null): Promise<OpenResult>
+  /** Ourselves first, then moderators, then alphabetically. */
+  members(token: string): Promise<MemberView[]>
+  addMembers(token: string, userIds: string[]): Promise<string | null>
+  removeMember(token: string, attendeeId: number): Promise<string | null>
+  setModerator(token: string, attendeeId: number, moderator: boolean): Promise<string | null>
+  renameGroup(token: string, name: string): Promise<string | null>
+  setDescription(token: string, description: string): Promise<string | null>
+  /** New picture (any image bytes), or null to remove it. */
+  setGroupPhoto(token: string, photo: Uint8Array | null): Promise<string | null>
+  setGroupLink(token: string, on: boolean): Promise<string | null>
+  groupLink(token: string): Promise<string>
+  /** 1 all messages, 2 mentions only, 3 off. */
+  setNotificationLevel(token: string, level: number): Promise<string | null>
+  leaveGroup(token: string): Promise<string | null>
+  deleteGroup(token: string): Promise<string | null>
   setBadge(count: number): void
 
   // --- calls ---

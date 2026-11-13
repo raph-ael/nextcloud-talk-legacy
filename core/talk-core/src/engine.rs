@@ -61,6 +61,39 @@ const HIDDEN_SYSTEM: &[&str] = &[
     "thread_renamed",
 ];
 
+/// System messages about the members of a conversation (docs/groups.md).
+const MEMBER_SYSTEM: &[&str] = &[
+    "user_added",
+    "user_removed",
+    "group_added",
+    "group_removed",
+    "circle_added",
+    "circle_removed",
+    "federated_user_added",
+    "federated_user_removed",
+    "moderator_promoted",
+    "moderator_demoted",
+    "guest_moderator_promoted",
+    "guest_moderator_demoted",
+    "owner_promoted",
+    "owner_demoted",
+];
+
+/// System messages that change the conversation itself (list entry, group settings).
+const ROOM_SYSTEM: &[&str] = &[
+    "conversation_renamed",
+    "description_set",
+    "description_removed",
+    "avatar_set",
+    "avatar_removed",
+    "guests_allowed",
+    "guests_disallowed",
+    "read_only",
+    "read_only_off",
+    "conversation_made_public",
+    "conversation_made_private",
+];
+
 /// System messages whose `parent` is the updated version of an existing message.
 pub(crate) const UPDATING_SYSTEM: &[&str] = &[
     "reaction",
@@ -114,6 +147,9 @@ pub enum Event {
     /// Finished call recordings (transcripts, summaries, failures) waiting for the user:
     /// the full current list. See [`Engine::recording_notices`].
     RecordingsChanged { items: Vec<RecordingNotice> },
+    /// Members or roles of a conversation changed (someone added, removed, promoted):
+    /// reload [`Engine::members`] if they are shown. Only for open chats and own changes.
+    ParticipantsChanged { token: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +176,15 @@ pub struct RoomView {
     pub notification_level: u8,
     /// Changes whenever the avatar changes: use it as cache key.
     pub avatar_version: String,
+    /// A picture was set (it can be removed).
+    pub has_custom_avatar: bool,
+    /// Owner or moderator: may edit the group and its members (docs/groups.md).
+    pub is_moderator: bool,
+    /// `false` when we are the last moderator: promote somebody first.
+    pub can_leave: bool,
+    pub can_delete: bool,
+    /// Group link on: anyone with `group_link` can join (room type 3).
+    pub is_public: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -238,6 +283,8 @@ pub struct Engine {
     react_bit: AtomicI64,
     /// Reaction changes run one after another (quick changes of mind stay in order).
     reaction_lock: tokio::sync::Mutex<()>,
+    /// The server lets this user create conversations (`config.conversations.can-create`).
+    pub(crate) can_create: AtomicBool,
     pub(crate) outbox: Outbox,
     pub(crate) cache: Cache,
     pub(crate) voice: Arc<VoiceStore>,
@@ -273,6 +320,7 @@ impl Engine {
                 cache.meta("react_bit").and_then(|v| v.parse().ok()).unwrap_or(PERMISSION_REACT),
             ),
             reaction_lock: tokio::sync::Mutex::new(()),
+            can_create: AtomicBool::new(cache.meta("can_create").is_none_or(|v| v == "true")),
             outbox: Outbox::open(data_dir.as_deref()),
             voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
             cache,
@@ -354,6 +402,11 @@ impl Engine {
     }
 
     fn apply_capabilities(&self, caps: &serde_json::Value) {
+        if let Some(can) = caps.pointer("/capabilities/spreed/config/conversations/can-create").and_then(|v| v.as_bool()) {
+            if self.can_create.swap(can, Ordering::Relaxed) != can {
+                self.cache.set_meta("can_create", can.to_string());
+            }
+        }
         let Some(features) = caps.pointer("/capabilities/spreed/features").and_then(|f| f.as_array()) else {
             return;
         };
@@ -416,6 +469,17 @@ impl Engine {
     /// Answers the ringing incoming call of `token`.
     pub async fn accept_call(&self, token: &str) -> Result<()> {
         self.calls.accept(token)
+    }
+
+    /// Puts one conversation (fresh from the server) into the list and the cache.
+    pub(crate) fn put_room(&self, room: Room) {
+        self.cache.put_rooms(vec![room.clone()], false);
+        let rooms = {
+            let mut st = self.state.lock().unwrap();
+            st.rooms.insert(room.token.clone(), room);
+            self.sorted_views(&st.rooms)
+        };
+        self.sink.emit(Event::RoomsChanged { rooms });
     }
 
     pub(crate) fn state_room(&self, token: &str) -> Option<Room> {
@@ -984,7 +1048,7 @@ impl Engine {
         }
     }
 
-    fn is_own(&self, actor_type: &str, actor_id: &str) -> bool {
+    pub(crate) fn is_own(&self, actor_type: &str, actor_id: &str) -> bool {
         actor_type == "users" && *self.me.read().unwrap() == actor_id
     }
 
@@ -1101,11 +1165,23 @@ impl Engine {
             has_call: r.has_call,
             notification_level: r.notification_level,
             avatar_version: r.avatar_version.clone(),
+            has_custom_avatar: r.is_custom_avatar,
+            is_moderator: matches!(r.participant_type, 1 | 2 | 6),
+            can_leave: r.can_leave_conversation,
+            can_delete: r.can_delete_conversation,
+            is_public: r.room_type == RoomType::Public,
         }
     }
 
     /// Applies a poll result: emits new and updated messages, refreshes the room preview.
-    fn apply_live(&self, token: &str, messages: Vec<ChatMessage>) {
+    /// Returns whether the conversation itself changed (name, members …): then the
+    /// caller refreshes the room list.
+    fn apply_live(&self, token: &str, messages: Vec<ChatMessage>) -> bool {
+        let members = messages.iter().any(|m| MEMBER_SYSTEM.contains(&m.system_message.as_str()));
+        let room = members || messages.iter().any(|m| ROOM_SYSTEM.contains(&m.system_message.as_str()));
+        if members {
+            self.sink.emit(Event::ParticipantsChanged { token: token.to_string() });
+        }
         if messages.iter().any(|m| m.system_message == "history_cleared") {
             // Forget the cached copy; the next open loads the remaining history.
             self.cache.replace_chat(token, Vec::new(), false, None);
@@ -1133,7 +1209,7 @@ impl Engine {
             });
         }
         if added.is_empty() {
-            return;
+            return room;
         }
         let refs: Vec<String> = added.iter().map(|m| m.reference_id.clone()).collect();
         self.sink.emit(Event::MessagesAdded {
@@ -1154,6 +1230,7 @@ impl Engine {
             };
             self.sink.emit(Event::RoomsChanged { rooms });
         }
+        room
     }
 }
 
@@ -1245,9 +1322,22 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
                         });
                     }
                 }
-                e.apply_live(&token, batch.messages);
+                if e.apply_live(&token, batch.messages) {
+                    let _ = e.refresh_rooms(true).await;
+                }
             }
             Err(Error::Unauthorized) => return,
+            // Removed from the conversation, or it was deleted: it leaves the list.
+            Err(Error::NotFound) => {
+                let _ = e.refresh_rooms(true).await;
+                if e.state_room(&token).is_none() {
+                    e.state.lock().unwrap().chats.remove(&token);
+                    return;
+                }
+                drop(e);
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(30));
+            }
             Err(err) => {
                 tracing::warn!(%token, "chat poll failed: {err}");
                 drop(e);

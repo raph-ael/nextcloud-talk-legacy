@@ -93,6 +93,14 @@ pub struct Room {
     pub notification_level: u8,
     #[serde(default)]
     pub avatar_version: String,
+    /// A picture was uploaded (not the generated one).
+    #[serde(default)]
+    pub is_custom_avatar: bool,
+    /// `false` when we are the last moderator of a group (promote somebody first).
+    #[serde(default = "yes")]
+    pub can_leave_conversation: bool,
+    #[serde(default)]
+    pub can_delete_conversation: bool,
     /// Status of the other user in 1:1 conversations (only with `includeStatus=true`).
     #[serde(default)]
     pub status: Option<String>,
@@ -281,6 +289,31 @@ pub struct Reaction {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(transparent)]
 pub struct Reactions(#[serde(deserialize_with = "reaction_map")] pub BTreeMap<String, Vec<Reaction>>);
+
+/// One member of a conversation (`GET /room/{token}/participants`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Participant {
+    pub attendee_id: i64,
+    #[serde(default)]
+    pub actor_type: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub display_name: String,
+    /// 1 owner, 2 moderator, 3 user, 4 guest, 5 self-joined user, 6 guest moderator.
+    #[serde(default)]
+    pub participant_type: u8,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// `null` as empty string.
+pub(crate) fn string_or_null<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
 
 /// Talk returns `[]` instead of `null`/`{}` for empty objects.
 fn object_or_empty_array<'de, D, T>(d: D) -> Result<Option<T>, D::Error>

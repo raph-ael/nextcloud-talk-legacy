@@ -60,6 +60,22 @@ interface NativeSession {
   markRead(token: string, messageId: number): Promise<void>
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
   reactions(token: string, messageId: number): Promise<unknown>
+  canCreateGroups(): boolean
+  searchUsers(query: string, excludeToken: string | null): Promise<unknown>
+  openDirect(userId: string): Promise<unknown>
+  createGroup(name: string, userIds: string[], photo: Buffer | null): Promise<unknown>
+  members(token: string): Promise<unknown>
+  addMembers(token: string, userIds: string[]): Promise<string | null>
+  removeMember(token: string, attendeeId: number): Promise<string | null>
+  setModerator(token: string, attendeeId: number, moderator: boolean): Promise<string | null>
+  renameGroup(token: string, name: string): Promise<string | null>
+  setDescription(token: string, description: string): Promise<string | null>
+  setGroupPhoto(token: string, photo: Buffer | null): Promise<string | null>
+  setGroupLink(token: string, on: boolean): Promise<string | null>
+  groupLink(token: string): string
+  setNotificationLevel(token: string, level: number): Promise<string | null>
+  leaveGroup(token: string): Promise<string | null>
+  deleteGroup(token: string): Promise<string | null>
   avatar(token: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
   enqueueText(token: string, text: string, replyTo: ReplyPreview | null, referenceId: string): PendingMessage
   enqueueFile(
@@ -863,6 +879,48 @@ function registerIpc(): void {
     session ? session.setReaction(token, messageId, emoji) : 'Nicht angemeldet',
   )
   ipcMain.handle('talk:reactions', (_e, token: string, messageId: number) => session?.reactions(token, messageId) ?? [])
+
+  // Groups (docs/groups.md): changes resolve to a German error text or null.
+  const NOT_SIGNED_IN = 'Nicht angemeldet'
+  const bytes = (data: Uint8Array | null) => (data ? Buffer.from(data) : null)
+  ipcMain.handle('talk:canCreateGroups', () => session?.canCreateGroups() ?? false)
+  ipcMain.handle('talk:searchUsers', (_e, query: string, excludeToken: string | null) =>
+    requireSession().searchUsers(query, excludeToken),
+  )
+  ipcMain.handle('talk:openDirect', (_e, userId: string) =>
+    session ? session.openDirect(userId) : { token: null, error: NOT_SIGNED_IN },
+  )
+  ipcMain.handle('talk:createGroup', (_e, name: string, userIds: string[], photo: Uint8Array | null) =>
+    session ? session.createGroup(name, userIds, bytes(photo)) : { token: null, error: NOT_SIGNED_IN },
+  )
+  ipcMain.handle('talk:members', (_e, token: string) => requireSession().members(token))
+  ipcMain.handle('talk:addMembers', (_e, token: string, userIds: string[]) =>
+    session ? session.addMembers(token, userIds) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:removeMember', (_e, token: string, attendeeId: number) =>
+    session ? session.removeMember(token, attendeeId) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:setModerator', (_e, token: string, attendeeId: number, moderator: boolean) =>
+    session ? session.setModerator(token, attendeeId, moderator) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:renameGroup', (_e, token: string, name: string) =>
+    session ? session.renameGroup(token, name) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:setDescription', (_e, token: string, description: string) =>
+    session ? session.setDescription(token, description) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:setGroupPhoto', (_e, token: string, photo: Uint8Array | null) =>
+    session ? session.setGroupPhoto(token, bytes(photo)) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:setGroupLink', (_e, token: string, on: boolean) =>
+    session ? session.setGroupLink(token, on) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:groupLink', (_e, token: string) => requireSession().groupLink(token))
+  ipcMain.handle('talk:setNotificationLevel', (_e, token: string, level: number) =>
+    session ? session.setNotificationLevel(token, level) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:leaveGroup', (_e, token: string) => (session ? session.leaveGroup(token) : NOT_SIGNED_IN))
+  ipcMain.handle('talk:deleteGroup', (_e, token: string) => (session ? session.deleteGroup(token) : NOT_SIGNED_IN))
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
 
   // Calls (docs/calls.md).

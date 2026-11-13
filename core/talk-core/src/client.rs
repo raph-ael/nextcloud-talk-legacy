@@ -112,6 +112,18 @@ pub struct CurrentUser {
     pub display_name: String,
 }
 
+/// One result of the user search (`core/autocomplete/get`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserHit {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default, deserialize_with = "crate::models::string_or_null")]
+    pub subline: String,
+    #[serde(default)]
+    pub source: String,
+}
+
 #[derive(Clone)]
 pub struct TalkClient {
     http: reqwest::Client,
@@ -786,6 +798,143 @@ impl TalkClient {
     pub async fn participants(&self, token: &str) -> Result<Vec<serde_json::Value>> {
         let rb = self.request(Method::GET, &format!("{SPREED}/v4/room/{token}/participants"));
         Ok(self.ocs::<Vec<serde_json::Value>>(rb).await?.0)
+    }
+
+    // --- conversations and members (docs/groups.md) ----------------------------------
+
+    /// `POST /room`: a group conversation (`invite` empty) or a one-to-one with the user
+    /// `invite` (an existing one is returned). `users` are added right away
+    /// (`conversation-creation-all`).
+    pub async fn create_room(&self, room_type: u8, name: &str, invite: &str, users: &[String]) -> Result<Room> {
+        let mut form: Vec<(String, String)> = vec![("roomType".into(), room_type.to_string())];
+        if !name.is_empty() {
+            form.push(("roomName".into(), name.to_string()));
+        }
+        if !invite.is_empty() {
+            form.push(("invite".into(), invite.to_string()));
+        }
+        for u in users {
+            form.push(("participants[users][]".into(), u.clone()));
+        }
+        let rb = self.request(Method::POST, &format!("{SPREED}/v4/room")).form(&form);
+        Ok(self.ocs::<Room>(rb).await?.0)
+    }
+
+    /// Users matching `search` (all users the server lets us list when empty).
+    pub async fn search_users(&self, search: &str, limit: u32) -> Result<Vec<UserHit>> {
+        let rb = self
+            .request(Method::GET, "/ocs/v2.php/core/autocomplete/get")
+            .query(&[
+                ("search", search),
+                ("itemType", "call"),
+                ("itemId", "new"),
+                ("shareTypes[]", "0"),
+            ])
+            .query(&[("limit", limit)]);
+        Ok(self.ocs::<Vec<UserHit>>(rb).await?.0)
+    }
+
+    /// Members of a conversation, typed (users, groups, guests …).
+    pub async fn members(&self, token: &str) -> Result<Vec<crate::models::Participant>> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v4/room/{token}/participants"));
+        Ok(self.ocs(rb).await?.0)
+    }
+
+    /// Adds a user to a conversation (moderators).
+    pub async fn add_participant(&self, token: &str, user_id: &str) -> Result<()> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v4/room/{token}/participants"))
+            .form(&[("newParticipant", user_id), ("source", "users")]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Removes someone from a conversation (moderators; not other moderators' owner).
+    pub async fn remove_attendee(&self, token: &str, attendee_id: i64) -> Result<()> {
+        let rb = self
+            .request(Method::DELETE, &format!("{SPREED}/v4/room/{token}/attendees"))
+            .query(&[("attendeeId", attendee_id)]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Promotes (`true`) or demotes an attendee as moderator.
+    pub async fn set_moderator(&self, token: &str, attendee_id: i64, moderator: bool) -> Result<()> {
+        let method = if moderator { Method::POST } else { Method::DELETE };
+        let rb = self.request(method, &format!("{SPREED}/v4/room/{token}/moderators"));
+        let rb = if moderator {
+            rb.form(&[("attendeeId", attendee_id)])
+        } else {
+            rb.query(&[("attendeeId", attendee_id)])
+        };
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    pub async fn rename_room(&self, token: &str, name: &str) -> Result<()> {
+        let rb = self
+            .request(Method::PUT, &format!("{SPREED}/v4/room/{token}"))
+            .form(&[("roomName", name)]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    pub async fn set_description(&self, token: &str, description: &str) -> Result<()> {
+        let rb = self
+            .request(Method::PUT, &format!("{SPREED}/v4/room/{token}/description"))
+            .form(&[("description", description)]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Sets the conversation picture (square PNG/JPEG).
+    pub async fn upload_room_avatar(&self, token: &str, jpeg: Vec<u8>) -> Result<()> {
+        let part = reqwest::multipart::Part::bytes(jpeg)
+            .file_name("avatar.jpg")
+            .mime_str("image/jpeg")?;
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v1/room/{token}/avatar"))
+            .multipart(reqwest::multipart::Form::new().part("file", part));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    pub async fn delete_room_avatar(&self, token: &str) -> Result<()> {
+        let rb = self.request(Method::DELETE, &format!("{SPREED}/v1/room/{token}/avatar"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Joining by link on (type 3, public) or off (type 2).
+    pub async fn set_public(&self, token: &str, public: bool) -> Result<()> {
+        let method = if public { Method::POST } else { Method::DELETE };
+        let rb = self.request(method, &format!("{SPREED}/v4/room/{token}/public"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// 1 always, 2 mentions only, 3 never (0 server default).
+    pub async fn set_notification_level(&self, token: &str, level: u8) -> Result<()> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v4/room/{token}/notify"))
+            .form(&[("level", level)]);
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Leaves the conversation for good (unlike [`Self::leave_room`], which only ends the
+    /// session). 400 when we are its last moderator.
+    pub async fn leave_conversation(&self, token: &str) -> Result<()> {
+        let rb = self.request(Method::DELETE, &format!("{SPREED}/v4/room/{token}/participants/self"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
+    /// Deletes the conversation for everybody (moderators).
+    pub async fn delete_room(&self, token: &str) -> Result<()> {
+        let rb = self.request(Method::DELETE, &format!("{SPREED}/v4/room/{token}"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
     }
 
     /// Starts recording the running call (moderators). `video`: the recording server
