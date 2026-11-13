@@ -279,6 +279,24 @@ impl TalkSession {
         json(&msg)
     }
 
+    /// Sets the own reaction like Signal (one per person): `emoji` replaces it, the same
+    /// emoji again or `null` removes it. Resolves to a short German error text to show,
+    /// or `null` on success (docs/chat.md „Reaktionen“).
+    #[napi]
+    pub async fn set_reaction(&self, token: String, message_id: i64, emoji: Option<String>) -> Option<String> {
+        self.engine
+            .set_reaction(&token, message_id, emoji.as_deref())
+            .await
+            .err()
+            .map(|e| core::reaction_error_text(&e))
+    }
+
+    /// Who reacted: `ReactionView[]`, own first, then newest first.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn reactions(&self, token: String, message_id: i64) -> Result<Value> {
+        json(&self.engine.reactions(&token, message_id).await.map_err(to_napi)?)
+    }
+
     #[napi]
     pub async fn mark_read(&self, token: String, message_id: i64) -> Result<()> {
         self.engine

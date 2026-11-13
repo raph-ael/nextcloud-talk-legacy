@@ -50,6 +50,18 @@ enum Cmd {
     },
     /// Send a text message
     Send { token: String, text: String },
+    /// Set the own reaction like the apps (one per person; the same emoji again removes it)
+    React {
+        token: String,
+        id: i64,
+        /// Emoji to set; omit with --remove
+        emoji: Option<String>,
+        /// Remove the own reaction
+        #[arg(long)]
+        remove: bool,
+    },
+    /// List who reacted to a message
+    Reactions { token: String, id: i64 },
     /// Upload a file to the Talk attachment folder and share it into a conversation
     SendFile {
         token: String,
@@ -290,6 +302,35 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Cmd::React { token, id, emoji, remove } = &cli.cmd {
+        let emoji = if *remove { None } else { emoji.as_deref() };
+        if emoji.is_none() && !*remove {
+            anyhow::bail!("Emoji fehlt (oder --remove)");
+        }
+        // Like the apps: chat open (cached, live poll), so the instant update and the
+        // server's confirmation show as `MessagesUpdated`.
+        let engine = Engine::new(client, Arc::new(ReactionSink(*id)), Some(data_dir(&cli)?));
+        engine.start().await?;
+        engine.open_chat(token).await?;
+        tokio::time::sleep(Duration::from_millis(500)).await; // cache writes land
+        let result = engine.set_reaction(token, *id, emoji).await;
+        tokio::time::sleep(Duration::from_secs(3)).await; // the live poll confirms
+        engine.shutdown();
+        match result {
+            Ok(()) => eprintln!("ok"),
+            Err(e) => anyhow::bail!("{} ({e})", talk_core::reaction_error_text(&e)),
+        }
+        return Ok(());
+    }
+    if let Cmd::Reactions { token, id } = &cli.cmd {
+        let engine = Engine::new(client, Arc::new(talk_core_null_sink()), None);
+        let list = engine.reactions(token, *id).await?;
+        for r in &list {
+            println!("{} {}{}", r.emoji, r.name, if r.is_own { " (du)" } else { "" });
+        }
+        eprintln!("{} Reaktionen", list.len());
+        return Ok(());
+    }
     if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
         // Push registration needs an app password (token login), like the apps have.
         let app_password = client.get_app_password().await?;
@@ -327,7 +368,7 @@ async fn main() -> Result<()> {
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
         | Cmd::Fetch { .. }
-        | Cmd::Recordings { .. } => unreachable!(),
+        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } => unreachable!(),
         Cmd::Rooms { json } => {
             let t = Instant::now();
             let mut batch = client.rooms(None, true).await?;
@@ -503,6 +544,19 @@ fn talk_core_null_sink() -> NullSink {
 /// Prints outbox state changes (deduplicated per message).
 struct PrintSink {
     last: Mutex<HashMap<String, String>>,
+}
+
+/// Prints the reactions of one message whenever it changes.
+struct ReactionSink(i64);
+
+impl EventSink for ReactionSink {
+    fn emit(&self, event: Event) {
+        let Event::MessagesUpdated { messages, .. } = event else { return };
+        for m in messages.iter().filter(|m| m.id == self.0) {
+            let r: String = m.reactions.iter().map(|(k, v)| format!(" {k}{v}")).collect();
+            eprintln!("aktualisiert:{r} eigene={:?}", m.reactions_self);
+        }
+    }
 }
 
 impl EventSink for PrintSink {

@@ -58,6 +58,8 @@ interface NativeSession {
   closeChat(token: string): void
   loadOlder(token: string, beforeId: number): Promise<unknown>
   markRead(token: string, messageId: number): Promise<void>
+  setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
+  reactions(token: string, messageId: number): Promise<unknown>
   avatar(token: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
   enqueueText(token: string, text: string, replyTo: ReplyPreview | null, referenceId: string): PendingMessage
   enqueueFile(
@@ -857,6 +859,10 @@ function registerIpc(): void {
     return requireSession().audioInfo(localPath)
   })
   ipcMain.handle('talk:markRead', (_e, token: string, messageId: number) => session?.markRead(token, messageId))
+  ipcMain.handle('talk:setReaction', (_e, token: string, messageId: number, emoji: string | null) =>
+    session ? session.setReaction(token, messageId, emoji) : 'Nicht angemeldet',
+  )
+  ipcMain.handle('talk:reactions', (_e, token: string, messageId: number) => session?.reactions(token, messageId) ?? [])
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
 
   // Calls (docs/calls.md).

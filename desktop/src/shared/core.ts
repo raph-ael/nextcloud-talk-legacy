@@ -52,6 +52,8 @@ export interface RoomView {
   isFavorite: boolean
   isArchived: boolean
   readOnly: boolean
+  /** The user may react to messages (docs/chat.md „Reaktionen“). */
+  canReact: boolean
   hasCall: boolean
   /** 0 default, 1 always, 2 mentions only, 3 never */
   notificationLevel: number
@@ -86,6 +88,16 @@ export interface MessageView {
   reactionsSelf: string[]
   /** For file messages; `text` is then the caption. */
   attachment?: FileAttachment | null
+}
+
+/** One person's reaction, for the "who reacted" list. */
+export interface ReactionView {
+  emoji: string
+  actorType: string
+  actorId: string
+  name: string
+  isOwn: boolean
+  timestamp: number
 }
 
 export interface ChatPage {
@@ -397,6 +409,14 @@ export interface TalkApi {
   /** Duration and waveform of a local audio file. */
   audioInfo(localPath: string): Promise<AudioInfo>
   markRead(token: string, messageId: number): Promise<void>
+  /**
+   * Own reaction like Signal (one per person): `emoji` replaces it, the same emoji again
+   * or `null` removes it. Shows at once via `messagesUpdated`. Resolves to a short German
+   * error text to show, or `null` on success.
+   */
+  setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
+  /** Who reacted: own first, then newest first. */
+  reactions(token: string, messageId: number): Promise<ReactionView[]>
   setBadge(count: number): void
 
   // --- calls ---

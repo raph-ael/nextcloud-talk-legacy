@@ -173,6 +173,8 @@ pub struct RoomView {
     pub is_favorite: bool,
     pub is_archived: bool,
     pub read_only: bool,
+    /// The user may react to messages (docs/chat.md „Reaktionen“).
+    pub can_react: bool,
     pub has_call: bool,
     /// 0 default, 1 always, 2 mentions only, 3 never.
     pub notification_level: u8,
@@ -201,6 +203,7 @@ impl From<core::RoomView> for RoomView {
             is_favorite: r.is_favorite,
             is_archived: r.is_archived,
             read_only: r.read_only,
+            can_react: r.can_react,
             has_call: r.has_call,
             notification_level: r.notification_level,
             avatar_version: r.avatar_version,
@@ -213,6 +216,30 @@ pub enum MessageKind {
     Text,
     System,
     Deleted,
+}
+
+/// One person's reaction, for the "who reacted" list.
+#[derive(uniffi::Record, Clone)]
+pub struct ReactionView {
+    pub emoji: String,
+    pub actor_type: String,
+    pub actor_id: String,
+    pub name: String,
+    pub is_own: bool,
+    pub timestamp: i64,
+}
+
+impl From<core::ReactionView> for ReactionView {
+    fn from(r: core::ReactionView) -> Self {
+        Self {
+            emoji: r.emoji,
+            actor_type: r.actor_type,
+            actor_id: r.actor_id,
+            name: r.name,
+            is_own: r.is_own,
+            timestamp: r.timestamp,
+        }
+    }
 }
 
 #[derive(uniffi::Record, Clone)]
@@ -656,6 +683,28 @@ impl TalkSession {
             .send(&token, &text, &reference_id, reply_to)
             .await?
             .into())
+    }
+
+    /// Sets the own reaction like Signal (one per person): `emoji` replaces it, the same
+    /// emoji again or `None` removes it. Shows at once via `MessagesUpdated`. Returns a
+    /// short German error text to show, or `None` on success (docs/chat.md „Reaktionen“).
+    pub async fn set_reaction(&self, token: String, message_id: i64, emoji: Option<String>) -> Option<String> {
+        self.engine
+            .set_reaction(&token, message_id, emoji.as_deref())
+            .await
+            .err()
+            .map(|e| core::reaction_error_text(&e))
+    }
+
+    /// Who reacted to a message: own reactions first, then newest first.
+    pub async fn reactions(&self, token: String, message_id: i64) -> Result<Vec<ReactionView>, CoreError> {
+        Ok(self
+            .engine
+            .reactions(&token, message_id)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
     pub async fn mark_read(&self, token: String, message_id: i64) -> Result<(), CoreError> {

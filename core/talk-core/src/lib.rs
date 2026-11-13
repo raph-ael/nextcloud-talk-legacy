@@ -31,12 +31,12 @@ pub use call::{
 pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };
-pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReplyPreview, RoomView};
+pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReactionView, ReplyPreview, RoomView, reaction_error_text};
 pub use error::{Error, Result};
 pub use push::{PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
 pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};
-pub use models::{ChatMessage, FileAttachment, IceServer, LoginCredentials, Room, RoomType, SignalingSettings};
+pub use models::{ChatMessage, FileAttachment, IceServer, LoginCredentials, Reaction, Reactions, Room, RoomType, SignalingSettings};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

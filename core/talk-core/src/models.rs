@@ -79,6 +79,10 @@ pub struct Room {
     pub is_archived: bool,
     #[serde(default)]
     pub read_only: u8,
+    /// Effective permissions of the current user (bit field, see Talk `constants.md`).
+    /// 0 when the server does not send them (old cache entries).
+    #[serde(default)]
+    pub permissions: i64,
     #[serde(default)]
     pub has_call: bool,
     #[serde(default)]
@@ -258,6 +262,25 @@ pub struct LoginCredentials {
     pub login_name: String,
     pub app_password: String,
 }
+
+/// One reaction as listed by `GET /reaction/{token}/{messageId}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reaction {
+    #[serde(default)]
+    pub actor_type: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub actor_display_name: String,
+    #[serde(default)]
+    pub timestamp: i64,
+}
+
+/// All reactions of a message: emoji → who reacted (the reaction endpoints' `data`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct Reactions(#[serde(deserialize_with = "map_or_empty_array")] pub BTreeMap<String, Vec<Reaction>>);
 
 /// Talk returns `[]` instead of `null`/`{}` for empty objects.
 fn object_or_empty_array<'de, D, T>(d: D) -> Result<Option<T>, D::Error>

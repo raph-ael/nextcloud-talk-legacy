@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::models::{ChatMessage, Room, SignalingSettings};
+use crate::models::{ChatMessage, Reactions, Room, SignalingSettings};
 
 const SPREED: &str = "/ocs/v2.php/apps/spreed/api";
 
@@ -271,6 +271,30 @@ impl TalkClient {
             .form(&[("lastReadMessage", last_read)]);
         self.ocs::<serde_json::Value>(rb).await?;
         Ok(())
+    }
+
+    /// `POST /reaction/{token}/{messageId}`: adds a reaction. Returns all reactions of
+    /// the message afterwards.
+    pub async fn add_reaction(&self, token: &str, message_id: i64, emoji: &str) -> Result<Reactions> {
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v1/reaction/{token}/{message_id}"))
+            .form(&[("reaction", emoji)]);
+        Ok(self.ocs::<Reactions>(rb).await?.0)
+    }
+
+    /// `DELETE /reaction/{token}/{messageId}`: removes an own reaction. Returns all
+    /// reactions of the message afterwards (`NotFound` when it was not there).
+    pub async fn remove_reaction(&self, token: &str, message_id: i64, emoji: &str) -> Result<Reactions> {
+        let rb = self
+            .request(Method::DELETE, &format!("{SPREED}/v1/reaction/{token}/{message_id}"))
+            .query(&[("reaction", emoji)]);
+        Ok(self.ocs::<Reactions>(rb).await?.0)
+    }
+
+    /// `GET /reaction/{token}/{messageId}`: who reacted with what.
+    pub async fn reactions(&self, token: &str, message_id: i64) -> Result<Reactions> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v1/reaction/{token}/{message_id}"));
+        Ok(self.ocs::<Reactions>(rb).await?.0)
     }
 
     /// Join a conversation (creates a Talk session). Returns the session id used for signaling.

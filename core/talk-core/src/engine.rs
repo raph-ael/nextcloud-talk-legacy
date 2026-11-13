@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,7 @@ use crate::voice::VoiceStore;
 
 use crate::client::TalkClient;
 use crate::error::{Error, Result};
-use crate::models::{ChatMessage, FileAttachment, Room, RoomType};
+use crate::models::{ChatMessage, FileAttachment, Reactions, Room, RoomType};
 
 /// Room list refresh while no signaling connection exists yet.
 const ROOMS_INTERVAL: Duration = Duration::from_secs(10);
@@ -40,6 +40,11 @@ const DELTA_PAGE: usize = 100;
 /// More new messages than this since the last sync: drop the cached chat instead of
 /// fetching them all (the newest page is enough to show the chat).
 const DELTA_MAX: usize = 500;
+
+/// Permission bit for reactions (`react-permission` servers; Nextcloud 34+).
+const PERMISSION_REACT: i64 = 256;
+/// Permission bit for chatting, which also covered reactions on older servers.
+const PERMISSION_CHAT: i64 = 128;
 
 /// System messages that only modify other messages or are pure noise in a chat view.
 const HIDDEN_SYSTEM: &[&str] = &[
@@ -128,6 +133,8 @@ pub struct RoomView {
     pub is_favorite: bool,
     pub is_archived: bool,
     pub read_only: bool,
+    /// The user may react to messages (see docs/chat.md „Reaktionen“).
+    pub can_react: bool,
     pub has_call: bool,
     /// 0 default, 1 always, 2 mentions only, 3 never.
     pub notification_level: u8,
@@ -180,6 +187,18 @@ pub struct ReplyPreview {
     pub attachment: Option<FileAttachment>,
 }
 
+/// One person's reaction to a message, for the "who reacted" list.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionView {
+    pub emoji: String,
+    pub actor_type: String,
+    pub actor_id: String,
+    pub name: String,
+    pub is_own: bool,
+    pub timestamp: i64,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatPage {
@@ -215,6 +234,10 @@ pub struct Engine {
     online: AtomicBool,
     state: Mutex<State>,
     attachment_folder: RwLock<Option<String>>,
+    /// Which permission bit allows reactions on this server.
+    react_bit: AtomicI64,
+    /// Reaction changes run one after another (quick changes of mind stay in order).
+    reaction_lock: tokio::sync::Mutex<()>,
     pub(crate) outbox: Outbox,
     pub(crate) cache: Cache,
     pub(crate) voice: Arc<VoiceStore>,
@@ -246,6 +269,10 @@ impl Engine {
             online: AtomicBool::new(true),
             state: Mutex::new(state),
             attachment_folder: RwLock::new(cache.meta("attachment_folder")),
+            react_bit: AtomicI64::new(
+                cache.meta("react_bit").and_then(|v| v.parse().ok()).unwrap_or(PERMISSION_REACT),
+            ),
+            reaction_lock: tokio::sync::Mutex::new(()),
             outbox: Outbox::open(data_dir.as_deref()),
             voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
             cache,
@@ -278,8 +305,15 @@ impl Engine {
                 e.voice.prune_files();
             }
         });
-        // User id and room list in parallel: saves a full round trip on cold start.
-        let (user, rooms) = tokio::join!(self.client.current_user(), self.client.rooms(None, false));
+        // User id, room list and server features in parallel: saves round trips on cold start.
+        let (user, rooms, caps) = tokio::join!(
+            self.client.current_user(),
+            self.client.rooms(None, false),
+            self.client.capabilities()
+        );
+        if let Ok(caps) = caps {
+            self.apply_capabilities(&caps);
+        }
         let user = match self.guard(user) {
             Ok(u) => {
                 self.set_user(u.id);
@@ -317,6 +351,20 @@ impl Engine {
             old.abort();
         }
         user.and(first)
+    }
+
+    fn apply_capabilities(&self, caps: &serde_json::Value) {
+        let Some(features) = caps.pointer("/capabilities/spreed/features").and_then(|f| f.as_array()) else {
+            return;
+        };
+        let bit = if features.iter().any(|f| f == "react-permission") {
+            PERMISSION_REACT
+        } else {
+            PERMISSION_CHAT
+        };
+        if self.react_bit.swap(bit, Ordering::Relaxed) != bit {
+            self.cache.set_meta("react_bit", bit.to_string());
+        }
     }
 
     /// Resolves the real user id once (needed for WebDAV paths and own-message detection).
@@ -694,6 +742,111 @@ impl Engine {
         self.update_room_after_send(token, msg);
     }
 
+    // --- reactions (docs/chat.md „Reaktionen“) ---------------------------------------------------
+
+    /// Sets the own reaction to a message like Signal: one per person. `Some(emoji)`
+    /// replaces the own reaction(s) with `emoji`, or removes it when it is already the own
+    /// one; `None` removes the own reaction(s).
+    ///
+    /// The change shows at once (`MessagesUpdated`), then the server's answer replaces
+    /// it. On failure the message falls back to what the server has and the error is
+    /// returned (see [`reaction_error_text`]).
+    pub async fn set_reaction(&self, token: &str, message_id: i64, emoji: Option<&str>) -> Result<()> {
+        let _order = self.reaction_lock.lock().await;
+        let cached = self.cache.message(token, message_id);
+        let own: Vec<String> = match &cached {
+            Some(m) => m.reactions_self.clone(),
+            // Not cached (e.g. CLI without data dir): ask the server what is ours.
+            None => self.own_reactions(&self.guard(self.client.reactions(token, message_id).await)?),
+        };
+        let add = emoji.filter(|e| !own.iter().any(|o| o == e));
+        if let Some(m) = &cached {
+            self.publish_message(token, optimistic(m, &own, add));
+        }
+        let mut result: Option<Reactions> = None;
+        let outcome: Result<()> = async {
+            for old in &own {
+                match self.guard(self.client.remove_reaction(token, message_id, old).await) {
+                    Ok(r) => result = Some(r),
+                    Err(Error::NotFound) => {} // already gone
+                    Err(e) => return Err(e),
+                }
+            }
+            if let Some(e) = add {
+                result = Some(self.guard(self.client.add_reaction(token, message_id, e).await)?);
+            }
+            Ok(())
+        }
+        .await;
+        if let Some(m) = cached {
+            let truth = match (&outcome, result) {
+                (Ok(()), Some(r)) => Some(r),
+                // Nothing confirmed by the server: ask it (or show the old state).
+                _ => self.client.reactions(token, message_id).await.ok(),
+            };
+            let updated = match truth {
+                Some(r) => self.with_reactions(&m, &r),
+                None if outcome.is_err() => m,
+                None => return outcome,
+            };
+            self.publish_message(token, updated);
+        }
+        outcome
+    }
+
+    /// Who reacted to a message: own reactions first, then newest first.
+    pub async fn reactions(&self, token: &str, message_id: i64) -> Result<Vec<ReactionView>> {
+        let all = self.guard(self.client.reactions(token, message_id).await)?;
+        let mut list: Vec<ReactionView> = all
+            .0
+            .into_iter()
+            .flat_map(|(emoji, people)| {
+                people.into_iter().map(move |p| (emoji.clone(), p))
+            })
+            .map(|(emoji, p)| ReactionView {
+                is_own: self.is_own(&p.actor_type, &p.actor_id),
+                emoji,
+                actor_type: p.actor_type,
+                actor_id: p.actor_id,
+                name: p.actor_display_name,
+                timestamp: p.timestamp,
+            })
+            .collect();
+        list.sort_by(|a, b| b.is_own.cmp(&a.is_own).then(b.timestamp.cmp(&a.timestamp)));
+        Ok(list)
+    }
+
+    fn own_reactions(&self, all: &Reactions) -> Vec<String> {
+        all.0
+            .iter()
+            .filter(|(_, people)| people.iter().any(|p| self.is_own(&p.actor_type, &p.actor_id)))
+            .map(|(e, _)| e.clone())
+            .collect()
+    }
+
+    /// `m` with the reactions the server reported.
+    fn with_reactions(&self, m: &ChatMessage, all: &Reactions) -> ChatMessage {
+        let mut m = m.clone();
+        m.reactions_self = self.own_reactions(all);
+        m.reactions = all
+            .0
+            .iter()
+            .filter(|(_, people)| !people.is_empty())
+            .map(|(e, people)| (e.clone(), people.len() as i64))
+            .collect();
+        m
+    }
+
+    /// Stores a changed message and shows it.
+    fn publish_message(&self, token: &str, m: ChatMessage) {
+        let view = self.view(&m);
+        self.cache.append(token, Vec::new(), vec![m], None);
+        self.sink.emit(Event::MessagesUpdated {
+            token: token.to_string(),
+            messages: vec![view],
+        });
+    }
+
     pub async fn mark_read(&self, token: &str, message_id: i64) -> Result<()> {
         let changed = {
             let mut st = self.state.lock().unwrap();
@@ -943,6 +1096,8 @@ impl Engine {
             is_favorite: r.is_favorite,
             is_archived: r.is_archived,
             read_only: r.read_only != 0,
+            can_react: r.read_only == 0
+                && (r.permissions == 0 || r.permissions & self.react_bit.load(Ordering::Relaxed) != 0),
             has_call: r.has_call,
             notification_level: r.notification_level,
             avatar_version: r.avatar_version.clone(),
@@ -1031,6 +1186,32 @@ fn is_visible(m: &ChatMessage) -> bool {
 }
 
 /// New versions of earlier messages carried by edit/deletion/reaction system messages.
+/// `m` as it will look once the own reactions `own` are removed and `add` is added.
+fn optimistic(m: &ChatMessage, own: &[String], add: Option<&str>) -> ChatMessage {
+    let mut m = m.clone();
+    for e in own {
+        if let Some(n) = m.reactions.get_mut(e) {
+            *n -= 1;
+        }
+    }
+    if let Some(e) = add {
+        *m.reactions.entry(e.to_string()).or_insert(0) += 1;
+    }
+    m.reactions.retain(|_, n| *n > 0);
+    m.reactions_self = add.map(|e| vec![e.to_string()]).unwrap_or_default();
+    m
+}
+
+/// German text for a failed [`Engine::set_reaction`], for a short notice.
+pub fn reaction_error_text(e: &Error) -> String {
+    match e {
+        Error::Http { status: 403, .. } => "Keine Berechtigung für Reaktionen".into(),
+        Error::NotFound => "Nachricht nicht gefunden".into(),
+        Error::Network(_) | Error::RetryLater { .. } => "Keine Verbindung – Reaktion nicht gesendet".into(),
+        _ => "Reaktion fehlgeschlagen".into(),
+    }
+}
+
 fn parent_updates(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     messages
         .iter()
@@ -1098,5 +1279,57 @@ mod tests {
         let json = serde_json::to_value(&ev).unwrap();
         assert_eq!(json["type"], "readStatus");
         assert_eq!(json["lastCommonRead"], 5);
+    }
+
+    fn msg(reactions: &[(&str, i64)], own: &[&str]) -> ChatMessage {
+        let mut m: ChatMessage = serde_json::from_str(
+            r#"{"id":7,"token":"t","actorType":"users","actorId":"a","actorDisplayName":"A",
+                "timestamp":1,"message":"hi"}"#,
+        )
+        .unwrap();
+        m.reactions = reactions.iter().map(|(e, n)| (e.to_string(), *n)).collect();
+        m.reactions_self = own.iter().map(|e| e.to_string()).collect();
+        m
+    }
+
+    #[test]
+    fn optimistic_replaces_own_reaction() {
+        let m = msg(&[("👍", 2), ("❤️", 1)], &["👍"]);
+        let n = optimistic(&m, &m.reactions_self, Some("❤️"));
+        assert_eq!(n.reactions.get("👍"), Some(&1));
+        assert_eq!(n.reactions.get("❤️"), Some(&2));
+        assert_eq!(n.reactions_self, vec!["❤️"]);
+    }
+
+    #[test]
+    fn optimistic_removes_last_and_drops_empty_pills() {
+        let m = msg(&[("👍", 1)], &["👍"]);
+        let n = optimistic(&m, &m.reactions_self, None);
+        assert!(n.reactions.is_empty());
+        assert!(n.reactions_self.is_empty());
+        // Several own reactions (set in Talk-Web) all go.
+        let m = msg(&[("👍", 1), ("😂", 3)], &["👍", "😂"]);
+        let n = optimistic(&m, &m.reactions_self, Some("😮"));
+        assert_eq!(n.reactions.len(), 2);
+        assert_eq!(n.reactions.get("😂"), Some(&2));
+        assert_eq!(n.reactions.get("😮"), Some(&1));
+    }
+
+    #[test]
+    fn reactions_response_parses() {
+        let r: Reactions = serde_json::from_str(
+            r#"{"👍":[{"actorType":"users","actorId":"b","actorDisplayName":"Bea","timestamp":5}]}"#,
+        )
+        .unwrap();
+        assert_eq!(r.0["👍"][0].actor_display_name, "Bea");
+        let empty: Reactions = serde_json::from_str("[]").unwrap();
+        assert!(empty.0.is_empty());
+    }
+
+    #[test]
+    fn reaction_errors_are_readable() {
+        let forbidden = Error::Http { status: 403, message: String::new() };
+        assert_eq!(reaction_error_text(&forbidden), "Keine Berechtigung für Reaktionen");
+        assert_eq!(reaction_error_text(&Error::Decode("x".into())), "Reaktion fehlgeschlagen");
     }
 }

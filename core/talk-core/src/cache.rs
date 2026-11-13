@@ -166,6 +166,20 @@ impl Cache {
         })
     }
 
+    /// One cached message (`None` when it is not cached).
+    pub fn message(&self, token: &str, id: i64) -> Option<ChatMessage> {
+        self.read(|c| {
+            let json: Option<String> = c
+                .query_row(
+                    "SELECT json FROM messages WHERE token = ?1 AND id = ?2",
+                    params![token, id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(json.and_then(|j| serde_json::from_str(&j).ok()))
+        })
+    }
+
     // --- writes --------------------------------------------------------------------
 
     pub fn set_meta(&self, key: &'static str, value: String) {

@@ -274,7 +274,7 @@ Verbindungen. Die Kamera-/Ton-Verbindung bleibt davon unberührt.
   - Klemmt der Bildschirm-Publisher trotz ICE-Restart, startet der Kern nur die Freigabe
     neu. Nach drei Fehlversuchen beendet er sie, statt den Anruf zu stören.
   - Kein Simulcast für Bildschirme.
-- **Berechtigung:** Talk-Berechtigung 128 („Bildschirm teilen“). Lehnt der Server die
+- **Berechtigung:** Talk-Berechtigung 64 („Bildschirm teilen“). Lehnt der Server die
   Freigabe ab, endet sie, und `canShareScreen` wird `false`.
 
 **`CallView`:**

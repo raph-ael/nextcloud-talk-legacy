@@ -777,8 +777,8 @@ impl Actor {
     fn apply_room_data(&mut self, room: &Value) {
         // 1 owner, 2 moderator (guest moderators cannot record).
         self.moderator = matches!(room["participantType"].as_i64(), Some(1 | 2));
-        // Permission 128: publish screen (the server refuses screen offers without it).
-        self.view.can_share_screen = room["permissions"].as_i64().is_none_or(|p| p & 128 != 0);
+        // Permission 64: publish screen (the server refuses screen offers without it).
+        self.view.can_share_screen = room["permissions"].as_i64().is_none_or(|p| p & 64 != 0);
         if let Some(r) = room["callRecording"].as_i64() {
             self.set_recording(r, "room data");
         }
