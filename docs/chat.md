@@ -80,19 +80,27 @@ Sie ist reine Deko: nicht anklickbar und für Screenreader verborgen.
 **Text:** „1 ungelesene Nachricht“ bzw. „N ungelesene Nachrichten“.
 
 **Festlegen beim Öffnen:**
-- Ist `room.unreadMessages > 0`, merkt sich die Plattform beim Öffnen:
+- Die Plattform merkt sich beim Öffnen immer (nicht nur bei `unreadMessages > 0`):
   - `unreadFrom = room.lastReadMessage`
-  - `unreadCount = room.unreadMessages`
+  - `unreadBase = room.unreadMessages`
 - Das geschieht im `openRoom` (Store, SessionManager, SessionStore), **bevor** irgendetwas die Lesemarke setzt.
 - Es ist reiner UI-Zustand, nur für den gerade offenen Chat.
+- Ist `unreadFrom <= 0`, gibt es keine Linie.
 
-**Platz:** über der ersten geladenen Nachricht mit `id > unreadFrom`, die nicht von einem selbst stammt und keine Systemnachricht ist. Ist sie (noch) nicht geladen, gibt es (noch) keine Linie.
+**Zahl und Platz werden aus den geladenen Nachrichten abgeleitet**, nicht hochgezählt:
+- „Zählt“ heißt: `id > unreadFrom`, nicht von einem selbst, keine Systemnachricht.
+- **Platz:** über der ersten geladenen Nachricht, die zählt. Gibt es (noch) keine, gibt es (noch) keine Linie.
+- **Zahl:** `max(unreadBase, Anzahl der geladenen Nachrichten, die zählen)`.
 
-**Bleibt stehen:** Die Linie bleibt, auch wenn die Lesemarke inzwischen gesetzt ist.
+So stimmt die Zahl auch, wenn:
+- die Chatliste beim Klick noch den alten Stand hatte (die Nachricht kam vor weniger als ein paar Sekunden, `unreadMessages` war noch 0),
+- dieselbe Nachricht über die Seite und über ein Ereignis zweimal ankommt.
+
+**Bleibt stehen:** Die Linie bleibt, auch wenn die Lesemarke inzwischen gesetzt ist. `unreadFrom` ändert sich dadurch nicht.
 
 **Neue Nachrichten, während der Chat offen ist:**
-- Gibt es die Linie, steigt `unreadCount` um jede neue fremde Nachricht, die keine Systemnachricht ist.
-- Gibt es keine, und man ist nicht unten oder das Fenster hat keinen Fokus, entsteht eine neue Linie: `unreadFrom` = die bisher neueste Nachricht, `unreadCount` = 1.
+- Gibt es die Linie, zählen sie automatisch mit (sie sind geladen und haben eine höhere id).
+- Gibt es keine, und man ist nicht unten oder das Fenster hat keinen Fokus, entsteht eine neue Linie: `unreadFrom` = die bisher neueste Nachricht, `unreadBase` = 0.
 
 **Weg ist sie:**
 - sobald man selbst etwas sendet (Text, Datei, Sprachnachricht, Umfrage …),
