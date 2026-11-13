@@ -15,10 +15,12 @@ export function reactable(canReact: boolean, m: UiMessage): boolean {
 }
 
 /** Sets, replaces or (same emoji again / `null`) removes the own reaction; errors go to a toast. */
-export function react(token: string, messageId: number, emoji: string | null): void {
-  window.talk
+export function react(token: string, messageId: number, emoji: string | null): Promise<void> {
+  return window.talk
     .setReaction(token, messageId, emoji)
-    .then((err) => err && toast(err))
+    .then((err) => {
+      if (err) toast(err)
+    })
     .catch(() => toast('Reaktion nicht gesendet'))
 }
 
@@ -125,7 +127,7 @@ export function ReactionPopover({
   const pickerAnchor = useMemo(() => ({ current: toggle }), [toggle])
   const pick = (emoji: string) => {
     onClose()
-    react(token, msg.id, emoji)
+    void react(token, msg.id, emoji)
   }
 
   return (
@@ -250,10 +252,13 @@ export function WhoReacted({ token, messageId, onClose }: { token: string; messa
   const msg = useStore((s) => s.chats[token]?.messages.find((m) => m.id === messageId))
   const [list, setList] = useState<ReactionView[] | null>(null)
   const [tab, setTab] = useState<string | null>(null)
+  /** Bumped after an own removal reached the server, to load the list again. */
+  const [reload, setReload] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
   const sk = msg ? stateKey(token, msg) : ''
 
-  // Fresh on open, and again whenever the message's reactions change (live updates, own removal).
+  // Fresh on open, and again whenever the message's reactions change (live updates) or an own
+  // removal is done (a fetch during the removal may still see the old state).
   useEffect(() => {
     let live = true
     window.talk
@@ -263,7 +268,12 @@ export function WhoReacted({ token, messageId, onClose }: { token: string; messa
     return () => {
       live = false
     }
-  }, [token, messageId, sk])
+  }, [token, messageId, sk, reload])
+
+  function removeOwn() {
+    setList((l) => l && l.filter((r) => !r.isOwn))
+    void react(token, messageId, null).then(() => setReload((n) => n + 1))
+  }
 
   const tabs = useMemo(() => {
     const counts = new Map<string, number>()
@@ -273,8 +283,8 @@ export function WhoReacted({ token, messageId, onClose }: { token: string; messa
 
   // Nothing left (or the message is gone): close.
   useEffect(() => {
-    if (!msg || (list && list.length === 0 && Object.keys(msg.reactions).length === 0)) onClose()
-  }, [msg, list, onClose])
+    if (!msg || Object.keys(msg.reactions).length === 0) onClose()
+  }, [msg, onClose])
   // The selected emoji disappeared: back to „Alle“.
   useEffect(() => {
     if (tab && list && !tabs.some(([e]) => e === tab)) setTab(null)
@@ -334,7 +344,7 @@ export function WhoReacted({ token, messageId, onClose }: { token: string; messa
                 )
                 const key = `${r.actorType}/${r.actorId}/${r.emoji}`
                 return r.isOwn ? (
-                  <button key={key} className="who-row own" onClick={() => react(token, messageId, null)}>
+                  <button key={key} className="who-row own" onClick={removeOwn}>
                     {body}
                   </button>
                 ) : (

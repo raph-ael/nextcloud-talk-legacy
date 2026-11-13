@@ -121,7 +121,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
         msg={m}
         onPick={(emoji) => {
           setMenu(null)
-          react(room.token, m.id, emoji)
+          void react(room.token, m.id, emoji)
         }}
         onMore={() => {
           setMenu(null)
