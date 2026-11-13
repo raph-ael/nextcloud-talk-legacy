@@ -122,7 +122,7 @@ pub struct ChatMessage {
     pub reference_id: String,
     #[serde(default)]
     pub expiration_timestamp: i64,
-    #[serde(default, deserialize_with = "map_or_empty_array")]
+    #[serde(default, deserialize_with = "reaction_map")]
     pub reactions: BTreeMap<String, i64>,
     #[serde(default)]
     pub reactions_self: Vec<String>,
@@ -280,7 +280,7 @@ pub struct Reaction {
 /// All reactions of a message: emoji → who reacted (the reaction endpoints' `data`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(transparent)]
-pub struct Reactions(#[serde(deserialize_with = "map_or_empty_array")] pub BTreeMap<String, Vec<Reaction>>);
+pub struct Reactions(#[serde(deserialize_with = "reaction_map")] pub BTreeMap<String, Vec<Reaction>>);
 
 /// Talk returns `[]` instead of `null`/`{}` for empty objects.
 fn object_or_empty_array<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
@@ -295,6 +295,19 @@ where
             .map(Some)
             .map_err(serde::de::Error::custom),
     }
+}
+
+/// Like [`map_or_empty_array`], without keys that are no emoji: right after a reaction is
+/// removed the server may briefly list the deleted comment, whose text is a JSON object
+/// (`{"deleted_by_type":…}`).
+fn reaction_map<'de, D, T>(d: D) -> Result<BTreeMap<String, T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let mut map: BTreeMap<String, T> = map_or_empty_array(d)?;
+    map.retain(|k, _| !k.is_empty() && !k.starts_with('{'));
+    Ok(map)
 }
 
 fn map_or_empty_array<'de, D, T>(d: D) -> Result<BTreeMap<String, T>, D::Error>
@@ -312,6 +325,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleted_reaction_comments_are_dropped() {
+        let r: Reactions = serde_json::from_str(
+            r#"{"👍":[{"actorType":"users","actorId":"b"}],
+                "{\"deleted_by_type\":\"users\",\"deleted_by_id\":\"a\",\"deleted_on\":1}":[{"actorType":"users","actorId":"a"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(r.0.keys().collect::<Vec<_>>(), vec!["👍"]);
+    }
 
     #[test]
     fn room_with_empty_last_message() {
