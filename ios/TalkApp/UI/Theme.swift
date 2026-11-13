@@ -17,6 +17,11 @@ enum Talk {
     static let onSurface = dynamic(light: 0x1B1B1D, dark: 0xE9E9EB)
     /// Floating controls above content (desktop `--floating`).
     static let floating = dynamic(light: 0xFFFFFF, dark: 0x2E2E2E)
+    /// Settings pages (docs/groups.md): grouped sections on a page like the system settings,
+    /// built from the tokens above (light: chip page, surface rows; dark: background page,
+    /// chip rows).
+    static let groupedBackground = dynamic(light: 0xF1F1F3, dark: 0x121212)
+    static let groupedRow = dynamic(light: 0xFFFFFF, dark: 0x232325)
     static let callDot = Color(hex: 0x2FB35A)
     static let offlineText = Color(hex: 0x6A5000)
     static let offlineBackground = Color(hex: 0xFFF3CD)

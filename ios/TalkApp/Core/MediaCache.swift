@@ -54,7 +54,7 @@ final class MediaCache {
         if let hit = avatars.object(forKey: key as NSString) { return hit }
         guard !noAvatar.contains(key), let s = session else { return nil }
         guard let data = try? await s.avatar(token: token, dark: dark) else { return nil }
-        let image = await Task.detached { ImageDecode.downsample(data, maxEdge: 56 * 3) }.value
+        let image = await Task.detached { ImageDecode.downsample(data, maxEdge: 80 * 3) }.value
         guard let image else {
             noAvatar.insert(key)
             return nil

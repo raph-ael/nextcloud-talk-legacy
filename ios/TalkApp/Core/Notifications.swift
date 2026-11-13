@@ -71,7 +71,11 @@ final class Toast {
         shared.present(text)
     }
 
+    /// Own window above everything (sheets too), never taking touches.
+    @ObservationIgnored private var window: UIWindow?
+
     private func present(_ text: String) {
+        attach()
         withAnimation { self.text = text }
         hide?.cancel()
         hide = Task {
@@ -79,6 +83,25 @@ final class Toast {
             guard !Task.isCancelled else { return }
             withAnimation { self.text = nil }
         }
+    }
+}
+
+extension Toast {
+    private final class PassThrough: UIWindow {
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+    }
+
+    fileprivate func attach() {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
+        if let window, window.windowScene === scene { return }
+        let w = PassThrough(windowScene: scene)
+        w.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
+        let host = UIHostingController(rootView: ToastOverlay())
+        host.view.backgroundColor = .clear
+        w.rootViewController = host
+        w.isHidden = false
+        window = w
     }
 }
 

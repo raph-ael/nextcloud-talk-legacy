@@ -102,12 +102,24 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 10) {
+                let title = HStack(spacing: 10) {
                     Avatar(name: room?.name ?? "", size: 32, token: token, version: room?.avatarVersion ?? "")
                     Text(room?.name ?? "").font(.system(size: 17, weight: .semibold)).lineLimit(1)
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("chat-title")
+                if let room, GroupInfoView.applies(room) {
+                    // Groups: the header opens the group settings (docs/groups.md).
+                    Button { store.showGroupInfo(true) } label: { title.foregroundStyle(Talk.onSurface) }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Gruppeneinstellungen")
+                        .accessibilityValue(room.name)
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityIdentifier("chat-title")
+                } else {
+                    title
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("chat-title")
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 let inCall = CallController.shared.call?.token == token

@@ -6,6 +6,7 @@ struct RoomListView: View {
     @Bindable var store: SessionStore
     @State private var query = ""
     @State private var confirmLogout = false
+    @State private var newMessage = false
 
     private var visible: [RoomView] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -75,7 +76,13 @@ struct RoomListView: View {
                 }
                 .accessibilityLabel("Konto")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { newMessage = true } label: { Image(systemName: "square.and.pencil") }
+                    .accessibilityLabel("Neue Nachricht")
+                    .accessibilityIdentifier("new-message")
+            }
         }
+        .sheet(isPresented: $newMessage) { NewMessageSheet(store: store) }
         .confirmationDialog("Abmelden?", isPresented: $confirmLogout, titleVisibility: .visible) {
             Button("Abmelden", role: .destructive) { store.logout() }
         } message: {

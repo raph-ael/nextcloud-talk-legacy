@@ -25,7 +25,6 @@ struct TalkLegacyApp: App {
                 case .ready:
                     RootView(store: store)
                 }
-                ToastOverlay()
             }
             .tint(Talk.accent)
         }
@@ -48,16 +47,27 @@ struct TalkLegacyApp: App {
     }
 }
 
-/// Conversation list with the open chat pushed on top; the store's active token is the
-/// single source of truth (notification taps open a chat the same way).
+/// Screens pushed on the conversation list.
+enum Route: Hashable {
+    case chat(String)
+    case groupInfo(String)
+}
+
+/// Conversation list with the open chat (and its group settings) pushed on top; the store's
+/// active token is the single source of truth (notification taps open a chat the same way).
 struct RootView: View {
     @Bindable var store: SessionStore
 
-    private var path: Binding<[String]> {
+    private var path: Binding<[Route]> {
         Binding(
-            get: { store.activeToken.map { [$0] } ?? [] },
+            get: {
+                guard let token = store.activeToken else { return [] }
+                return store.groupInfoOpen ? [.chat(token), .groupInfo(token)] : [.chat(token)]
+            },
             set: { new in
-                if let token = new.last { store.openRoom(token) } else { store.closeRoom() }
+                guard case .chat(let token)? = new.first else { return store.closeRoom() }
+                store.openRoom(token)
+                store.showGroupInfo(new.count > 1)
             }
         )
     }
@@ -65,8 +75,11 @@ struct RootView: View {
     var body: some View {
         NavigationStack(path: path) {
             RoomListView(store: store)
-                .navigationDestination(for: String.self) { token in
-                    ChatView(store: store, token: token)
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .chat(let token): ChatView(store: store, token: token)
+                    case .groupInfo(let token): GroupInfoView(store: store, token: token)
+                    }
                 }
         }
         .safeAreaInset(edge: .top, spacing: 0) { CallBar() }

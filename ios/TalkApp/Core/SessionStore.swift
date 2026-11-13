@@ -47,6 +47,10 @@ final class SessionStore {
     private(set) var chats: [String: ChatState] = [:]
     private(set) var online = true
     private(set) var activeToken: String?
+    /// The group settings of the active chat are pushed on top of it (docs/groups.md).
+    private(set) var groupInfoOpen = false
+    /// Bumped per conversation on `participantsChanged`: open member lists reload.
+    private(set) var participantsVersion: [String: Int] = [:]
     /// Finished call recordings (and transcripts, summaries) waiting for "teilen"/"verwerfen".
     private(set) var recordings: [RecordingNotice] = []
     /// Notices whose share/dismiss request is running.
@@ -57,6 +61,8 @@ final class SessionStore {
     @ObservationIgnored private(set) var session: TalkSession?
     @ObservationIgnored private let bridge = EventBridge()
     @ObservationIgnored private var notifiedFailures = Set<String>()
+    /// Groups we are leaving or deleting ourselves: no "nicht mehr in dieser Gruppe".
+    @ObservationIgnored private var leaving = Set<String>()
     /// Recording notices already known; nil until the first `recordingsChanged` of a session
     /// (the starting point: banners, but no notifications).
     @ObservationIgnored private var notifiedRecordings: Set<Int64>?
@@ -204,6 +210,9 @@ final class SessionStore {
         rooms = []
         chats = [:]
         activeToken = nil
+        groupInfoOpen = false
+        participantsVersion = [:]
+        leaving = []
         server = ""
         user = ""
         online = true
@@ -224,7 +233,17 @@ final class SessionStore {
     fileprivate func handle(_ event: CoreEvent) {
         switch event {
         case .roomsChanged(let rooms):
+            let gone = activeToken.flatMap { t in
+                rooms.contains { $0.token == t } ? nil : self.rooms.first { $0.token == t }
+            }
             self.rooms = rooms
+            if let gone {
+                // Removed, deleted or left: chat and settings close (docs/groups.md).
+                closeRoom()
+                if leaving.remove(gone.token) == nil && (gone.roomType == 2 || gone.roomType == 3) {
+                    Toast.show("Du bist nicht mehr in dieser Gruppe")
+                }
+            }
             Notifications.setBadge(rooms.filter { !$0.isArchived }.reduce(0) { $0 + Int($1.unreadMessages) })
         case .messagesAdded(let token, let messages):
             media.adoptLocalPreviews(messages)
@@ -247,6 +266,8 @@ final class SessionStore {
         case .outboxChanged(let token, let items):
             updateChat(token) { $0.messages = Self.withPending($0.messages, items) }
             announceFailures(token, items)
+        case .participantsChanged(let token):
+            participantsVersion[token, default: 0] += 1
         case .recordingsChanged(let items):
             recordings = items
             // The first one after the start is the starting point; only later ids are new.
@@ -355,6 +376,7 @@ final class SessionStore {
         chat.lastCommonRead = max(chat.lastCommonRead, cached.lastCommonRead ?? 0)
         chats[token] = chat
         activeToken = token
+        groupInfoOpen = false
         voice.loadDraft(token)
         Task {
             do {
@@ -381,6 +403,11 @@ final class SessionStore {
         voice.interrupt()
         session?.closeChat(token: token)
         activeToken = nil
+        groupInfoOpen = false
+    }
+
+    func showGroupInfo(_ open: Bool) {
+        groupInfoOpen = open && activeToken != nil
     }
 
     func loadOlder(_ token: String) {
@@ -461,6 +488,71 @@ final class SessionStore {
     func reactions(_ token: String, _ messageId: Int64) async throws -> [ReactionView] {
         guard let s = session else { throw CancellationError() }
         return try await s.reactions(token: token, messageId: messageId)
+    }
+
+    // MARK: - Groups (docs/groups.md)
+
+    var canCreateGroups: Bool { session?.canCreateGroups() ?? false }
+
+    func searchUsers(_ query: String, excluding token: String? = nil) async throws -> [UserView] {
+        guard let s = session else { throw CancellationError() }
+        return try await s.searchUsers(query: query, excludeToken: token)
+    }
+
+    func members(_ token: String) async throws -> [MemberView] {
+        guard let s = session else { throw CancellationError() }
+        return try await s.members(token: token)
+    }
+
+    func groupLink(_ token: String) -> String {
+        session?.groupLink(token: token) ?? ""
+    }
+
+    /// The 1:1 chat with a user (created when missing), opened; `false` after a toast.
+    func openDirect(_ userId: String) async -> Bool {
+        guard let s = session else { return false }
+        return open(await s.openDirect(userId: userId))
+    }
+
+    func createGroup(_ name: String, _ userIds: [String], photo: Data?) async -> Bool {
+        guard let s = session else { return false }
+        return open(await s.createGroup(name: name, userIds: userIds, photo: photo))
+    }
+
+    private func open(_ r: OpenResult) -> Bool {
+        guard let token = r.token else {
+            Toast.show(r.error ?? "Hat nicht geklappt")
+            return false
+        }
+        openRoom(token)
+        return true
+    }
+
+    /// Runs a group change; the core's error text becomes a toast. `true` on success.
+    @discardableResult
+    func groupChange(_ f: (TalkSession) async -> String?) async -> Bool {
+        guard let s = session else { return false }
+        if let error = await f(s) {
+            Toast.show(error)
+            return false
+        }
+        return true
+    }
+
+    /// Tapping "Gruppe verlassen": `true` → "Neuen Moderator wählen" first (the server's
+    /// `canLeave` does not cover the last moderator).
+    func leaveNeedsModerator(_ token: String) async throws -> Bool {
+        guard let s = session else { throw CancellationError() }
+        return try await s.leaveNeedsModerator(token: token)
+    }
+
+    /// Leave or delete: the chat closes quietly once the group is gone from the list.
+    func leaveGroup(_ token: String, delete: Bool) async -> Bool {
+        leaving.insert(token)
+        let ok = await groupChange { delete ? await $0.deleteGroup(token: token) : await $0.leaveGroup(token: token) }
+        if ok && activeToken == token { closeRoom() }
+        leaving.remove(token)
+        return ok
     }
 
     /// Marks the newest message read while the chat is visible and the app is in front.
