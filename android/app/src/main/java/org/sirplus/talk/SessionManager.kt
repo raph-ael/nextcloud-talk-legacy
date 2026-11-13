@@ -58,6 +58,7 @@ import uniffi.talk_ffi.MessageView
 import uniffi.talk_ffi.OutboxIdle
 import uniffi.talk_ffi.PendingMessage
 import uniffi.talk_ffi.PendingState
+import uniffi.talk_ffi.ReactionView
 import uniffi.talk_ffi.ReplyPreview
 import uniffi.talk_ffi.RoomView
 import uniffi.talk_ffi.SendError
@@ -658,6 +659,27 @@ class SessionManager(private val context: Context) : CoreListener {
     }
 
     private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment)
+
+    /**
+     * Sets the own reaction like Signal (docs/chat.md „Reaktionen“): the core replaces,
+     * removes on the same emoji again and shows the change at once; errors become a toast.
+     */
+    fun setReaction(token: String, messageId: Long, emoji: String?) {
+        val s = session ?: return
+        scope.launch {
+            s.setReaction(token, messageId, emoji)?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    /** Who reacted, own first; `null` when it could not be loaded. */
+    suspend fun reactions(token: String, messageId: Long): List<ReactionView>? {
+        val s = session ?: return null
+        return try {
+            s.reactions(token, messageId)
+        } catch (e: CoreException) {
+            null
+        }
+    }
 
     /**
      * Sends a prepared image (see [org.sirplus.talk.media.prepareImage]) with an optional

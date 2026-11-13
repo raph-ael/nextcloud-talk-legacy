@@ -47,8 +47,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.materialIcon
 import androidx.compose.material.icons.materialPath
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -119,6 +117,12 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
     val lastCommonRead = maxOf(chat?.lastCommonRead ?: 0, room.lastCommonReadMessage)
     var replyTo by remember(room.token) { mutableStateOf<MessageView?>(null) }
     var overlay by remember(room.token) { mutableStateOf<Overlay?>(null) }
+    var reactionSheet by remember(room.token) { mutableStateOf<ReactionSheet?>(null) }
+    val haptics = LocalHapticFeedback.current
+    val react = { msg: MessageView, emoji: String ->
+        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        sessions.setReaction(room.token, msg.id, emoji)
+    }
     val openCamera = rememberCameraOpener { overlay = Overlay.Camera }
     val askNotifications = rememberNotificationAsker()
     val pickFromCamera = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -191,7 +195,11 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                             next = reversed.getOrNull(i - 1),
                             isGroup = isGroup,
                             read = m.msg.isOwn && m.status == null && m.msg.id <= lastCommonRead,
+                            canReact = room.canReact,
                             onReply = { replyTo = it },
+                            onReact = react,
+                            onMoreReactions = { reactionSheet = ReactionSheet.Picker(it.id) },
+                            onShowReactions = { reactionSheet = ReactionSheet.Who(it.id) },
                             onRetry = { sessions.retry(room.token, it) },
                             onDiscard = { sessions.discard(it) },
                             onOpenImage = { id, bmp -> overlay = Overlay.Viewer(id, bmp) },
@@ -272,7 +280,34 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
         )
         is Overlay.Viewer -> ImageViewer(sessions, o.fileId, o.initial, onClose = { overlay = null })
     }
+    when (val r = reactionSheet) {
+        null -> Unit
+        is ReactionSheet.Picker -> ReactionPickerSheet(
+            onPick = { emoji ->
+                reactionSheet = null
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                sessions.setReaction(room.token, r.messageId, emoji)
+            },
+            onDismiss = { reactionSheet = null },
+        )
+        is ReactionSheet.Who -> WhoReactedSheet(
+            sessions,
+            room.token,
+            r.messageId,
+            onRemove = {
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                sessions.setReaction(room.token, r.messageId, null)
+            },
+            onDismiss = { reactionSheet = null },
+        )
     }
+    }
+}
+
+private sealed interface ReactionSheet {
+    val messageId: Long
+    data class Picker(override val messageId: Long) : ReactionSheet
+    data class Who(override val messageId: Long) : ReactionSheet
 }
 
 /**
@@ -403,7 +438,11 @@ private fun MessageRow(
     next: UiMessage?,
     isGroup: Boolean,
     read: Boolean,
+    canReact: Boolean,
     onReply: (MessageView) -> Unit,
+    onReact: (MessageView, String) -> Unit,
+    onMoreReactions: (MessageView) -> Unit,
+    onShowReactions: (MessageView) -> Unit,
     onRetry: (MessageView) -> Unit,
     onDiscard: (MessageView) -> Unit,
     onOpenImage: (fileId: String, preview: androidx.compose.ui.graphics.ImageBitmap?) -> Unit,
@@ -461,6 +500,8 @@ private fun MessageRow(
         var menu by remember { mutableStateOf(false) }
         val clipboard = LocalClipboardManager.current
         val replyable = msg.kind == MessageKind.TEXT && m.status == null
+        // Reactable like „Antworten“, files and voice messages included (docs/chat.md).
+        val reactable = replyable && canReact
         val threshold = 160f
 
         Box(
@@ -625,16 +666,14 @@ private fun MessageRow(
                             )
                         }
                         if (msg.reactions.isNotEmpty()) {
-                            Row(inset.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                msg.reactions.forEach { (emoji, count) ->
-                                    Text(
-                                        if (count > 1) "$emoji $count" else emoji,
-                                        fontSize = 13.sp,
-                                        color = textColor,
-                                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(textColor.copy(alpha = 0.1f)).padding(horizontal = 6.dp, vertical = 1.dp),
-                                    )
-                                }
-                            }
+                            ReactionPills(
+                                msg.id,
+                                msg.reactions,
+                                msg.reactionsSelf,
+                                textColor,
+                                inset.padding(top = 4.dp),
+                                onOpen = { onShowReactions(msg) },
+                            )
                         }
                         if (showMeta && !metaOnImage && !metaInVoice) {
                             Box(
@@ -653,22 +692,23 @@ private fun MessageRow(
                             }
                         }
                     }
-                    if (menu) DropdownMenu(expanded = true, onDismissRequest = { menu = false }) {
-                        if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
-                            DropdownMenuItem(text = { Text("Erneut senden") }, onClick = { menu = false; onRetry(msg) })
+                    if (menu) {
+                        val actions = buildList {
+                            if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
+                                add(MenuAction("Erneut senden") { onRetry(msg) })
+                            }
+                            if (m.status != null) add(MenuAction("Löschen") { onDiscard(msg) })
+                            if (replyable) add(MenuAction("Antworten") { onReply(msg) })
+                            if (msg.text.isNotEmpty()) add(MenuAction("Kopieren") { clipboard.setText(AnnotatedString(msg.text)) })
                         }
-                        if (m.status != null) {
-                            DropdownMenuItem(text = { Text("Löschen") }, onClick = { menu = false; onDiscard(msg) })
-                        }
-                        if (replyable) {
-                            DropdownMenuItem(text = { Text("Antworten") }, onClick = { menu = false; onReply(msg) })
-                        }
-                        if (msg.text.isNotEmpty()) {
-                            DropdownMenuItem(text = { Text("Kopieren") }, onClick = {
-                                menu = false
-                                clipboard.setText(AnnotatedString(msg.text))
-                            })
-                        }
+                        MessageMenu(
+                            own = own,
+                            mine = if (reactable) msg.reactionsSelf else null,
+                            actions = actions,
+                            onReact = { onReact(msg, it) },
+                            onMoreReactions = { onMoreReactions(msg) },
+                            onDismiss = { menu = false },
+                        )
                     }
                 }
             }
