@@ -23,6 +23,7 @@ struct MessageRow: View {
     let highlighted: Bool
     let onRetry: (MessageView) -> Void
     let onOpenImage: (String, UIImage?) -> Void
+    var onShowReactions: (MessageView) -> Void = { _ in }
 
     var body: some View {
         let msg = m.msg
@@ -48,7 +49,8 @@ struct MessageRow: View {
             } else {
                 Bubble(
                     m: m, first: !continues(prev, m), last: !continues(m, next), isGroup: isGroup,
-                    read: read, highlighted: highlighted, onRetry: onRetry, onOpenImage: onOpenImage
+                    read: read, highlighted: highlighted, onRetry: onRetry, onOpenImage: onOpenImage,
+                    onShowReactions: onShowReactions
                 )
             }
         }
@@ -56,7 +58,8 @@ struct MessageRow: View {
     }
 }
 
-private struct Bubble: View {
+/// One bubble with its content, reactions and meta line (also drawn by the long-press menu).
+struct Bubble: View {
     let m: UiMessage
     let first: Bool
     let last: Bool
@@ -65,6 +68,7 @@ private struct Bubble: View {
     let highlighted: Bool
     let onRetry: (MessageView) -> Void
     let onOpenImage: (String, UIImage?) -> Void
+    var onShowReactions: (MessageView) -> Void = { _ in }
 
     var body: some View {
         let msg = m.msg
@@ -168,18 +172,9 @@ private struct Bubble: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !msg.reactions.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(msg.reactions.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }, id: \.key) { emoji, count in
-                            Text(count > 1 ? "\(emoji) \(count)" : emoji)
-                                .font(.system(size: 13))
-                                .foregroundStyle(textColor)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(textColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-                    .padding(.horizontal, inset)
-                    .padding(.top, 4)
+                    ReactionPills(msg: msg, color: textColor) { onShowReactions(msg) }
+                        .padding(.horizontal, inset)
+                        .padding(.top, 4)
                 }
                 if showMeta && !metaOnImage && !metaInVoice {
                     MessageMeta(m: m, own: own, read: read, color: metaColor)

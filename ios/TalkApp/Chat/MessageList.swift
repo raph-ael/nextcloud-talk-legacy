@@ -1,10 +1,24 @@
 import SwiftUI
 import UIKit
 
+/// A long-pressed message and where its row is on screen (window coordinates), so the
+/// menu overlay can draw the bubble again at the same place.
+struct MessageMenuTarget: Identifiable {
+    let m: UiMessage
+    let first: Bool
+    let last: Bool
+    let isGroup: Bool
+    let read: Bool
+    let frame: CGRect
+    var id: String { m.key }
+}
+
 /// Actions the list hands back to the chat screen.
 struct MessageListActions {
     var onReply: (MessageView) -> Void
-    var onLongPress: (UiMessage) -> Void
+    var onLongPress: (MessageMenuTarget) -> Void
+    /// A reaction pill was tapped: "Wer hat reagiert".
+    var onShowReactions: (MessageView) -> Void = { _ in }
     var onRetry: (MessageView) -> Void
     var onOpenImage: (String, UIImage?) -> Void
     var onNearTop: () -> Void
@@ -124,7 +138,8 @@ struct MessageList: UIViewRepresentable {
                     MessageRow(
                         m: m, prev: prev, next: next, isGroup: parent.isGroup, read: read,
                         highlighted: parent.highlighted == m.key,
-                        onRetry: actions.onRetry, onOpenImage: actions.onOpenImage
+                        onRetry: actions.onRetry, onOpenImage: actions.onOpenImage,
+                        onShowReactions: actions.onShowReactions
                     )
                     .scaleEffect(x: 1, y: -1)
                 }
@@ -212,7 +227,29 @@ struct MessageList: UIViewRepresentable {
             guard g.state == .began, let view, let (m, _) = message(at: g.location(in: view)),
                   m.msg.kind != .system else { return }
             Haptics.tap()
-            parent?.actions.onLongPress(m)
+            // The keyboard goes first; the row has moved once it is down.
+            if view.window?.endEditing(true) == true {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    self?.openMenu(m.key)
+                }
+            } else {
+                openMenu(m.key)
+            }
+        }
+
+        private func openMenu(_ key: String) {
+            guard let view, let parent, let i = index[key],
+                  let cell = view.cellForItem(at: IndexPath(item: i, section: 0)) else { return }
+            let m = rows[i]
+            let prev = i + 1 < rows.count ? rows[i + 1] : nil
+            let next = i > 0 ? rows[i - 1] : nil
+            let target = MessageMenuTarget(
+                m: m, first: !continues(prev, m), last: !continues(m, next), isGroup: parent.isGroup,
+                read: m.msg.isOwn && m.status == nil && m.msg.id <= parent.lastCommonRead,
+                frame: view.convert(cell.frame, to: nil)
+            )
+            parent.actions.onLongPress(target)
         }
 
         // MARK: Swipe right to reply

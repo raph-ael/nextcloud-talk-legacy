@@ -8,7 +8,9 @@ struct ChatView: View {
     let token: String
 
     @State private var replyTo: MessageView?
-    @State private var actionsFor: UiMessage?
+    /// Long-pressed message (menu overlay open) and the message whose reactions are listed.
+    @State private var menuFor: MessageMenuTarget?
+    @State private var reactionsFor: ReactionsTarget?
     @State private var scrollTick = 0
     @State private var atBottom = true
     @State private var showJump = false
@@ -38,11 +40,12 @@ struct ChatView: View {
                 isGroup: room?.isGroup ?? true,
                 lastCommonRead: lastCommonRead,
                 footer: footer,
-                highlighted: actionsFor?.key,
+                highlighted: menuFor?.m.key,
                 scrollToBottom: scrollTick,
                 actions: MessageListActions(
                     onReply: { replyTo = $0 },
-                    onLongPress: { actionsFor = $0 },
+                    onLongPress: { openMenu($0, canReact: room?.canReact == true) },
+                    onShowReactions: { reactionsFor = ReactionsTarget(token: token, messageId: $0.id) },
                     onRetry: { store.retry($0) },
                     onOpenImage: { id, img in viewer = ViewerItem(fileId: id, initial: img) },
                     onNearTop: { store.loadOlder(token) },
@@ -131,9 +134,12 @@ struct ChatView: View {
                 keyboardHeight = Double(frame.height)
             }
         }
-        .confirmationDialog("Nachricht", isPresented: Binding(get: { actionsFor != nil }, set: { if !$0 { actionsFor = nil } }),
-                            titleVisibility: .hidden, presenting: actionsFor) { m in
-            messageActions(m)
+        .sheet(item: $reactionsFor) { WhoReactedSheet(target: $0) }
+        .onDisappear {
+            if menuFor != nil {
+                MessageMenuWindow.shared.close()
+                menuFor = nil
+            }
         }
         .fullScreenCover(isPresented: $camera) {
             CameraView(
@@ -190,21 +196,41 @@ struct ChatView: View {
         .onAppear { store.markVisibleRead(token) }
     }
 
-    @ViewBuilder
-    private func messageActions(_ m: UiMessage) -> some View {
+    /// Long press: reaction bar (when allowed) above the message, the actions below.
+    private func openMenu(_ t: MessageMenuTarget, canReact: Bool) {
+        menuFor = t
+        let msg = t.m.msg
+        MessageMenuWindow.shared.show(
+            MessageMenuOverlay(
+                target: t,
+                showBar: canReact && Reactions.reactable(t.m),
+                actions: messageActions(t.m),
+                safe: MessageMenuWindow.shared.safeArea,
+                onReact: { store.setReaction(token, msg.id, $0) },
+                onClose: {
+                    MessageMenuWindow.shared.close()
+                    menuFor = nil
+                }
+            )
+        )
+    }
+
+    private func messageActions(_ m: UiMessage) -> [MenuAction] {
         let msg = m.msg
+        var list: [MenuAction] = []
         if m.status == .failed || m.status == .waiting {
-            Button("Erneut senden") { store.retry(msg) }
+            list.append(MenuAction(id: "retry", label: "Erneut senden", icon: "arrow.clockwise") { store.retry(msg) })
         }
         if msg.kind == .text && m.status == nil {
-            Button("Antworten") { replyTo = msg }
+            list.append(MenuAction(id: "reply", label: "Antworten", icon: "arrowshape.turn.up.left") { replyTo = msg })
         }
-        if !msg.text.isEmpty {
-            Button("Kopieren") { UIPasteboard.general.string = msg.text }
+        if !msg.text.isEmpty && msg.kind != .deleted {
+            list.append(MenuAction(id: "copy", label: "Kopieren", icon: "doc.on.doc") { UIPasteboard.general.string = msg.text })
         }
         if m.status != nil {
-            Button("Löschen", role: .destructive) { store.discard(msg) }
+            list.append(MenuAction(id: "delete", label: "Löschen", icon: "trash", destructive: true) { store.discard(msg) })
         }
+        return list
     }
 }
 

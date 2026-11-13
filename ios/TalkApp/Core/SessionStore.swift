@@ -446,6 +446,23 @@ final class SessionStore {
         session?.discard(referenceId: msg.referenceId)
     }
 
+    /// Sets the own reaction (docs/chat.md "Reaktionen"): the core replaces or takes it back
+    /// like Signal, shows it at once and resets it on a failure; we only show the error.
+    func setReaction(_ token: String, _ messageId: Int64, _ emoji: String?) {
+        guard let s = session else { return }
+        Task {
+            if let error = await s.setReaction(token: token, messageId: messageId, emoji: emoji) {
+                Toast.show(error)
+            }
+        }
+    }
+
+    /// Who reacted to a message (own first, then newest).
+    func reactions(_ token: String, _ messageId: Int64) async throws -> [ReactionView] {
+        guard let s = session else { throw CancellationError() }
+        return try await s.reactions(token: token, messageId: messageId)
+    }
+
     /// Marks the newest message read while the chat is visible and the app is in front.
     func markVisibleRead(_ token: String) {
         guard let s = session, foreground, activeToken == token, let room = room(token),
