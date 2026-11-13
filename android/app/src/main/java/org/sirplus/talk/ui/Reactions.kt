@@ -396,18 +396,3 @@ private fun ReactorRow(sessions: SessionManager, r: ReactionView, onRemove: () -
         Text(r.emoji, fontSize = 24.sp)
     }
 }
-
-/** User avatar from the server (Talk users only), initials until loaded or for guests. */
-@Composable
-private fun UserAvatar(sessions: SessionManager, name: String, userId: String, size: androidx.compose.ui.unit.Dp) {
-    val dark = isSystemInDarkTheme()
-    val image by produceState(if (userId.isEmpty()) null else sessions.cachedUserAvatar(userId, dark), userId, dark) {
-        if (value == null && userId.isNotEmpty()) value = sessions.userAvatar(userId, dark)
-    }
-    val img = image
-    if (img != null) {
-        Image(img, null, contentScale = ContentScale.Crop, modifier = Modifier.size(size).clip(CircleShape))
-    } else {
-        Avatar(name, size)
-    }
-}

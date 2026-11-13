@@ -110,7 +110,7 @@ private val ReplyIcon = materialIcon(name = "Reply", autoMirror = true) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
+fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenInfo: () -> Unit = {}) {
     val chat = state.chats[room.token]
     val messages = chat?.messages.orEmpty()
     val isGroup = room.roomType.toInt() !in setOf(1, 6)
@@ -163,7 +163,18 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView) {
                 },
                 actions = { CallButton(sessions, room) },
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    val groupRoom = room.roomType.toInt() in setOf(2, 3)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = if (groupRoom) {
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClickLabel = "Gruppeneinstellungen", onClick = onOpenInfo)
+                                .semantics(mergeDescendants = true) { contentDescription = "Gruppeneinstellungen" }
+                        } else {
+                            Modifier
+                        },
+                    ) {
                         Avatar(room.name, 36.dp, room.token, room.avatarVersion, sessions)
                         Spacer(Modifier.width(12.dp))
                         Text(room.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 18.sp)

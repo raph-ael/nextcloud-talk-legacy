@@ -58,7 +58,11 @@ import uniffi.talk_ffi.MessageView
 import uniffi.talk_ffi.OutboxIdle
 import uniffi.talk_ffi.PendingMessage
 import uniffi.talk_ffi.PendingState
+import uniffi.talk_ffi.MemberView
 import uniffi.talk_ffi.ReactionView
+import uniffi.talk_ffi.UserView
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import uniffi.talk_ffi.ReplyPreview
 import uniffi.talk_ffi.RoomView
 import uniffi.talk_ffi.SendError
@@ -493,7 +497,8 @@ class SessionManager(private val context: Context) : CoreListener {
 
     override fun onEvent(event: CoreEvent) {
         when (event) {
-            is CoreEvent.RoomsChanged -> _state.update { it.copy(rooms = event.rooms) }
+            is CoreEvent.RoomsChanged -> scope.launch { onRooms(event.rooms) }
+            is CoreEvent.ParticipantsChanged -> _participants.tryEmit(event.token)
             is CoreEvent.MessagesAdded -> {
                 adoptLocalPreviews(event.messages)
                 updateChat(event.token) { it.copy(messages = merge(it.messages, event.messages)) }
@@ -574,6 +579,109 @@ class SessionManager(private val context: Context) : CoreListener {
             if (m.referenceId.isNotEmpty()) pending.removeAll { it.msg.referenceId == m.referenceId }
         }
         return byId.values.sortedBy { it.msg.id } + pending
+    }
+
+    /**
+     * New room list. When the open chat disappeared (removed, group deleted, left) it closes;
+     * „Du bist nicht mehr in dieser Gruppe“ only when we did not leave or delete it ourselves.
+     */
+    private fun onRooms(rooms: List<RoomView>) {
+        val before = _state.value
+        _state.update { it.copy(rooms = rooms) }
+        val active = before.activeToken ?: return
+        val gone = before.rooms.find { it.token == active } ?: return
+        if (rooms.any { it.token == active }) return
+        closeRoom()
+        val self = leaving.remove(active)
+        if (!self && gone.roomType.toInt() in setOf(2, 3)) {
+            Toast.makeText(context, "Du bist nicht mehr in dieser Gruppe", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // --- groups (docs/groups.md) -------------------------------------------------------
+
+    private val _participants = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    /** Tokens whose member list changed (`participantsChanged`): reload an open list. */
+    val participantsChanged: SharedFlow<String> = _participants
+    /** Groups we are leaving or deleting ourselves (no „nicht mehr in dieser Gruppe“). */
+    private val leaving = ConcurrentHashMap.newKeySet<String>()
+
+    fun canCreateGroups(): Boolean = session?.canCreateGroups() ?: false
+
+    /** Users for „Neue Nachricht“; `null` when the search failed. */
+    suspend fun searchUsers(query: String, excludeToken: String? = null): List<UserView>? {
+        val s = session ?: return null
+        return try {
+            s.searchUsers(query, excludeToken)
+        } catch (e: CoreException) {
+            null
+        }
+    }
+
+    /** Members of a group; `null` when they could not be loaded. */
+    suspend fun members(token: String): List<MemberView>? {
+        val s = session ?: return null
+        return try {
+            s.members(token)
+        } catch (e: CoreException) {
+            null
+        }
+    }
+
+    /** Opens the one-to-one chat with [userId]; `false` (and a toast) on failure. */
+    suspend fun openDirect(userId: String): Boolean {
+        val s = session ?: return false
+        val r = s.openDirect(userId)
+        val token = r.token ?: return toast(r.error ?: "Chat konnte nicht geöffnet werden")
+        openRoom(token)
+        return true
+    }
+
+    /** Creates a group and opens it; `false` (and a toast) on failure. */
+    suspend fun createGroup(name: String, userIds: List<String>, photo: ByteArray?): Boolean {
+        val s = session ?: return false
+        val r = s.createGroup(name, userIds, photo)
+        val token = r.token ?: return toast(r.error ?: "Gruppe konnte nicht erstellt werden")
+        openRoom(token)
+        return true
+    }
+
+    /** Runs a group change; the core's error text becomes a toast. `true` on success. */
+    suspend fun groupAction(action: suspend (TalkSession) -> String?): Boolean {
+        val s = session ?: return toast("Keine Verbindung")
+        val error = action(s) ?: return true
+        return toast(error)
+    }
+
+    /** Leaves or deletes a group; on success chat and settings close (no „nicht mehr“ hint). */
+    suspend fun leaveOrDelete(token: String, delete: Boolean): Boolean {
+        leaving += token
+        val ok = groupAction { if (delete) it.deleteGroup(token) else it.leaveGroup(token) }
+        if (!ok) {
+            leaving -= token
+        } else if (_state.value.activeToken == token) {
+            closeRoom()
+            leaving -= token
+        }
+        return ok
+    }
+
+    /** Whether we must appoint a moderator before leaving; `null` (and a toast) on failure. */
+    suspend fun leaveNeedsModerator(token: String): Boolean? {
+        val s = session ?: return null
+        return try {
+            s.leaveNeedsModerator(token)
+        } catch (e: CoreException) {
+            toast("Keine Verbindung")
+            null
+        }
+    }
+
+    fun groupLink(token: String): String = session?.groupLink(token).orEmpty()
+
+    private fun toast(text: String): Boolean {
+        Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+        return false
     }
 
     // --- chat actions ----------------------------------------------------------------

@@ -20,11 +20,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,7 +67,7 @@ import uniffi.talk_ffi.RoomView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RoomListScreen(sessions: SessionManager, state: UiState) {
+fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Unit = {}) {
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
@@ -88,6 +90,15 @@ fun RoomListScreen(sessions: SessionManager, state: UiState) {
     }
 
     Scaffold(
+        floatingActionButton = {
+            if (!searching) {
+                FloatingActionButton(
+                    onClick = onCompose,
+                    containerColor = LocalTalkColors.current.accent,
+                    contentColor = Color.White,
+                ) { Icon(Icons.Filled.Edit, "Neue Nachricht") }
+            }
+        },
         topBar = {
             TopAppBar(
                 title = {
