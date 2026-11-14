@@ -5,6 +5,13 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,8 +87,16 @@ import uniffi.talk_ffi.SectionView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Unit = {}) {
+fun RoomListScreen(
+    sessions: SessionManager,
+    state: UiState,
+    onCompose: () -> Unit = {},
+    onSettings: () -> Unit = {},
+    onGroupSettings: (String) -> Unit = {},
+) {
     var searching by rememberSaveable { mutableStateOf(false) }
+    // Chat menu after a long press (docs/settings.md); follows the live room.
+    var menuFor by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
@@ -141,7 +156,14 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
                         }
                     } else {
                         Box(
-                            Modifier.padding(start = 12.dp, end = 8.dp).clip(CircleShape).clickable { menu = true },
+                            Modifier
+                                .padding(start = 12.dp, end = 8.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onSettings)
+                                .clearAndSetSemantics {
+                                    contentDescription = "Einstellungen"
+                                    role = Role.Button
+                                },
                         ) { UserAvatar(sessions, state.userId.ifEmpty { state.user }, state.userId, 32.dp) }
                     }
                 },
@@ -153,22 +175,8 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Menü") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(state.user, fontWeight = FontWeight.SemiBold)
-                                        Text(
-                                            state.server.removePrefix("https://"),
-                                            color = LocalTalkColors.current.muted,
-                                            fontSize = 13.sp,
-                                        )
-                                    }
-                                },
-                                onClick = {},
-                                enabled = false,
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Abmelden", color = LocalTalkColors.current.danger) },
-                                onClick = { menu = false; sessions.logout() },
+                                text = { Text("Einstellungen") },
+                                onClick = { menu = false; onSettings() },
                             )
                         }
                     }
@@ -200,7 +208,7 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
                         }
                     }
                     items(section.rooms, key = { "${section.id}:${it.token}" }, contentType = { "room" }) { room ->
-                        RoomRow(room, sessions, now) { sessions.openRoom(room.token) }
+                        RoomRow(room, sessions, now, onMenu = { menuFor = room.token }) { sessions.openRoom(room.token) }
                     }
                 }
                 if (sections.isEmpty()) {
@@ -214,6 +222,16 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
                 }
             }
         }
+    }
+
+    val menuRoom = menuFor?.let { t -> state.rooms.find { it.token == t } }
+    if (menuFor != null && menuRoom == null) menuFor = null
+    menuRoom?.let { r ->
+        ChatMenu(
+            sessions, r,
+            onDismiss = { menuFor = null },
+            onGroupSettings = { menuFor = null; onGroupSettings(r.token) },
+        )
     }
 }
 
@@ -288,14 +306,20 @@ internal fun rememberReduceMotion(): Boolean {
 }
 
 /** One conversation, laid out with Signal's metrics (48dp avatar, 2-line summary, 84dp min height). */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onClick: () -> Unit) {
+private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onMenu: () -> Unit, onClick: () -> Unit) {
     val colors = LocalTalkColors.current
+    val haptics = LocalHapticFeedback.current
+    // docs/settings.md „Stummgeschaltete Chats“: 2 counts only mentions, 3 is off.
+    val level = room.notificationLevel.toInt()
+    val off = level == 3
+    val countColor = if (level == 1 || (level == 2 && room.unreadMention)) colors.accent else mutedBadge()
     val onSurface = MaterialTheme.colorScheme.onSurface
     val unread = room.unreadMessages > 0
     val last = room.lastMessage
     val type = room.roomType.toInt()
-    val preview = remember(last, type) {
+    val preview = remember(last, type, onSurface) {
         buildAnnotatedString {
             val text = last?.let { withAttachment(it.text, it.attachment) }.orEmpty()
             when {
@@ -316,7 +340,14 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onClick
         Modifier
             .fillMaxWidth()
             .heightIn(min = 84.dp)
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onMenu()
+                },
+            )
+            .semantics { customActions = listOf(CustomAccessibilityAction("Chat-Menü") { onMenu(); true }) }
             .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -324,13 +355,23 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onClick
         Spacer(Modifier.width(20.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    room.name,
-                    style = ListType.title,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        room.name,
+                        style = ListType.title,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (off) {
+                        Icon(
+                            TalkIcons.NotificationsOff,
+                            contentDescription = "stummgeschaltet",
+                            tint = colors.muted,
+                            modifier = Modifier.padding(start = 4.dp).size(16.dp),
+                        )
+                    }
+                }
                 Spacer(Modifier.width(12.dp))
                 Text(
                     listTime(room.lastActivity, now),
@@ -355,11 +396,15 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onClick
                     Box(Modifier.padding(top = 6.dp).size(8.dp).clip(CircleShape).background(Color(0xFF2FB35A)))
                 }
                 if (room.unreadMention) Badge("@", colors.accent)
-                if (unread) Badge(if (room.unreadMessages > 99) "99+" else room.unreadMessages.toString(), colors.accent)
+                if (unread) Badge(if (room.unreadMessages > 99) "99+" else room.unreadMessages.toString(), countColor)
             }
         }
     }
 }
+
+/** Grey count of muted chats; dark enough for white text in both designs. */
+@Composable
+private fun mutedBadge(): Color = if (isDarkTheme()) Color(0xFF5C5C61) else LocalTalkColors.current.muted
 
 @Composable
 private fun Badge(text: String, color: Color) {

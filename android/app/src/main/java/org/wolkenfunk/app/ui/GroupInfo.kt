@@ -263,10 +263,10 @@ private fun GroupInfoMain(sessions: SessionManager, room: RoomView, onBack: () -
 
 private fun memberCount(n: Int) = if (n == 1) "1 Mitglied" else "$n Mitglieder"
 
-private fun notificationLabel(level: Int) = when (level) {
+internal fun notificationLabel(level: Int) = when (level) {
+    1 -> "Alle Nachrichten"
     2 -> "Nur Erwähnungen"
-    3 -> "Aus"
-    else -> "Alle Nachrichten"
+    else -> "Aus"
 }
 
 @Composable
@@ -316,12 +316,12 @@ private fun GroupHeader(sessions: SessionManager, room: RoomView, count: Int?, o
 }
 
 @Composable
-private fun SectionDivider() {
+internal fun SectionDivider() {
     HorizontalDivider(Modifier.padding(vertical = 8.dp), color = LocalTalkColors.current.chip, thickness = 8.dp)
 }
 
 @Composable
-private fun SettingRow(
+internal fun SettingRow(
     icon: ImageVector,
     label: String,
     value: String? = null,
@@ -439,7 +439,7 @@ private fun ConfirmDialog(title: String, text: String?, confirm: String, onDismi
 
 @Composable
 private fun NotificationDialog(current: Int, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
-    val shown = if (current in 1..3) current else 1
+    val shown = current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Benachrichtigungen") },

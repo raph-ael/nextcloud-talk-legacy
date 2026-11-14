@@ -4,22 +4,55 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import org.wolkenfunk.app.call.CallActivity
 import android.os.Bundle
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.wolkenfunk.app.ui.TalkApp
 import org.wolkenfunk.app.ui.TalkTheme
 
 class MainActivity : ComponentActivity() {
     private val sessions get() = (application as TalkApplication).sessions
+    private val appearance get() = (application as TalkApplication).appearance
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // The chosen design (docs/settings.md „Darstellung“) already for the first frame:
+        // window background and system bars, which otherwise follow the system.
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        applyDesign(appearance.state.value.isDark(systemDark))
         if (savedInstanceState == null) openFromIntent(intent)
         setContent {
-            TalkTheme { TalkApp(sessions) }
+            val look by appearance.state.collectAsStateWithLifecycle()
+            val dark = look.isDark(isSystemInDarkTheme())
+            LaunchedEffect(dark) { applyDesign(dark) }
+            TalkTheme(dark = dark, accent = look.accent) { TalkApp(sessions) }
         }
+    }
+
+    private fun Appearance.isDark(systemDark: Boolean) = when (theme) {
+        ThemeMode.SYSTEM -> systemDark
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+
+    /** System bar icons and window background follow the design in effect. */
+    private fun applyDesign(dark: Boolean) {
+        val transparent = android.graphics.Color.TRANSPARENT
+        // Navigation bar scrims as in enableEdgeToEdge() (only shown with 3-button navigation).
+        val lightScrim = android.graphics.Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+        val darkScrim = android.graphics.Color.argb(0x80, 0x1b, 0x1b, 0x1b)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(transparent, transparent) { dark },
+            navigationBarStyle = SystemBarStyle.auto(lightScrim, darkScrim) { dark },
+        )
+        window.setBackgroundDrawable(ColorDrawable(if (dark) 0xFF121212.toInt() else android.graphics.Color.WHITE))
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -7,7 +7,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -294,7 +293,7 @@ fun ReactionPills(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReactionPickerSheet(onPick: (String) -> Unit, onDismiss: () -> Unit) {
-    val dark = isSystemInDarkTheme()
+    val dark = isDarkTheme()
     val background = MaterialTheme.colorScheme.surfaceContainerLow
     ModalBottomSheet(
         onDismissRequest = onDismiss,

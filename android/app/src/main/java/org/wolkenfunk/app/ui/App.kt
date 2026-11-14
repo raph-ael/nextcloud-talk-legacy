@@ -44,7 +44,10 @@ fun TalkApp(sessions: SessionManager) {
                 // „Neue Nachricht“ over the list, group settings over the chat (docs/groups.md).
                 var composing by rememberSaveable { mutableStateOf(false) }
                 var infoFor by rememberSaveable { mutableStateOf<String?>(null) }
-                if (infoFor != null && infoFor != active) infoFor = null
+                // „Einstellungen“ over the list (docs/settings.md).
+                var settings by rememberSaveable { mutableStateOf(false) }
+                // Group settings belong to the open chat, or come over the list from the chat menu.
+                if (infoFor != null && active != null && infoFor != active) infoFor = null
                 BackHandler(enabled = active != null) { sessions.closeRoom() }
                 AnimatedContent(
                     targetState = active,
@@ -61,7 +64,13 @@ fun TalkApp(sessions: SessionManager) {
                     if (token != null && room != null) {
                         ChatScreen(sessions, state, room, onOpenInfo = { infoFor = token })
                     } else {
-                        RoomListScreen(sessions, state, onCompose = { composing = true })
+                        RoomListScreen(
+                            sessions,
+                            state,
+                            onCompose = { composing = true },
+                            onSettings = { settings = true },
+                            onGroupSettings = { infoFor = it },
+                        )
                     }
                 }
                 androidx.compose.animation.AnimatedVisibility(
@@ -71,6 +80,14 @@ fun TalkApp(sessions: SessionManager) {
                 ) {
                     NewMessageFlow(sessions, onClose = { composing = false })
                 }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = settings && active == null,
+                    enter = slideInHorizontally { it },
+                    exit = slideOutHorizontally { it },
+                ) {
+                    SettingsScreen(sessions, state, onBack = { settings = false })
+                }
+                if (settings && active != null) settings = false
                 val infoRoom = infoFor?.let { t -> state.rooms.find { it.token == t } }
                 var lastInfoRoom by remember { mutableStateOf<RoomView?>(null) }
                 if (infoRoom != null) lastInfoRoom = infoRoom

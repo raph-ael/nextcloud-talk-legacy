@@ -29,8 +29,8 @@ data class TalkColors(
 )
 
 private val LightTalk = TalkColors(
-    accent = Color(0xFF2C6BED),
-    bubbleOwn = Color(0xFF2C6BED),
+    accent = accentById(DEFAULT_ACCENT).light.accent,
+    bubbleOwn = accentById(DEFAULT_ACCENT).light.bubble,
     bubbleOwnText = Color.White,
     bubbleOther = Color(0xFFE9E9EB),
     bubbleOtherText = Color(0xFF1B1B1D),
@@ -41,8 +41,8 @@ private val LightTalk = TalkColors(
 )
 
 private val DarkTalk = TalkColors(
-    accent = Color(0xFF3B78F0),
-    bubbleOwn = Color(0xFF3B78F0),
+    accent = accentById(DEFAULT_ACCENT).dark.accent,
+    bubbleOwn = accentById(DEFAULT_ACCENT).dark.bubble,
     bubbleOwnText = Color.White,
     bubbleOther = Color(0xFF2C2C2E),
     bubbleOtherText = Color(0xFFE9E9EB),
@@ -61,9 +61,21 @@ object ListType {
 
 val LocalTalkColors = staticCompositionLocalOf { LightTalk }
 
+/** The design in effect (the chosen one, not necessarily the system's); see [TalkTheme]. */
+val LocalDarkTheme = staticCompositionLocalOf { false }
+
+/** Whether the app is drawn dark: follows the design chosen in „Darstellung“. */
 @Composable
-fun TalkTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val talk = if (dark) DarkTalk else LightTalk
+fun isDarkTheme(): Boolean = LocalDarkTheme.current
+
+/**
+ * [dark] is the design in effect, [accent] a palette id (docs/settings.md): it colours
+ * `primary` (buttons, switches, radio buttons), [TalkColors.accent] and the own bubble.
+ */
+@Composable
+fun TalkTheme(dark: Boolean = isSystemInDarkTheme(), accent: String = DEFAULT_ACCENT, content: @Composable () -> Unit) {
+    val palette = accentById(accent).let { if (dark) it.dark else it.light }
+    val talk = (if (dark) DarkTalk else LightTalk).copy(accent = palette.accent, bubbleOwn = palette.bubble)
     val scheme = if (dark) {
         darkColorScheme(
             primary = talk.accent,
@@ -83,7 +95,7 @@ fun TalkTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> 
             surfaceVariant = Color(0xFFE9E9EB),
         )
     }
-    androidx.compose.runtime.CompositionLocalProvider(LocalTalkColors provides talk) {
+    androidx.compose.runtime.CompositionLocalProvider(LocalTalkColors provides talk, LocalDarkTheme provides dark) {
         MaterialTheme(colorScheme = scheme, typography = Typography(), content = content)
     }
 }

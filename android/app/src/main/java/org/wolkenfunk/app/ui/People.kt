@@ -8,7 +8,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -67,7 +66,7 @@ import java.io.ByteArrayOutputStream
 /** User avatar from the server (Talk users only), initials until loaded or for guests. */
 @Composable
 fun UserAvatar(sessions: SessionManager, name: String, userId: String, size: Dp) {
-    val dark = isSystemInDarkTheme()
+    val dark = isDarkTheme()
     val image by produceState(if (userId.isEmpty()) null else sessions.cachedUserAvatar(userId, dark), userId, dark) {
         if (value == null && userId.isNotEmpty()) value = sessions.userAvatar(userId, dark)
     }

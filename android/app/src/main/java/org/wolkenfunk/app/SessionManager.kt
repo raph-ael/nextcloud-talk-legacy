@@ -29,6 +29,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import uniffi.talk_ffi.CallIceCandidate
 import uniffi.talk_ffi.CallView
+import uniffi.talk_ffi.CategoryView
 import uniffi.talk_ffi.PeerState
 import uniffi.talk_ffi.SdpType
 import org.wolkenfunk.app.call.CallActions
@@ -737,6 +738,26 @@ class SessionManager(private val context: Context) : CoreListener {
     }
 
     fun groupLink(token: String): String = session?.groupLink(token).orEmpty()
+
+    // --- chat menu (docs/settings.md) --------------------------------------------------
+
+    /** Runs a chat-menu change in the background; the core's error text becomes a toast. */
+    fun chatAction(action: suspend (TalkSession) -> String?) {
+        scope.launch { groupAction(action) }
+    }
+
+    /** The server keeps categories: the chat menu offers „Kategorie“. */
+    fun categoriesSupported(): Boolean = session?.categoriesSupported() ?: false
+
+    /** All categories in order („Favoriten“ and „Chats“ included). */
+    fun categories(): List<CategoryView> = session?.categories().orEmpty()
+
+    /** „Neue Kategorie …“ from the chat menu, with these chats in it; `false` (and a toast) on failure. */
+    suspend fun createCategory(name: String, tokens: List<String>): Boolean {
+        val s = session ?: return toast("Keine Verbindung")
+        val error = s.createCategory(name, tokens).error ?: return true
+        return toast(error)
+    }
 
     private fun toast(text: String): Boolean {
         Toast.makeText(context, text, Toast.LENGTH_SHORT).show()

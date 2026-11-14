@@ -2,7 +2,6 @@ package org.wolkenfunk.app.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -31,7 +30,7 @@ fun Avatar(
     version: String = "",
     sessions: SessionManager? = null,
 ) {
-    val dark = isSystemInDarkTheme()
+    val dark = isDarkTheme()
     val cached = if (token != null) sessions?.cachedAvatar(token, version, dark) else null
     val image by produceState(cached, token, version, dark) {
         value = cached ?: if (token != null && sessions != null) sessions.avatar(token, version, dark) else null

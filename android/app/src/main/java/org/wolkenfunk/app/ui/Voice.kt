@@ -117,7 +117,7 @@ private data class VoicePalette(
 
 @Composable
 private fun voicePalette(own: Boolean, textColor: Color, active: Boolean): VoicePalette {
-    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    val dark = isDarkTheme()
     return if (own) {
         VoicePalette(
             circle = Color.White.copy(alpha = 0.16f),

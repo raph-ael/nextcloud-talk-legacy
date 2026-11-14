@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -440,7 +439,7 @@ private fun PillIcon(
 
 @Composable
 private fun EmojiPanel(onEmoji: (String) -> Unit, onBackspace: () -> Unit) {
-    val dark = isSystemInDarkTheme()
+    val dark = isDarkTheme()
     val background = MaterialTheme.colorScheme.surface
     Box(Modifier.fillMaxSize().background(background)) {
         AndroidView(

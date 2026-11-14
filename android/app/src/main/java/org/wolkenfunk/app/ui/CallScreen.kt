@@ -49,7 +49,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -171,7 +170,7 @@ fun CallScreen(
     val feeds by sessions.callVideo.remote.collectAsState()
     val state by sessions.state.collectAsStateWithLifecycle()
     val room = state.rooms.find { it.token == call.token }
-    val dark = isSystemInDarkTheme()
+    val dark = isDarkTheme()
     val avatar by produceState(room?.let { sessions.cachedAvatar(it.token, it.avatarVersion, dark) }, call.token, room?.avatarVersion) {
         if (room != null) value = sessions.avatar(room.token, room.avatarVersion, dark)
     }
@@ -894,7 +893,7 @@ private fun endText(reason: EndReason?): String = when (reason) {
 
 @Composable
 private fun Tile(p: CallParticipant, sessions: SessionManager, feed: VideoFeed?, modifier: Modifier = Modifier.aspectRatio(1f), compact: Boolean = false) {
-    val dark = isSystemInDarkTheme()
+    val dark = isDarkTheme()
     val image by produceState(sessions.cachedUserAvatar(p.userId, dark), p.userId) {
         if (value == null && p.userId.isNotEmpty()) value = sessions.userAvatar(p.userId, dark)
     }
