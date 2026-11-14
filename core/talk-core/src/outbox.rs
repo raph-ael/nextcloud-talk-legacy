@@ -716,7 +716,7 @@ impl Engine {
                 let id = f
                     .upload_id
                     .clone()
-                    .unwrap_or_else(|| format!("sirplus-{}", &r[..r.len().min(24)]));
+                    .unwrap_or_else(|| format!("wolkenfunk-{}", &r[..r.len().min(24)]));
                 self.outbox.update(r, |i| {
                     if let Some(file) = i.file.as_mut() {
                         file.candidate = Some(target.clone());

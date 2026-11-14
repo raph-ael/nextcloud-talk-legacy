@@ -26,14 +26,22 @@ FEED=dist/latest-linux.yml
 for f in $DEB $APPIMAGE $FEED; do [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }; done
 grep -q "version: $VERSION" "$FEED" || { echo "$FEED is not for $VERSION" >&2; exit 1; }
 
+# Only apt/ and appimage/ are ours; the other folders belong to the other channel scripts.
+DIRS=(apt appimage)
+
 # Mirror the published state, so the pool keeps the older versions.
 mkdir -p "$STAGE"
 if [ "${DRY_RUN:-0}" != 1 ]; then
-  rsync -a --delete "$HOST:$REMOTE/" "$STAGE/"
+  for d in "${DIRS[@]}"; do
+    mkdir -p "$STAGE/$d"
+    if ssh "$HOST" test -d "$REMOTE/$d"; then rsync -a --delete "$HOST:$REMOTE/$d/" "$STAGE/$d/"; fi
+  done
 fi
 
 # APT
 scripts/apt-repo.py "$STAGE/apt" --add $DEB --keep "$KEEP"
+# Checksums for the download page: the fixed link(s) wolkenfunk_<arch>.deb and every package in the pool.
+(cd "$STAGE/apt" && { ls wolkenfunk_*.deb; find pool -name '*.deb' | sort; } | xargs -r sha256sum > SHA256SUMS)
 
 # AppImage: versioned file, "latest" symlink for the download link, feed for the updater.
 mkdir -p "$STAGE/appimage"
@@ -42,6 +50,7 @@ cp "$FEED" "$STAGE/appimage/latest-linux.yml"
 ARCH_FILE=$(basename "$APPIMAGE" | sed "s/-$VERSION-/-/")   # Wolkenfunk-x86_64.AppImage
 ln -sfn "$(basename "$APPIMAGE")" "$STAGE/appimage/$ARCH_FILE"
 ls -t "$STAGE"/appimage/Wolkenfunk-*-*.AppImage | grep -v -- "/$ARCH_FILE$" | tail -n +$((KEEP + 1)) | xargs -r rm -v
+(cd "$STAGE/appimage" && sha256sum "$ARCH_FILE" Wolkenfunk-*-*.AppImage > SHA256SUMS)
 
 if [ "${DRY_RUN:-0}" = 1 ]; then
   echo "DRY_RUN: staged in $STAGE, nothing uploaded"
@@ -49,5 +58,7 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
 fi
 
 # Upload: new files first, then switch the metadata over (--delay-updates), old files last.
-rsync -a --links --delay-updates --delete-after --chown=101000:101000 "$STAGE/" "$HOST:$REMOTE/"
+for d in "${DIRS[@]}"; do
+  rsync -a --links --delay-updates --delete-after --chown=101000:101000 "$STAGE/$d/" "$HOST:$REMOTE/$d/"
+done
 echo "→ published $VERSION on https://pkg.wolkenfunk.org"

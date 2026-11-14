@@ -1,4 +1,4 @@
-//! Shared core of the Sirplus Talk clients (Android, iOS, Desktop).
+//! Shared core of the Wolkenfunk clients (Android, iOS, Desktop).
 //!
 //! Layering:
 //! - [`client`]: stateless HTTP access to the Nextcloud/Talk OCS APIs (one per account)

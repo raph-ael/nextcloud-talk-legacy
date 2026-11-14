@@ -22,16 +22,15 @@
     "start": "electron-vite preview",
     "dist:linux": "npm run core:release && electron-vite build && electron-builder --linux",
     "dist:mac": "PROFILE=release UNIVERSAL=1 scripts/build-core.sh && electron-vite build && electron-builder --mac --universal",
-    "dist:deb": "npm run core:release && electron-vite build && electron-builder --linux deb"
+    "dist:deb": "npm run core:release && electron-vite build && electron-builder --linux deb",
+    "dist:win": "npm run core:release && electron-vite build && electron-builder --win"
   },
   "build": {
     "appId": "org.wolkenfunk.Wolkenfunk",
     "productName": "Wolkenfunk",
     "files": [
       "out/**/*",
-      "resources/tray.png",
-      "resources/trayTemplate.png",
-      "resources/trayTemplate@2x.png"
+      "resources/tray*.png"
     ],
     "extraResources": [
       {
@@ -92,7 +91,21 @@
       "target": [
         "nsis"
       ],
-      "icon": "resources/icon.ico"
+      "icon": "resources/icon.ico",
+      "publish": [
+        {
+          "provider": "generic",
+          "url": "https://pkg.wolkenfunk.org/windows",
+          "channel": "latest"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Wolkenfunk-Setup-${version}.${ext}",
+      "shortcutName": "Wolkenfunk",
+      "deleteAppDataOnUninstall": false
     },
     "dmg": {
       "title": "${productName}",

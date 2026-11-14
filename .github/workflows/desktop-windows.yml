@@ -1,0 +1,81 @@
+# Windows build of the desktop app: NSIS installer (per user, no admin) plus latest.yml for
+# electron-updater. Unsigned on purpose: SmartScreen shows "Unbekannter Herausgeber".
+# desktop/scripts/release-windows.sh downloads the artifact of the run for tag v<version>.
+name: Desktop Windows
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v=$(node -p 'require("./package.json").version')
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, package.json $v" >&2; exit 1; }
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      # aws-lc (rustls) needs NASM for its assembly on Windows; CMake is on the runner.
+      - uses: ilammy/setup-nasm@v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - run: npm ci
+
+      - name: Core (talk_node.dll → native/talk_node.node)
+        run: PROFILE=release scripts/build-core.sh
+
+      - run: npx electron-vite build
+
+      - run: npx electron-builder --win --publish never
+
+      # The unpacked app starts and stays up: the main process loads native/talk_node.node at
+      # startup, so its window (seen through the DevTools port) only exists if that worked.
+      - name: Smoke test
+        run: |
+          app=dist/win-unpacked/Wolkenfunk.exe
+          [ -f "$app" ] || { echo "missing $app" >&2; exit 1; }
+          "$app" --user-data-dir="$RUNNER_TEMP/smoke-profile" --remote-debugging-port=9333 &
+          ok=
+          for i in $(seq 60); do
+            sleep 1
+            if curl -s -m 2 localhost:9333/json/list | grep -q 'out/renderer/index.html'; then ok=1; break; fi
+          done
+          [ -n "$ok" ] || { echo "no app window after 60 s" >&2; taskkill //F //IM Wolkenfunk.exe //T || true; exit 1; }
+          sleep 10
+          curl -s -m 2 localhost:9333/json/list | grep -q 'out/renderer/index.html' || { echo "app gone after start" >&2; exit 1; }
+          echo "app window up after ${i}s and still there 10 s later"
+          taskkill //F //IM Wolkenfunk.exe //T || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolkenfunk-windows
+          if-no-files-found: error
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.blockmap
+            desktop/dist/latest.yml

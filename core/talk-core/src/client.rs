@@ -50,18 +50,18 @@ impl Platform {
         match self {
             Platform::Android => {
                 format!(
-                    "Mozilla/5.0 (Android) Nextcloud-Talk v{TALK_COMPAT_MOBILE} SirplusTalk/{v}"
+                    "Mozilla/5.0 (Android) Nextcloud-Talk v{TALK_COMPAT_MOBILE} Wolkenfunk/{v}"
                 )
             }
             Platform::Ios => {
-                format!("Mozilla/5.0 (iOS) Nextcloud-Talk v{TALK_COMPAT_MOBILE} SirplusTalk/{v}")
+                format!("Mozilla/5.0 (iOS) Nextcloud-Talk v{TALK_COMPAT_MOBILE} Wolkenfunk/{v}")
             }
             Platform::Desktop => {
                 format!(
-                    "Mozilla/5.0 (Desktop) Nextcloud-Talk v{TALK_COMPAT_DESKTOP} SirplusTalk/{v}"
+                    "Mozilla/5.0 (Desktop) Nextcloud-Talk v{TALK_COMPAT_DESKTOP} Wolkenfunk/{v}"
                 )
             }
-            Platform::Cli => format!("SirplusTalk-CLI/{v}"),
+            Platform::Cli => format!("Wolkenfunk-CLI/{v}"),
         }
     }
 }

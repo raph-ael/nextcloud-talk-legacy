@@ -38,7 +38,8 @@ import {
   type VoiceDraft,
   type RecordingStatus,
 } from '@shared/core'
-import trayIcon from '../../resources/tray.png?asset'
+import trayOnDark from '../../resources/tray-on-dark.png?asset'
+import trayOnLight from '../../resources/tray-on-light.png?asset'
 
 // --- Native core -------------------------------------------------------------------
 
@@ -202,9 +203,11 @@ function saveSettings(): void {
 
 /**
  * The app was called "Sirplus Talk" before it became Wolkenfunk: carry its data folder over
- * (account, cache, settings), once, before Chromium uses the new one.
+ * (account, cache, settings), once, before Chromium uses the new one. Only into the default
+ * folder: a run with its own --user-data-dir (tests, a second profile) must not take it.
  */
 function migrateLegacyDataDir(): void {
+  if (app.commandLine.hasSwitch('user-data-dir')) return
   const legacy = join(app.getPath('appData'), 'Sirplus Talk')
   if (!existsSync(legacy) || existsSync(join(dataDir, 'account.json'))) return
   try {
@@ -692,10 +695,19 @@ async function stagePath(source: string, name: string, mime: string): Promise<St
 
 let tray: Tray | null = null
 
+/**
+ * Monochrome glyph (the @2x file next to it is picked up for HiDPI). Windows says whether
+ * the taskbar is dark; Linux does not, and GNOME, KDE and Ubuntu panels mostly are.
+ */
+function trayIcon(): string {
+  const darkPanel = process.platform === 'win32' ? nativeTheme.shouldUseDarkColorsForSystemIntegratedUI : true
+  return darkPanel ? trayOnDark : trayOnLight
+}
+
 function createTray(): void {
   if (process.platform === 'darwin' || tray) return
   try {
-    tray = new Tray(trayIcon)
+    tray = new Tray(trayIcon())
   } catch (err) {
     console.warn('no tray:', (err as Error).message)
     return
@@ -703,6 +715,7 @@ function createTray(): void {
   tray.setToolTip('Wolkenfunk')
   tray.on('click', showWindow)
   updateTrayMenu()
+  nativeTheme.on('updated', () => tray?.setImage(trayIcon()))
 }
 
 function updateTrayMenu(): void {
