@@ -29,7 +29,9 @@
     "productName": "Wolkenfunk",
     "files": [
       "out/**/*",
-      "resources/tray.png"
+      "resources/tray.png",
+      "resources/trayTemplate.png",
+      "resources/trayTemplate@2x.png"
     ],
     "extraResources": [
       {
@@ -71,8 +73,7 @@
     },
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ],
       "category": "public.app-category.social-networking",
       "icon": "resources/icon.icns",
@@ -94,7 +95,8 @@
       "icon": "resources/icon.ico"
     },
     "dmg": {
-      "title": "${productName}"
+      "title": "${productName}",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "deb": {
       "packageCategory": "net",
