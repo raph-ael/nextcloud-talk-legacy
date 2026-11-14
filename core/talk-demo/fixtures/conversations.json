@@ -13,6 +13,7 @@
       "avatar": "avatars/garten.png",
       "owner": "jonas",
       "members": ["jonas", "mira", "lena", "clara"],
+      "favorite": true,
       "unread": 5,
       "messages": [
         { "at": "-6 17:20", "from": "jonas", "system": "conversation_created" },
@@ -74,7 +75,6 @@
       "avatar": "avatars/familie.png",
       "owner": "mira",
       "members": ["mira", "hilde", "paul", "emil"],
-      "favorite": true,
       "unread": 2,
       "messages": [
         { "at": "-9 20:15", "from": "mira", "system": "conversation_created" },
