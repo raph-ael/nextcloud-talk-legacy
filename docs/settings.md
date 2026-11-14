@@ -163,7 +163,7 @@ Es öffnet sich am Desktop per Rechtsklick auf einen Chat in der Liste, mit der 
 
 **„Kategorie ›“:**
 - Darin stehen alle Kategorien mit `kind == "custom"` aus `categories()` in ihrer Reihenfolge, mit Häkchen, wenn ihre id in `tagIds` des Chats steht.
-- Ein Klick schaltet die Kategorie um: `setRoomCategories(token, neue Liste)`. Das Menü bleibt dabei offen.
+- Ein Klick schaltet die Kategorie um: `setRoomCategories(token, neue Liste)`. Das Menü bleibt dabei offen (Ausnahme iOS, siehe unten).
 - Danach kommt ein Trenner und **„Neue Kategorie …“**: Ein Namensfeld wie auf der Seite „Kategorien“ fragt den Namen ab, dann wird die Kategorie mit `createCategory(name, [token])` angelegt.
 - Ohne eigene Kategorien steht dort nur „Neue Kategorie …“.
 
@@ -184,6 +184,7 @@ Es öffnet sich am Desktop per Rechtsklick auf einen Chat in der Liste, mit der 
 - **iOS:**
   - `.contextMenu` an der Zeile.
   - „Kategorie“ ist ein verschachteltes `Menu` mit Toggles, „Benachrichtigungen“ ein `Picker` als Menü.
+  - Anders als am Desktop schließt das Menü nach einem Kategorie-Haken. iOS zeichnet ein offenes Menü nicht neu, der Haken wäre sonst erst beim nächsten Öffnen zu sehen.
   - „Neue Kategorie …“ öffnet einen Alert mit Textfeld.
 
 ## Stummgeschaltete Chats in der Liste
