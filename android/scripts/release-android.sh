@@ -88,8 +88,9 @@ done
 # --- stage -------------------------------------------------------------------------------------
 mkdir -p "$STAGE"
 # Mirror what is published (nothing yet on the very first release).
-if [ "$DRY_RUN" != 1 ] && ssh "$HOST" test -d "$REMOTE/android"; then
-  rsync -a --delete "$HOST:$REMOTE/android/" "$STAGE/"
+if [ "$DRY_RUN" != 1 ]; then
+  # Nothing published yet: start empty, not with leftovers of a dry run.
+  if ssh "$HOST" test -d "$REMOTE/android"; then rsync -a --delete "$HOST:$REMOTE/android/" "$STAGE/"; else find "$STAGE" -mindepth 1 -delete; fi
 fi
 for name in "${!APKS[@]}"; do cp "${APKS[$name]}" "$STAGE/$name"; done
 ln -sfn "wolkenfunk-$VERSION.apk" "$STAGE/wolkenfunk.apk"

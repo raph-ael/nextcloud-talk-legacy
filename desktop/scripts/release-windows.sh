@@ -70,8 +70,9 @@ grep -q "path: $EXE" "$YML" && grep -q "sha512: $SHA512" "$YML" || { echo "$YML 
 # --- Stage -------------------------------------------------------------------------------
 OUT="$STAGE/windows"
 mkdir -p "$OUT"
-if [ "$DRY_RUN" != 1 ] && ssh "$HOST" test -d "$REMOTE/windows"; then
-  rsync -a --delete "$HOST:$REMOTE/windows/" "$OUT/"
+if [ "$DRY_RUN" != 1 ]; then
+  # Nothing published yet: start empty, not with leftovers of a dry run.
+  if ssh "$HOST" test -d "$REMOTE/windows"; then rsync -a --delete "$HOST:$REMOTE/windows/" "$OUT/"; else find "$OUT" -mindepth 1 -delete; fi
 fi
 if [ -e "$OUT/$EXE" ] && [ "$DRY_RUN" != 1 ]; then
   echo "$VERSION is already published" >&2; exit 1

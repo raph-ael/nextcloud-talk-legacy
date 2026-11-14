@@ -34,7 +34,8 @@ mkdir -p "$STAGE"
 if [ "${DRY_RUN:-0}" != 1 ]; then
   for d in "${DIRS[@]}"; do
     mkdir -p "$STAGE/$d"
-    if ssh "$HOST" test -d "$REMOTE/$d"; then rsync -a --delete "$HOST:$REMOTE/$d/" "$STAGE/$d/"; fi
+    # Nothing published yet: start empty, not with leftovers of a dry run.
+    if ssh "$HOST" test -d "$REMOTE/$d"; then rsync -a --delete "$HOST:$REMOTE/$d/" "$STAGE/$d/"; else find "$STAGE/$d" -mindepth 1 -delete; fi
   done
 fi
 

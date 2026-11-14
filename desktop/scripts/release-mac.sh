@@ -42,8 +42,9 @@ rsync -a "$MAC_HOST:$MAC_DIR/desktop/dist/$DMG" "dist/$DMG"
 
 # Mirror the published folder (this script touches mac/ only), so the older versions stay.
 mkdir -p "$STAGE"
-if [ "${DRY_RUN:-0}" != 1 ] && ssh "$HOST" test -d "$REMOTE/mac"; then
-  rsync -a --delete "$HOST:$REMOTE/mac/" "$STAGE/"
+if [ "${DRY_RUN:-0}" != 1 ]; then
+  # Nothing published yet: start empty, not with leftovers of a dry run.
+  if ssh "$HOST" test -d "$REMOTE/mac"; then rsync -a --delete "$HOST:$REMOTE/mac/" "$STAGE/"; else find "$STAGE" -mindepth 1 -delete; fi
 fi
 if [ -e "$STAGE/$DMG" ] && ! cmp -s "$STAGE/$DMG" "dist/$DMG"; then
   echo "$DMG is already published with different content; set a new version" >&2
