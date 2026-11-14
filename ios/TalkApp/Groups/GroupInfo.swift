@@ -126,7 +126,7 @@ struct GroupInfoView: View {
     ]
 
     private func notifications(_ room: RoomView) -> some View {
-        let current = room.notificationLevel == 0 ? 1 : room.notificationLevel
+        let current = room.notificationLevel
         let label = Self.levels.first { $0.level == current }?.label ?? "Alle Nachrichten"
         return Menu {
             Picker("Benachrichtigungen", selection: Binding(

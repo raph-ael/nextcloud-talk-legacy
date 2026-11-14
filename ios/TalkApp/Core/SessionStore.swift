@@ -68,6 +68,8 @@ final class SessionStore {
     private(set) var phase: SessionPhase = .loading
     private(set) var server = ""
     private(set) var user = ""
+    /// Our user id (own avatar in the settings).
+    private(set) var userId = ""
     private(set) var rooms: [RoomView] = []
     /// Bumped on every `RoomsChanged`: a collapsed section leaves `rooms` equal, and
     /// Observation skips equal assignments, so the sections read this instead.
@@ -81,6 +83,10 @@ final class SessionStore {
     @ObservationIgnored private var chatAtBottom = true
     /// The group settings of the active chat are pushed on top of it (docs/groups.md).
     private(set) var groupInfoOpen = false
+    /// Pages pushed on the conversation list while no chat is open: the settings
+    /// (docs/settings.md) and group settings opened from the chat menu. Opening a chat
+    /// replaces them.
+    var listPath: [Route] = []
     /// Bumped per conversation on `participantsChanged`: open member lists reload.
     private(set) var participantsVersion: [String: Int] = [:]
     /// Finished call recordings (and transcripts, summaries) waiting for "teilen"/"verwerfen".
@@ -197,6 +203,7 @@ final class SessionStore {
         s.setMediaEngine(media: callMedia)
         server = saved.server
         user = saved.loginName
+        userId = s.userId()
         // Cached conversation list: shown in the first frame, before any request.
         rooms = s.rooms()
         recordings = s.recordingNotices()
@@ -243,10 +250,12 @@ final class SessionStore {
         chats = [:]
         activeToken = nil
         groupInfoOpen = false
+        listPath = []
         participantsVersion = [:]
         leaving = []
         server = ""
         user = ""
+        userId = ""
         online = true
         phase = .loggedOut
         Notifications.setBadge(0)
@@ -270,6 +279,10 @@ final class SessionStore {
             }
             self.rooms = rooms
             roomsEvents &+= 1
+            // Group settings from the chat menu of a group that is gone.
+            if let i = listPath.firstIndex(where: { if case .groupInfo(let t) = $0 { !rooms.contains { $0.token == t } } else { false } }) {
+                listPath.removeSubrange(i...)
+            }
             if let gone {
                 // Removed, deleted or left: chat and settings close (docs/groups.md).
                 closeRoom()
@@ -277,7 +290,7 @@ final class SessionStore {
                     Toast.show("Du bist nicht mehr in dieser Gruppe")
                 }
             }
-            Notifications.setBadge(rooms.filter { !$0.isArchived }.reduce(0) { $0 + Int($1.unreadMessages) })
+            Notifications.setBadge(rooms.reduce(0) { $0 + Self.badgeCount($1) })
         case .messagesAdded(let token, let messages):
             media.adoptLocalPreviews(messages)
             if token == activeToken { countUnread(token, messages) }
@@ -420,6 +433,7 @@ final class SessionStore {
         chats[token] = chat
         activeToken = token
         groupInfoOpen = false
+        listPath = []
         voice.loadDraft(token)
         Task {
             do {
@@ -620,6 +634,47 @@ final class SessionStore {
     func toggleSection(_ id: String) {
         guard let s = session else { return }
         Task { if let err = await s.toggleSection(id: id) { Toast.show(err) } }
+    }
+
+    // MARK: - Chat menu (docs/settings.md)
+
+    /// Unread messages a chat adds to the app badge: all at "Alle Nachrichten", at "Nur
+    /// Erwähnungen" only with a mention, none at "Aus" or when archived.
+    static func badgeCount(_ r: RoomView) -> Int {
+        guard !r.isArchived else { return 0 }
+        switch r.notificationLevel {
+        case 3: return 0
+        case 2: return r.unreadMention ? Int(r.unreadMessages) : 0
+        default: return Int(r.unreadMessages)
+        }
+    }
+
+    var categoriesSupported: Bool { session?.categoriesSupported() ?? false }
+
+    /// Own categories in their order (read with `roomsEvents`, so menus stay current).
+    func customCategories() -> [CategoryView] {
+        _ = roomsEvents
+        return session?.categories().filter { $0.kind == "custom" } ?? []
+    }
+
+    /// Runs a chat-menu change; the core's error text becomes a toast.
+    func menuChange(_ f: @escaping (TalkSession) async -> String?) {
+        guard let s = session else { return }
+        Task { if let error = await f(s) { Toast.show(error) } }
+    }
+
+    func createCategory(_ name: String, with token: String) {
+        guard let s = session else { return }
+        Task {
+            let r = await s.createCategory(name: name, tokens: [token])
+            if let error = r.error { Toast.show(error) }
+        }
+    }
+
+    /// "Gruppeneinstellungen" from the chat menu: pushed on the list, the chat stays closed.
+    func openGroupSettings(_ token: String) {
+        closeRoom()
+        listPath = [.groupInfo(token)]
     }
 
     // MARK: - Groups (docs/groups.md)

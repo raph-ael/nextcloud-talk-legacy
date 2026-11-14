@@ -6,6 +6,7 @@ struct TalkLegacyApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.scenePhase) private var scenePhase
     private var store: SessionStore { .shared }
+    private var appearance: Appearance { .shared }
 
     init() {
         // Before the store starts a session (it may schedule the outbox task right away).
@@ -26,7 +27,11 @@ struct TalkLegacyApp: App {
                     RootView(store: store)
                 }
             }
+            // Design and accent (docs/settings.md "Darstellung"); the windows get the same
+            // style, so sheets and alerts follow at once.
             .tint(Talk.accent)
+            .preferredColorScheme(appearance.colorScheme)
+            .onAppear { appearance.applyToWindows() }
         }
         .onChange(of: scenePhase) { _, phase in
             store.foreground = phase == .active
@@ -51,21 +56,30 @@ struct TalkLegacyApp: App {
 enum Route: Hashable {
     case chat(String)
     case groupInfo(String)
+    /// "Einstellungen" and its pages (docs/settings.md).
+    case settings
+    case settingsPage(SettingsPage)
 }
 
 /// Conversation list with the open chat (and its group settings) pushed on top; the store's
 /// active token is the single source of truth (notification taps open a chat the same way).
+/// Without an open chat the store's `listPath` holds the settings or group settings opened
+/// from the chat menu.
 struct RootView: View {
     @Bindable var store: SessionStore
 
     private var path: Binding<[Route]> {
         Binding(
             get: {
-                guard let token = store.activeToken else { return [] }
+                guard let token = store.activeToken else { return store.listPath }
                 return store.groupInfoOpen ? [.chat(token), .groupInfo(token)] : [.chat(token)]
             },
             set: { new in
-                guard case .chat(let token)? = new.first else { return store.closeRoom() }
+                guard case .chat(let token)? = new.first else {
+                    store.closeRoom()
+                    store.listPath = new
+                    return
+                }
                 store.openRoom(token)
                 store.showGroupInfo(new.count > 1)
             }
@@ -79,6 +93,8 @@ struct RootView: View {
                     switch route {
                     case .chat(let token): ChatView(store: store, token: token)
                     case .groupInfo(let token): GroupInfoView(store: store, token: token)
+                    case .settings: SettingsView(store: store)
+                    case .settingsPage(let page): page.view(store: store)
                     }
                 }
         }

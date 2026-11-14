@@ -3,8 +3,14 @@ import UIKit
 
 /// Design tokens shared with Android (`ui/Theme.kt`) and desktop (`styles.css`).
 enum Talk {
-    static let accent = dynamic(light: 0x2C6BED, dark: 0x3B78F0)
-    static let bubbleOwn = accent
+    /// The chosen accent colour (docs/settings.md "Darstellung"); reading it in a view body
+    /// makes the view follow changes.
+    @MainActor static var accent: Color {
+        let a = Appearance.shared.accent
+        return dynamic(light: a.light.accent, dark: a.dark.accent)
+    }
+    /// Own bubble: the same in both modes (white text stays readable).
+    @MainActor static var bubbleOwn: Color { Color(hex: Appearance.shared.accent.light.bubble) }
     static let bubbleOwnText = Color.white
     static let bubbleOther = dynamic(light: 0xE9E9EB, dark: 0x2C2C2E)
     static let bubbleOtherText = dynamic(light: 0x1B1B1D, dark: 0xE9E9EB)

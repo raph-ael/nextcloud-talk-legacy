@@ -6,8 +6,10 @@ import SwiftUI
 struct RoomListView: View {
     @Bindable var store: SessionStore
     @State private var query = ""
-    @State private var confirmLogout = false
     @State private var newMessage = false
+    /// Chat for which "Neue Kategorie …" asks the name.
+    @State private var newCategoryFor: String?
+    @State private var categoryName = ""
 
     var body: some View {
         // Sections from the core (docs/categories.md): filtered, collapsed ones reduced.
@@ -55,16 +57,12 @@ struct RoomListView: View {
         .navigationTitle("Chats")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Section {
-                        Text(store.user)
-                        Text(store.server.replacingOccurrences(of: "https://", with: ""))
-                    }
-                    Button("Abmelden", role: .destructive) { confirmLogout = true }
-                } label: {
-                    Avatar(name: store.user, size: 32)
+                // Own avatar: opens the settings (docs/settings.md).
+                Button { store.listPath = [.settings] } label: {
+                    PersonAvatar(name: store.user, userId: store.userId, size: 32)
                 }
-                .accessibilityLabel("Konto")
+                .accessibilityLabel("Einstellungen")
+                .accessibilityIdentifier("settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { newMessage = true } label: { Image(systemName: "square.and.pencil") }
@@ -73,10 +71,17 @@ struct RoomListView: View {
             }
         }
         .sheet(isPresented: $newMessage) { NewMessageSheet(store: store) }
-        .confirmationDialog("Abmelden?", isPresented: $confirmLogout, titleVisibility: .visible) {
-            Button("Abmelden", role: .destructive) { store.logout() }
-        } message: {
-            Text("Ungesendete Nachrichten und der Offline-Speicher werden gelöscht.")
+        .alert("Neue Kategorie", isPresented: Binding(
+            get: { newCategoryFor != nil },
+            set: { if !$0 { newCategoryFor = nil } }
+        )) {
+            TextField("Name", text: $categoryName)
+            Button("Abbrechen", role: .cancel) {}
+            Button("Anlegen") {
+                let name = categoryName.trimmingCharacters(in: .whitespaces)
+                if let token = newCategoryFor, !name.isEmpty { store.createCategory(name, with: token) }
+            }
+            .disabled(categoryName.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
 
@@ -95,6 +100,13 @@ struct RoomListView: View {
         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         .listRowBackground(Talk.background)
         .listRowSeparator(.hidden)
+        // Chat menu (docs/settings.md); VoiceOver offers it as an action of the row.
+        .contextMenu {
+            ChatMenu(store: store, room: room) { token in
+                categoryName = ""
+                newCategoryFor = token
+            }
+        }
         .accessibilityIdentifier("room:\(room.name)")
     }
 }
@@ -159,10 +171,18 @@ private struct RoomRow: View {
             Avatar(name: room.name, size: 48, token: room.token, version: room.avatarVersion)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(room.name)
-                        .font(.system(size: 16))
-                        .foregroundStyle(Talk.onSurface)
-                        .lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(room.name)
+                            .font(.system(size: 16))
+                            .foregroundStyle(Talk.onSurface)
+                            .lineLimit(1)
+                        if muted {
+                            Image(systemName: "bell.slash.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Talk.muted)
+                                .accessibilityLabel("stummgeschaltet")
+                        }
+                    }
                     Spacer(minLength: 0)
                     Text(Format.listTime(room.lastActivity, now: now))
                         .font(.system(size: 14, weight: unread ? .bold : .regular))
@@ -179,13 +199,19 @@ private struct RoomRow: View {
                         Circle().fill(Talk.callDot).frame(width: 8, height: 8).padding(.top, 6)
                     }
                     if room.unreadMention { Badge(text: "@") }
-                    if unread { Badge(text: room.unreadMessages > 99 ? "99+" : "\(room.unreadMessages)") }
+                    if unread { Badge(text: room.unreadMessages > 99 ? "99+" : "\(room.unreadMessages)", quiet: quiet) }
                 }
             }
         }
         .frame(minHeight: 84)
         .contentShape(Rectangle())
     }
+
+    /// Notifications "Aus": crossed-out bell after the name.
+    private var muted: Bool { room.notificationLevel == 3 }
+
+    /// The count is grey at "Aus", and at "Nur Erwähnungen" unless we were mentioned.
+    private var quiet: Bool { muted || (room.notificationLevel == 2 && !room.unreadMention) }
 
     private var preview: Text {
         guard let last = room.lastMessage else { return Text("") }
@@ -200,6 +226,8 @@ private struct RoomRow: View {
 
 private struct Badge: View {
     let text: String
+    /// Grey instead of the accent (muted chats).
+    var quiet = false
 
     var body: some View {
         Text(text)
@@ -207,7 +235,7 @@ private struct Badge: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
             .frame(minWidth: 22, minHeight: 22)
-            .background(Talk.accent, in: Capsule())
+            .background(quiet ? Talk.muted : Talk.accent, in: Capsule())
             .padding(.top, 2)
     }
 }

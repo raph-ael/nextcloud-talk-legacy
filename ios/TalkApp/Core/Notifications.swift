@@ -96,6 +96,7 @@ extension Toast {
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
         if let window, window.windowScene === scene { return }
         let w = PassThrough(windowScene: scene)
+        Appearance.shared.style(w)
         w.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
         let host = UIHostingController(rootView: ToastOverlay())
         host.view.backgroundColor = .clear

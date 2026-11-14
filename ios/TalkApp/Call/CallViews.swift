@@ -18,7 +18,7 @@ final class CallWindow {
                 .compactMap({ $0 as? UIWindowScene })
                 .first(where: { $0.activationState == .foregroundActive }) ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
             else { return }
-            let w = UIWindow(windowScene: scene)
+            let w = CallUIWindow(windowScene: scene)
             w.windowLevel = .normal + 1
             let host = UIHostingController(rootView: CallRootView())
             host.view.backgroundColor = .clear

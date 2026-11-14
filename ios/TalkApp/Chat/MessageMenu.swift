@@ -31,6 +31,7 @@ final class MessageMenuWindow {
         close()
         guard let scene = activeScene else { return }
         let w = UIWindow(windowScene: scene)
+        Appearance.shared.style(w)
         w.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 0.5)
         let host = UIHostingController(rootView: content)
         host.view.backgroundColor = .clear
