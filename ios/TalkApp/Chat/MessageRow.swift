@@ -124,7 +124,7 @@ struct Bubble: View {
             if own { Spacer(minLength: 48) }
             if isGroup && !own {
                 ZStack {
-                    if last { Avatar(name: msg.author, size: 28) }
+                    if last { PersonAvatar(name: msg.author, userId: msg.actorType == "users" ? msg.actorId : "", size: 28) }
                 }
                 .frame(width: 36, alignment: .leading)
             }

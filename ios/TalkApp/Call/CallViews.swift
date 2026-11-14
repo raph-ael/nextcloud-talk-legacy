@@ -510,19 +510,30 @@ struct LocalPreview: View {
     }
 }
 
-/// Avatars of call participants (users, not rooms), cached while the app runs.
+/// Avatars of users (not rooms): call participants, chat authors, reactions. Cached while the
+/// app runs; rows of the same author share one request.
 @MainActor
 final class CallAvatars {
     static let shared = CallAvatars()
     private var cache: [String: UIImage] = [:]
+    private var loading: [String: Task<UIImage?, Never>] = [:]
+
+    /// Already loaded: shown in the first frame, without the initials flashing.
+    func cached(_ userId: String, dark: Bool) -> UIImage? { cache["\(userId)|\(dark)"] }
 
     func image(_ userId: String, dark: Bool) async -> UIImage? {
         let key = "\(userId)|\(dark)"
         if let hit = cache[key] { return hit }
-        guard let s = SessionStore.shared.session,
-              let data = try? await s.userAvatar(userId: userId, dark: dark),
-              let img = UIImage(data: data) else { return nil }
-        cache[key] = img
+        if let running = loading[key] { return await running.value }
+        let task = Task<UIImage?, Never> {
+            guard let s = SessionStore.shared.session,
+                  let data = try? await s.userAvatar(userId: userId, dark: dark) else { return nil }
+            return UIImage(data: data)
+        }
+        loading[key] = task
+        let img = await task.value
+        loading[key] = nil
+        if let img { cache[key] = img }
         return img
     }
 }

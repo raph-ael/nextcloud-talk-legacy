@@ -312,7 +312,7 @@ struct PersonAvatar: View {
 
     var body: some View {
         ZStack {
-            if let image {
+            if let image = image ?? (userId.isEmpty ? nil : CallAvatars.shared.cached(userId, dark: scheme == .dark)) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 Format.color(for: name)
@@ -323,7 +323,7 @@ struct PersonAvatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .task(id: userId) {
+        .task(id: "\(userId)|\(scheme == .dark)") {
             guard !userId.isEmpty else { return }
             image = await CallAvatars.shared.image(userId, dark: scheme == .dark)
         }
