@@ -5,6 +5,7 @@ Die Bilder für die Webseite und die Stores entstehen gegen den Demo-Server `cor
 ```
 scripts/screenshots/demo-server.sh start      # baut und startet talk-demo auf :8099
 scripts/screenshots/desktop.sh                # Linux-Desktop (Electron, CDP)
+scripts/screenshots/mac.sh                    # macOS-Fenster mit Rahmen (vom Linux-Rechner aus, startet den Server auf dem Mac selbst)
 scripts/screenshots/android.sh                # Emulator
 scripts/screenshots/ios.sh                    # auf dem Mac-Host: Simulator
 scripts/screenshots/demo-server.sh stop
@@ -34,5 +35,6 @@ Jede Szene gibt es `hell` und `dunkel`.
 - Für AppStream bzw. Flathub braucht es zusätzlich `website/public/screenshots/desktop-chat.png`.
 - **Feste Größen:**
   - Desktop: Fenster 1280×800 bei Faktor 1.
+  - macOS: genau das Fenster mit Titelleiste, 1280×800, ohne Schatten, runde Ecken transparent. Die Webseite nutzt nur `chats`.
   - Android: Emulator Pixel, 1080×2400, Statusleiste im Demo-Modus mit 9:41.
   - iOS: iPhone 16 Pro, Statusleiste per `simctl status_bar override` auf 9:41.
