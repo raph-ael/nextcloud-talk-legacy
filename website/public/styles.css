@@ -187,6 +187,9 @@ a.button.outline:hover { background: var(--surface); }
 .platform-shot img { border-radius: 8px; border: 1px solid var(--border); }
 .platform-shot.wide { max-width: 280px; }
 .platform-shot.phone { max-width: 110px; }
+/* Mac-Bilder enthalten den Fensterrahmen mit transparenten Ecken: kein eigener Rahmen,
+   Schatten folgt der Form. */
+.platform-shot.mac img { border: 0; border-radius: 0; filter: drop-shadow(0 4px 10px rgb(5 20 60 / 0.18)); }
 .platform-shot.phone img { border-radius: 12px; border: 3px solid #0B1220; }
 @media (min-width: 640px) {
   .platform-shot { float: right; margin: 4px 0 12px 24px; }
