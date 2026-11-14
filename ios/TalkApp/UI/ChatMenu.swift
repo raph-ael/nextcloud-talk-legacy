@@ -29,8 +29,8 @@ struct ChatMenu: View {
         }
     }
 
-    /// Own categories with a tick each (the menu stays open while ticking), then
-    /// "Neue Kategorie …".
+    /// Own categories with a tick each, then "Neue Kategorie …". A tick closes the menu:
+    /// iOS does not redraw an open menu, so the tick would only show on the next opening.
     private var categories: some View {
         Menu {
             let custom = store.customCategories()
@@ -39,7 +39,6 @@ struct ChatMenu: View {
                     get: { (store.room(token) ?? room).tagIds.contains(c.id) },
                     set: { on in toggle(c.id, on: on, custom: custom.map(\.id)) }
                 ))
-                .menuActionDismissBehavior(.disabled)
             }
             if !custom.isEmpty { Divider() }
             Button("Neue Kategorie …", systemImage: "plus") { onNewCategory(token) }
@@ -49,7 +48,7 @@ struct ChatMenu: View {
     }
 
     private func toggle(_ id: String, on: Bool, custom: [String]) {
-        // From the current list: the menu may stay open across several ticks.
+        // From the current list, not the one captured when the menu opened.
         var ids = (store.room(token) ?? room).tagIds.filter { custom.contains($0) && $0 != id }
         if on { ids.append(id) }
         store.menuChange { await $0.setRoomCategories(token: token, ids: ids) }

@@ -193,16 +193,16 @@ final class SettingsMenuTests: XCTestCase {
         menu("Lesekreis")
         XCTAssertTrue(app.buttons["Zu Favoriten hinzufügen"].exists, "still a favorite")
 
-        // Kategorie: ticks keep the menu open.
+        // Kategorie: a tick closes the menu; it shows on the next opening.
         app.buttons["Kategorie"].tap()
         XCTAssertTrue(app.buttons["Neue Kategorie …"].waitForExistence(timeout: 3))
         XCTAssertTrue(catItem("Familie & Freunde").exists && catItem("Arbeit").exists)
         XCTAssertFalse(catItem("Arbeit").isSelected)
+        shot("chatmenue-kategorie")
         catItem("Arbeit").tap()
         sleep(2)
-        XCTAssertTrue(app.buttons["Neue Kategorie …"].exists, "menu closed after a tick")
-        shot("chatmenue-kategorie")
-        closeMenu()
+        XCTAssertFalse(app.buttons["Neue Kategorie …"].exists, "menu still open after a tick")
+        XCTAssertTrue(app.buttons["settings"].isHittable)
         menu("Lesekreis")
         app.buttons["Kategorie"].tap()
         XCTAssertTrue(catItem("Arbeit").waitForExistence(timeout: 3))
