@@ -1,5 +1,7 @@
 # Linux-Pakete
 
+Der Gesamtablauf eines Releases für alle Plattformen steht in [docs/release.md](../../docs/release.md).
+
 Drei Wege zu Wolkenfunk unter Linux, alle mit automatischen Updates:
 
 | Kanal | Für wen | Updates | Quelle |
