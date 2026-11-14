@@ -159,6 +159,7 @@
       "token": "sommerfest",
       "type": "group",
       "name": "Sommerfest",
+      "notify": 3,
       "description": "Nachbarschaftsfest im Hof 🎈",
       "avatar": "avatars/sommerfest.png",
       "owner": "lena",

@@ -176,7 +176,8 @@ pub struct RoomView {
     /// The user may react to messages (docs/chat.md „Reaktionen“).
     pub can_react: bool,
     pub has_call: bool,
-    /// 0 default, 1 always, 2 mentions only, 3 never.
+    /// 1 always, 2 mentions only, 3 never (the server default is resolved: 1 in
+    /// one-to-one chats, 2 in groups).
     pub notification_level: u8,
     pub avatar_version: String,
     /// A picture was set (it can be removed). docs/groups.md
@@ -326,6 +327,35 @@ impl From<core::SectionView> for SectionView {
             total: s.total,
         }
     }
+}
+
+/// A category for the chat menu "Kategorie" (docs/settings.md, docs/categories.md).
+#[derive(uniffi::Record)]
+pub struct CategoryView {
+    pub id: String,
+    /// `favorites`, `custom` or `other`; the chat menu lists only `custom` ones.
+    pub kind: String,
+    pub name: String,
+    /// Chats in it (not archived).
+    pub room_count: u32,
+    pub collapsed: bool,
+}
+
+impl From<core::CategoryView> for CategoryView {
+    fn from(c: core::CategoryView) -> Self {
+        Self { id: c.id, kind: c.kind, name: c.name, room_count: c.room_count, collapsed: c.collapsed }
+    }
+}
+
+/// `create_category`: the new `id`, or a German `error` text.
+#[derive(uniffi::Record)]
+pub struct CreateCategoryResult {
+    pub id: Option<String>,
+    pub error: Option<String>,
+}
+
+fn cat_err(r: core::Result<()>, op: core::CategoryOp) -> Option<String> {
+    r.err().map(|e| core::category_error_text(op, &e))
 }
 
 /// Result of opening or creating a conversation: its `token`, or a German `error` text.
@@ -832,6 +862,44 @@ impl TalkSession {
             .map(|e| core::category_error_text(core::CategoryOp::Collapse, &e))
     }
 
+    /// The server keeps categories: offer "Kategorie" in the chat menu.
+    pub fn categories_supported(&self) -> bool {
+        self.engine.categories_supported()
+    }
+
+    /// All categories in order, built-in "Favoriten" and "Chats" included.
+    pub fn categories(&self) -> Vec<CategoryView> {
+        self.engine.categories().into_iter().map(Into::into).collect()
+    }
+
+    /// "Neue Kategorie …" from the chat menu: created with these chats in it.
+    pub async fn create_category(&self, name: String, tokens: Vec<String>) -> CreateCategoryResult {
+        match self.engine.create_category(&name, &tokens).await {
+            Ok(id) => CreateCategoryResult { id: Some(id), error: None },
+            Err(e) => CreateCategoryResult {
+                id: None,
+                error: Some(core::category_error_text(core::CategoryOp::Create, &e)),
+            },
+        }
+    }
+
+    // --- chat menu (docs/settings.md); changes return a German error text or `None` ---
+
+    /// The chat is in exactly these own categories afterwards.
+    pub async fn set_room_categories(&self, token: String, ids: Vec<String>) -> Option<String> {
+        cat_err(self.engine.set_room_categories(&token, &ids).await, core::CategoryOp::Assign)
+    }
+
+    /// Shows at once (`RoomsChanged`); taken back on failure.
+    pub async fn set_favorite(&self, token: String, on: bool) -> Option<String> {
+        cat_err(self.engine.set_favorite(&token, on).await, core::CategoryOp::Favorite)
+    }
+
+    /// "Als gelesen markieren": read marker on the newest message.
+    pub async fn mark_room_read(&self, token: String) -> Option<String> {
+        cat_err(self.engine.mark_room_read(&token).await, core::CategoryOp::MarkRead)
+    }
+
     // --- groups (docs/groups.md); changes return a German error text or `None` -------
 
     /// Whether "Neue Gruppe" is offered.
@@ -893,7 +961,7 @@ impl TalkSession {
         self.engine.group_link(&token)
     }
 
-    /// 1 all messages, 2 mentions only, 3 off.
+    /// 1 all messages, 2 mentions only, 3 off (chat menu and group settings).
     pub async fn set_notification_level(&self, token: String, level: u8) -> Option<String> {
         group_err(self.engine.set_notification_level(&token, level).await, core::GroupOp::Mute)
     }

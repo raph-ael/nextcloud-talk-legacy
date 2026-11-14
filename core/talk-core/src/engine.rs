@@ -172,7 +172,8 @@ pub struct RoomView {
     /// The user may react to messages (see docs/chat.md „Reaktionen“).
     pub can_react: bool,
     pub has_call: bool,
-    /// 0 default, 1 always, 2 mentions only, 3 never.
+    /// 1 always, 2 mentions only, 3 never. The server default (0) is resolved: 1 in
+    /// one-to-one chats, 2 in groups (docs/settings.md).
     pub notification_level: u8,
     /// Changes whenever the avatar changes: use it as cache key.
     pub avatar_version: String,
@@ -503,6 +504,24 @@ impl Engine {
     /// Sends the current list again (e.g. after a category change).
     pub(crate) fn emit_rooms(&self) {
         self.sink.emit(Event::RoomsChanged { rooms: self.rooms() });
+    }
+
+    /// Changes a cached conversation locally (optimistic UI). `edit` returns whether
+    /// anything changed; only then the cache is written and `RoomsChanged` sent.
+    pub(crate) fn edit_room(&self, token: &str, edit: impl FnOnce(&mut Room) -> bool) -> Result<bool> {
+        let rooms = {
+            let mut st = self.state.lock().unwrap();
+            let Some(r) = st.rooms.get_mut(token) else {
+                return Err(Error::NotFound);
+            };
+            if !edit(r) {
+                return Ok(false);
+            }
+            self.cache.put_rooms(vec![r.clone()], false);
+            self.sorted_views(&st.rooms)
+        };
+        self.sink.emit(Event::RoomsChanged { rooms });
+        Ok(true)
     }
 
     pub(crate) fn state_room(&self, token: &str) -> Option<Room> {
@@ -961,6 +980,15 @@ impl Engine {
         self.guard(self.client.set_read_marker(token, message_id).await)
     }
 
+    /// "Als gelesen markieren" from the chat list: read marker on the newest message.
+    pub async fn mark_room_read(&self, token: &str) -> Result<()> {
+        let Some(room) = self.state_room(token) else {
+            return Err(Error::NotFound);
+        };
+        let newest = room.last_message.as_ref().map_or(room.last_read_message, |m| m.id);
+        self.mark_read(token, newest).await
+    }
+
     /// Signs out on the server; call `shutdown` afterwards.
     pub async fn logout(&self) -> Result<()> {
         self.shutdown();
@@ -1194,7 +1222,7 @@ impl Engine {
             can_react: r.read_only == 0
                 && (r.permissions == 0 || r.permissions & self.react_bit.load(Ordering::Relaxed) != 0),
             has_call: r.has_call,
-            notification_level: r.notification_level,
+            notification_level: effective_notification_level(r.notification_level, r.room_type),
             avatar_version: r.avatar_version.clone(),
             has_custom_avatar: r.is_custom_avatar,
             is_moderator: matches!(r.participant_type, 1 | 2 | 6),
@@ -1380,9 +1408,29 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
     }
 }
 
+/// The level that applies: Talk's default (0) means always in one-to-one chats (and the
+/// note to self) and mentions only in groups.
+pub(crate) fn effective_notification_level(level: u8, room_type: RoomType) -> u8 {
+    match (level, room_type) {
+        (1..=3, _) => level,
+        (_, RoomType::OneToOne | RoomType::FormerOneToOne | RoomType::NoteToSelf) => 1,
+        _ => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_notification_level_is_resolved() {
+        assert_eq!(effective_notification_level(0, RoomType::OneToOne), 1);
+        assert_eq!(effective_notification_level(0, RoomType::NoteToSelf), 1);
+        assert_eq!(effective_notification_level(0, RoomType::Group), 2);
+        assert_eq!(effective_notification_level(0, RoomType::Public), 2);
+        assert_eq!(effective_notification_level(3, RoomType::OneToOne), 3);
+        assert_eq!(effective_notification_level(1, RoomType::Group), 1);
+    }
 
     #[test]
     fn preview_strips_markdown() {

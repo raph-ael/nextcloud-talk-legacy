@@ -1,0 +1,16 @@
+{
+  "_hinweis": "Quelle der Akzentfarben (docs/settings.md). Nach jeder Änderung: python3 design/theme/build-theme.py. Das Skript prüft den Kontrast und schreibt die Dateien für Desktop, Android und iOS. hover und bubble sind optional: ohne Angabe wird hover abgeleitet (hell 12 % dunkler, dunkel 12 % heller) und die eigene Blase nimmt in beiden Modi den hellen Akzent.",
+  "default": "blau",
+  "accents": [
+    { "id": "blau", "name": "Blau", "light": "#2C6BED", "dark": "#3B78F0", "hoverLight": "#1F5BD6", "hoverDark": "#5189F3", "bubble": "#2267F5" },
+    { "id": "indigo", "name": "Indigo", "light": "#6060DA", "dark": "#6B6BDC" },
+    { "id": "violett", "name": "Violett", "light": "#8D4ED6", "dark": "#965BD9" },
+    { "id": "pink", "name": "Pink", "light": "#CF257A", "dark": "#DB3186" },
+    { "id": "rot", "name": "Rot", "light": "#D42B25", "dark": "#DC3E39" },
+    { "id": "orange", "name": "Orange", "light": "#BE4A0F", "dark": "#CE5011" },
+    { "id": "bernstein", "name": "Bernstein", "light": "#9F6104", "dark": "#AD6904" },
+    { "id": "gruen", "name": "Grün", "light": "#1E7F47", "dark": "#20894C" },
+    { "id": "petrol", "name": "Petrol", "light": "#0B7B84", "dark": "#0C858E" },
+    { "id": "schiefer", "name": "Schiefergrau", "light": "#5D708C", "dark": "#657A98" }
+  ]
+}

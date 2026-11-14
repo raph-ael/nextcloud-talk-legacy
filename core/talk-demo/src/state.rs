@@ -229,6 +229,9 @@ struct RoomFx {
     members: Vec<String>,
     #[serde(default)]
     favorite: bool,
+    /// 0 server default, 1 always, 2 mentions only, 3 off ("Aus" in the chat list).
+    #[serde(default)]
+    notify: u8,
     #[serde(default)]
     unread: usize,
     messages: Vec<MsgFx>,
@@ -440,7 +443,7 @@ impl State {
             members,
             favorite: fx.favorite,
             archived: false,
-            notification_level: 0,
+            notification_level: fx.notify,
             tag_ids: categories
                 .iter()
                 .filter(|c| c.rooms.contains(&fx.token))

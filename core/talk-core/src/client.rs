@@ -984,6 +984,14 @@ impl TalkClient {
         Ok(self.ocs(rb).await?.0)
     }
 
+    /// Favorite on (`POST`) or off (`DELETE`).
+    pub async fn set_favorite(&self, token: &str, on: bool) -> Result<()> {
+        let method = if on { Method::POST } else { Method::DELETE };
+        let rb = self.request(method, &format!("{SPREED}/v4/room/{token}/favorite"));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
     /// Replaces the categories of one conversation (empty: none); returns the conversation.
     pub async fn set_room_tags(&self, token: &str, tag_ids: &[String]) -> Result<Room> {
         let rb = self

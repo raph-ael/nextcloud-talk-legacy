@@ -363,6 +363,26 @@ impl TalkSession {
         cat_err(self.engine.set_category_rooms(&id, &tokens).await, core::CategoryOp::Assign)
     }
 
+    // --- chat menu (docs/settings.md); changes resolve to a German error text or `null` --
+
+    /// The chat is in exactly these own categories afterwards.
+    #[napi]
+    pub async fn set_room_categories(&self, token: String, ids: Vec<String>) -> Option<String> {
+        cat_err(self.engine.set_room_categories(&token, &ids).await, core::CategoryOp::Assign)
+    }
+
+    /// Shows at once (`roomsChanged`); taken back on failure.
+    #[napi]
+    pub async fn set_favorite(&self, token: String, on: bool) -> Option<String> {
+        cat_err(self.engine.set_favorite(&token, on).await, core::CategoryOp::Favorite)
+    }
+
+    /// "Als gelesen markieren": read marker on the newest message.
+    #[napi]
+    pub async fn mark_room_read(&self, token: String) -> Option<String> {
+        cat_err(self.engine.mark_room_read(&token).await, core::CategoryOp::MarkRead)
+    }
+
     // --- groups (docs/groups.md); changes resolve to a German error text or `null` ----
 
     #[napi]

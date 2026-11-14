@@ -198,6 +198,27 @@ async fn engine_and_login_flow() {
     let titles: Vec<String> = engine.room_sections("", None).into_iter().map(|s| s.title).collect();
     assert_eq!(titles, vec!["Favoriten", "Familie & Freunde", "Arbeit", "Chats"]);
 
+    // Chat menu (docs/settings.md): the default level is resolved, actions show at once.
+    let room = |token: &str| engine.rooms().into_iter().find(|r| r.token == token).unwrap();
+    assert_eq!(room("lena").notification_level, 1);
+    assert_eq!(room("lesekreis").notification_level, 2);
+    assert_eq!(room("sommerfest").notification_level, 3);
+    engine.set_favorite("lena", true).await.unwrap();
+    assert!(room("lena").is_favorite);
+    assert!(engine.rooms()[..2].iter().any(|r| r.token == "lena"), "favorites sort first");
+    engine.set_favorite("lena", false).await.unwrap();
+    assert!(!room("lena").is_favorite);
+    assert!(engine.set_favorite("gibt-es-nicht", true).await.is_err());
+    engine.set_room_categories("lesekreis", &["3".into(), "4".into()]).await.unwrap();
+    assert_eq!(room("lesekreis").tag_ids, vec!["3", "4"]);
+    let sections = engine.room_sections("", None);
+    assert!(sections.iter().filter(|s| s.rooms.iter().any(|r| r.token == "lesekreis")).count() == 2);
+    engine.set_room_categories("lesekreis", &[]).await.unwrap();
+    assert!(room("lesekreis").tag_ids.is_empty());
+    engine.mark_room_read("website").await.unwrap();
+    assert_eq!(room("website").unread_messages, 0);
+    assert!(!room("website").unread_mention);
+
     let page = engine.open_chat("familie").await.unwrap();
     assert!(page.messages.iter().any(|m| m.kind == "system"));
     assert!(page.messages.iter().any(|m| m.is_own));

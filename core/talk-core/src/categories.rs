@@ -93,6 +93,10 @@ pub enum CategoryOp {
     Delete,
     Move,
     Assign,
+    /// "Zu Favoriten hinzufügen" / "Aus Favoriten entfernen" (chat menu, docs/settings.md).
+    Favorite,
+    /// "Als gelesen markieren" (chat menu).
+    MarkRead,
 }
 
 impl Engine {
@@ -268,6 +272,38 @@ impl Engine {
         failed.map_or(Ok(()), Err)
     }
 
+    /// Puts one chat in exactly these own categories (chat menu "Kategorie"). Favorite
+    /// state and other chats stay as they are.
+    pub async fn set_room_categories(&self, token: &str, ids: &[String]) -> Result<()> {
+        if self.state_room(token).is_none() {
+            return Err(Error::NotFound);
+        }
+        let room = self.guard(self.client.set_room_tags(token, ids).await)?;
+        self.put_room(room);
+        Ok(())
+    }
+
+    /// Favorite on or off. Shows at once (`RoomsChanged`); a failure takes it back.
+    pub async fn set_favorite(&self, token: &str, on: bool) -> Result<()> {
+        if !self.set_local_favorite(token, on)? {
+            return Ok(());
+        }
+        let r = self.guard(self.client.set_favorite(token, on).await);
+        if r.is_err() {
+            let _ = self.set_local_favorite(token, !on);
+        }
+        r
+    }
+
+    /// Flips the cached favorite flag; `false` when it already was `on`.
+    fn set_local_favorite(&self, token: &str, on: bool) -> Result<bool> {
+        self.edit_room(token, |r| {
+            let changed = r.is_favorite != on;
+            r.is_favorite = on;
+            changed
+        })
+    }
+
     async fn reload_tags(&self) {
         let tags = self.guard(self.client.tags().await);
         self.apply_tags(tags);
@@ -384,17 +420,18 @@ fn tag_changes(rooms: &[RoomView], id: &str, tokens: &[String]) -> Vec<(String, 
         .collect()
 }
 
-/// German message for a failed category action.
+/// German message for a failed category or chat-menu action.
 pub fn category_error_text(op: CategoryOp, e: &Error) -> String {
     use CategoryOp::*;
     let text = match (op, e) {
         (_, Error::Network(_) | Error::RetryLater { .. }) => "Keine Verbindung",
         (Create, Error::Http { status: 400, message }) if message.contains("limit") => "Zu viele Kategorien",
         (Create | Rename, Error::Http { status: 400, .. }) => "Name ist leer oder schon vergeben",
+        (Favorite | MarkRead, Error::NotFound) => "Chat nicht gefunden",
         (_, Error::NotFound) => "Kategorie nicht gefunden",
         (Collapse, _) => "Konnte nicht gespeichert werden",
         (Create, _) => "Kategorie konnte nicht erstellt werden",
-        (Rename | Assign, _) => "Speichern fehlgeschlagen",
+        (Rename | Assign | Favorite | MarkRead, _) => "Speichern fehlgeschlagen",
         (Delete, _) => "Löschen fehlgeschlagen",
         (Move, _) => "Verschieben fehlgeschlagen",
     };
