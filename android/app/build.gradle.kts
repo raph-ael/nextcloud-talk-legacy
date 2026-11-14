@@ -29,7 +29,7 @@ android {
         applicationId = "org.sirplus.talk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        versionCode = 100
         versionName = "0.1.0"
         buildConfigField("String", "PUSH_PROXY_URL", "\"$pushProxyUrl\"")
         // armeabi-v7a: low-end devices with a 32-bit-only system (e.g. Galaxy A13 with Android 13).
