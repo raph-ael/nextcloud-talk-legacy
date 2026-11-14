@@ -87,7 +87,8 @@ done
 
 # --- stage -------------------------------------------------------------------------------------
 mkdir -p "$STAGE"
-if [ "$DRY_RUN" != 1 ]; then
+# Mirror what is published (nothing yet on the very first release).
+if [ "$DRY_RUN" != 1 ] && ssh "$HOST" test -d "$REMOTE/android"; then
   rsync -a --delete "$HOST:$REMOTE/android/" "$STAGE/"
 fi
 for name in "${!APKS[@]}"; do cp "${APKS[$name]}" "$STAGE/$name"; done
