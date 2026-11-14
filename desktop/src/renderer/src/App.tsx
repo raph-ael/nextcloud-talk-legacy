@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { closeRoom, getState, openCompose, useStore } from './store'
+import { closeRoom, closeSettings, getState, openCompose, openSettings, useStore } from './store'
 import { GroupInfo } from './components/GroupInfo'
 import { Categories } from './components/Categories'
+import { Settings } from './components/Settings'
 import { Login } from './components/Login'
 import { cycleRoom, Sidebar } from './components/Sidebar'
 import { Chat } from './components/Chat'
@@ -75,6 +76,7 @@ export function App() {
   const room = useStore((s) => s.rooms.find((r) => r.token === s.activeToken) ?? null)
   const groupInfo = useStore((s) => s.groupInfo)
   const categories = useStore((s) => s.categories)
+  const settings = useStore((s) => s.settings)
   const search = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const { width, handle } = useSidebarWidth()
@@ -82,13 +84,25 @@ export function App() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const mod = e.ctrlKey || e.metaKey
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+      const inSettings = !!getState().settings
+      if (mod && !e.shiftKey && !e.altKey && e.key === ',') {
+        // „Einstellungen“ (docs/settings.md); on macOS the app menu has ⌘, as well.
         e.preventDefault()
+        openSettings()
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        closeSettings()
         openCompose()
       } else if (mod && (e.key === 'k' || e.key === 'f')) {
         e.preventDefault()
-        search.current?.focus()
-        search.current?.select()
+        closeSettings()
+        // After the list is no longer inert.
+        requestAnimationFrame(() => {
+          search.current?.focus()
+          search.current?.select()
+        })
+      } else if (inSettings) {
+        // The settings handle their own keys (Esc goes back to the chats).
       } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault()
         cycleRoom(e.key === 'ArrowUp' ? -1 : 1)
@@ -120,7 +134,9 @@ export function App() {
   return (
     <div className="app-shell">
     <ReturnToCallBar />
-    <div className={`app${activeToken || categories ? ' has-chat' : ''}`} style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
+    <div className="app-stage" style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
+    {/* The settings cover chat list and chat; both stay mounted (draft, scroll position). */}
+    <div className={`app${activeToken || categories ? ' has-chat' : ''}`} inert={!!settings}>
       <Sidebar ref={search} />
       <div
         className="sidebar-resize"
@@ -145,6 +161,8 @@ export function App() {
           <p className="muted">Wähle einen Chat aus.</p>
         </section>
       )}
+    </div>
+    {settings && <Settings />}
     </div>
     <CallLayer />
     </div>

@@ -1,5 +1,6 @@
 /* Design tokens. Sizes and colours follow Signal Desktop (light/dark); Android uses the
-   mobile metrics of the same design. */
+   mobile metrics of the same design. --accent, --accent-hover and --bubble-own are set on
+   :root by appearance.ts from the chosen accent (docs/settings.md); these are the defaults. */
 :root {
   --accent: #2c6bed;
   --accent-hover: #1f5bd6;
@@ -20,6 +21,8 @@
   --reaction-mine: #b9b9b9;
   --floating: #ffffff;
   --danger: #d6342c;
+  /* Unread number of a chat on „Nur Erwähnungen“ or „Aus“ (docs/settings.md). */
+  --badge-quiet: #6b6b6b;
   --radius: 18px;
   --radius-tight: 4px;
   color-scheme: light dark;
@@ -43,6 +46,7 @@
     --reaction-mine: #5e5e5e;
     --floating: #2e2e2e;
     --danger: #ff6b61;
+    --badge-quiet: #5e5e5e;
   }
 }
 
@@ -311,7 +315,9 @@ body.resizing {
   margin-bottom: 4px;
 }
 .menu-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   padding: 8px 10px;
@@ -324,6 +330,43 @@ body.resizing {
 }
 .menu-item.danger {
   color: var(--danger);
+}
+/* Chat menu (docs/settings.md): submenus, check marks and radio entries. */
+.menu-layer {
+  display: contents;
+}
+.menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-item.open {
+  background: var(--fill);
+}
+.menu-mark {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.menu-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.menu-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
 }
 .context-menu {
   position: fixed;
@@ -441,6 +484,20 @@ body.resizing {
   display: flex;
   align-items: flex-start;
 }
+.room-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.room-title .room-name {
+  flex: 0 1 auto;
+}
+.muted-bell {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
 .room-name {
   flex: 1;
   min-width: 0;
@@ -507,6 +564,9 @@ body.resizing {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.badge.quiet {
+  background: var(--badge-quiet);
 }
 .call-dot {
   width: 8px;
@@ -1782,10 +1842,13 @@ button.who-row:focus-visible {
   flex-direction: column;
   height: 100%;
 }
-.app-shell > .app {
+.app-stage {
+  position: relative;
   flex: 1;
   min-height: 0;
-  height: auto;
+}
+.app-stage > .app {
+  height: 100%;
 }
 :root {
   --call-green: #1f9d55;
@@ -1925,6 +1988,13 @@ button.who-row:focus-visible {
 .call-decline:hover,
 .call-hangup:hover:not(:disabled) {
   background: var(--call-red-hover) !important;
+}
+
+/* The call window keeps the blue accent (docs/settings.md „Was gleich bleibt“). */
+.call-screen,
+.call-dialog-backdrop {
+  --accent: #3b78f0;
+  --accent-hover: #5189f3;
 }
 
 /* Call view */
@@ -3155,8 +3225,14 @@ button.person-row:disabled {
   border-radius: 10px;
   text-align: left;
 }
+a.settings-row {
+  color: inherit;
+  text-decoration: none;
+}
 button.settings-row:hover:not(:disabled),
-button.settings-row:focus-visible {
+button.settings-row:focus-visible,
+a.settings-row:hover,
+a.settings-row:focus-visible {
   background: var(--fill);
   outline: none;
 }
@@ -3399,4 +3475,149 @@ button.settings-row:focus-visible {
   resize: vertical;
   min-height: 84px;
   line-height: 20px;
+}
+
+/* ---------- settings (docs/settings.md) ---------- */
+/* Over chat list and chat, in two columns: the left one as wide as the chat list. */
+.settings-shell {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: var(--sidebar-w, 320px) 1fr;
+  background: var(--bg);
+}
+@media (max-width: 720px) {
+  .settings-shell {
+    grid-template-columns: minmax(200px, 40%) 1fr;
+  }
+}
+.settings-nav-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px 8px;
+}
+.settings-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 8px 20px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.settings-profile .avatar {
+  margin-bottom: 8px;
+}
+.settings-profile-name {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.settings-profile .muted {
+  font-size: 13px;
+}
+.settings-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  margin: 1px 0;
+  padding: 8px 14px;
+  border-radius: 10px;
+  text-align: left;
+}
+.settings-nav-row:hover {
+  background: var(--fill);
+}
+.settings-nav-row.active {
+  background: var(--fill-pressed);
+}
+.settings-nav-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.settings-nav-row.danger {
+  color: var(--danger);
+}
+.settings-nav-foot {
+  margin-top: auto;
+  padding-top: 16px;
+}
+.settings-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.settings-page > .pane-header {
+  padding-left: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.person-sub.wrap {
+  white-space: normal;
+}
+.appearance-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.appearance-preview .bubble {
+  user-select: none;
+}
+.settings-choices {
+  margin: 0;
+  padding: 0 4px 4px;
+}
+.settings-choices .choice {
+  padding-left: 10px;
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(5, 44px);
+  gap: 16px;
+  padding: 8px 14px 14px;
+}
+.swatch {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+.swatch.on {
+  box-shadow:
+    0 0 0 3px var(--bg-elev),
+    0 0 0 5px currentColor;
+}
+.swatch:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 6px;
+}
+.about-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 8px;
+  text-align: center;
+}
+.about-name {
+  margin: 10px 0 2px;
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+}
+.about-head .muted {
+  font-size: 13px;
+}
+.about-license {
+  margin-top: 20px;
+  font-size: 13px;
 }

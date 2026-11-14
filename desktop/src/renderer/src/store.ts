@@ -75,7 +75,11 @@ export interface State {
   /** The page „Kategorien“ replaces the chat area. */
   categories: boolean
   unreadLine: UnreadLine | null
+  /** „Einstellungen“ replace the whole window (docs/settings.md); the page shown on the right. */
+  settings: SettingsPage | null
 }
+
+export type SettingsPage = 'general' | 'appearance' | 'chats' | 'categories' | 'about'
 
 let state: State = {
   session: 'loading',
@@ -90,6 +94,7 @@ let state: State = {
   query: '',
   categories: false,
   unreadLine: null,
+  settings: null,
 }
 const listeners = new Set<() => void>()
 
@@ -179,6 +184,7 @@ export function handleEvent(e: TalkEvent): void {
           query: '',
           categories: false,
           unreadLine: null,
+          settings: null,
         })
       break
     case 'roomsChanged':
@@ -204,7 +210,12 @@ export function handleEvent(e: TalkEvent): void {
       set({ online: e.online })
       break
     case 'openRoom':
+      // A notification click shows the chat, also from the settings.
+      set({ settings: null })
       void openRoom(e.token)
+      break
+    case 'openSettings':
+      openSettings()
       break
     case 'outboxChanged':
       if (state.chats[e.token]) setChat(e.token, (c) => ({ ...c, messages: withPending(c.messages, e.items) }))
@@ -315,9 +326,30 @@ export function closeCategories(): void {
   set({ categories: false })
 }
 
+export function openSettings(page: SettingsPage = 'appearance'): void {
+  // Already open: stays on its page (⌘, from the menu and the key both arrive on macOS).
+  if (state.session === 'ready') set({ settings: state.settings ?? page })
+}
+export function setSettingsPage(page: SettingsPage): void {
+  set({ settings: page })
+}
+export function closeSettings(): void {
+  set({ settings: null })
+}
+
+/**
+ * Whether a chat counts for the badge (docs/settings.md, „Stummgeschaltete Chats“):
+ * „Nur Erwähnungen“ only with a mention, „Aus“ never.
+ */
+export function countsForBadge(r: RoomView): boolean {
+  if (r.isArchived || r.unreadMessages === 0) return false
+  if (r.notificationLevel === 3) return false
+  if (r.notificationLevel === 2) return r.unreadMention
+  return true
+}
+
 function updateBadge(): void {
-  const total = state.rooms.filter((r) => !r.isArchived && r.unreadMessages > 0).length
-  window.talk.setBadge(total)
+  window.talk.setBadge(state.rooms.filter(countsForBadge).length)
 }
 
 // --- actions ------------------------------------------------------------------------

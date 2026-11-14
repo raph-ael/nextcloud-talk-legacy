@@ -28,7 +28,8 @@ export function isGroupRoom(room: RoomView): boolean {
   return room.roomType === 2 || room.roomType === 3
 }
 
-const LEVELS: { level: number; label: string }[] = [
+/** Notification levels (docs/groups.md); one-to-one chats have no „Nur Erwähnungen“. */
+export const LEVELS: { level: number; label: string }[] = [
   { level: 1, label: 'Alle Nachrichten' },
   { level: 2, label: 'Nur Erwähnungen' },
   { level: 3, label: 'Aus' },
@@ -254,7 +255,7 @@ export function GroupInfo({ room }: { room: RoomView }) {
           <h2 className="dialog-title">Benachrichtigungen</h2>
           <div className="choice-list" role="radiogroup" aria-label="Benachrichtigungen">
             {LEVELS.map((l) => {
-              const on = (room.notificationLevel || 1) === l.level
+              const on = room.notificationLevel === l.level
               return (
                 <button
                   key={l.level}

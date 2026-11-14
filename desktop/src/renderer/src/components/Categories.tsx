@@ -29,7 +29,8 @@ function chatCount(n: number): string {
   return n === 1 ? '1 Chat' : `${n} Chats`
 }
 
-export function Categories() {
+/** `onClose`: back arrow and Esc (default: back to the chat; in the settings: to „Chats“). */
+export function Categories({ onClose = closeCategories }: { onClose?: () => void } = {}) {
   const rooms = useStore((s) => s.rooms)
   const composing = useStore((s) => s.composing)
   const [list, setList] = useState<CategoryView[] | null>(null)
@@ -56,7 +57,7 @@ export function Categories() {
     () => {
       if (busy) return
       if (pick) back()
-      else closeCategories()
+      else onClose()
     },
     !composing,
   )
@@ -121,7 +122,7 @@ export function Categories() {
 
   return (
     <section className="chat group-info" ref={pane}>
-      <PaneHeader title="Kategorien" onBack={closeCategories} />
+      <PaneHeader title="Kategorien" onBack={onClose} />
       <div className="settings-scroll">
         <div className="settings">
           <section className="settings-section">
@@ -303,8 +304,8 @@ function CategoryRow({
   )
 }
 
-/** Name field for „Neue Kategorie“ and „Umbenennen“; the action needs a name. */
-function NameDialog({
+/** Name field for „Neue Kategorie“ and „Umbenennen“ (also the chat menu); the action needs a name. */
+export function NameDialog({
   title,
   initial,
   confirm,

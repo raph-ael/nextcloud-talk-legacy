@@ -55,7 +55,7 @@ export interface RoomView {
   /** The user may react to messages (docs/chat.md „Reaktionen“). */
   canReact: boolean
   hasCall: boolean
-  /** 0 default, 1 always, 2 mentions only, 3 never */
+  /** Effective level: 1 always, 2 mentions only, 3 never (the core resolves the default). */
   notificationLevel: number
   avatarVersion: string
   /** A picture was set (it can be removed). docs/groups.md */
@@ -421,6 +421,32 @@ export type AppEvent =
   | { type: 'callAction'; action: 'accept' | 'decline' }
   /** The window entered or left fullscreen (our button, green button, F11, window menu). */
   | { type: 'windowFullscreen'; on: boolean }
+  /** „Darstellung“ changed (also from another place, e.g. a second window in future). */
+  | { type: 'appearanceChanged'; theme: Theme; accent: string }
+  /** The tray check mark „Beim Schließen im Hintergrund weiterlaufen“ changed. */
+  | { type: 'closeToTrayChanged'; on: boolean }
+  /** „Einstellungen …“ in the macOS app menu. */
+  | { type: 'openSettings' }
+
+/** „Design“ in „Darstellung“ (docs/settings.md). */
+export type Theme = 'system' | 'light' | 'dark'
+
+export interface Appearance {
+  theme: Theme
+  /** Accent id (desktop/src/renderer/src/accents.ts). */
+  accent: string
+}
+
+/** „Über Wolkenfunk“. */
+export interface AppInfo {
+  version: string
+  core: string
+  /** The self-updater runs here (AppImage, Windows): offer „Nach Updates suchen“. */
+  canUpdate: boolean
+}
+
+/** Result of „Nach Updates suchen“. */
+export type UpdateCheck = { state: 'current' } | { state: 'ready'; version: string }
 
 export type TalkEvent = CoreEvent | AppEvent
 
@@ -524,6 +550,24 @@ export interface TalkApi {
   groupLink(token: string): Promise<string>
   /** 1 all messages, 2 mentions only, 3 off. */
   setNotificationLevel(token: string, level: number): Promise<string | null>
+
+  // --- chat menu (docs/settings.md); a German error text or null --------------------
+  /** Shows at once (`roomsChanged`), taken back on failure. */
+  setFavorite(token: string, on: boolean): Promise<string | null>
+  /** The chat is in exactly these own categories afterwards. */
+  setRoomCategories(token: string, ids: string[]): Promise<string | null>
+  /** „Als gelesen markieren“. */
+  markRoomRead(token: string): Promise<string | null>
+
+  // --- settings (docs/settings.md): this device only --------------------------------
+  appearance(): Promise<Appearance>
+  /** Applies at once everywhere; the main process answers with `appearanceChanged`. */
+  setAppearance(theme: Theme, accent: string): Promise<void>
+  closeToTray(): Promise<boolean>
+  setCloseToTray(on: boolean): Promise<void>
+  appInfo(): Promise<AppInfo>
+  /** Rejects when the check fails. */
+  checkForUpdates(): Promise<UpdateCheck>
   /** Ask when "Gruppe verlassen" is clicked: true → "Neuen Moderator wählen" first. */
   leaveNeedsModerator(token: string): Promise<boolean>
   leaveGroup(token: string): Promise<string | null>

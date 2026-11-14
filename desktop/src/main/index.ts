@@ -18,7 +18,7 @@ import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged } from './system'
 import { installScreenShare } from './screen'
-import { installAutoUpdate } from './update'
+import { checkForUpdatesNow, installAutoUpdate, updatesActive } from './update'
 import {
   recordingNoticeTitle,
   withAttachment,
@@ -37,7 +37,9 @@ import {
   type TalkEvent,
   type VoiceDraft,
   type RecordingStatus,
+  type Theme,
 } from '@shared/core'
+import { ACCENTS, DEFAULT_ACCENT } from '../renderer/src/accents'
 import trayOnDark from '../../resources/tray-on-dark.png?asset'
 import trayOnLight from '../../resources/tray-on-light.png?asset'
 
@@ -85,6 +87,9 @@ interface NativeSession {
   setGroupLink(token: string, on: boolean): Promise<string | null>
   groupLink(token: string): string
   setNotificationLevel(token: string, level: number): Promise<string | null>
+  setFavorite(token: string, on: boolean): Promise<string | null>
+  setRoomCategories(token: string, ids: string[]): Promise<string | null>
+  markRoomRead(token: string): Promise<string | null>
   leaveNeedsModerator(token: string): Promise<boolean>
   leaveGroup(token: string): Promise<string | null>
   deleteGroup(token: string): Promise<string | null>
@@ -179,12 +184,21 @@ const settingsFile = join(dataDir, 'settings.json')
 interface Settings {
   /** Closing the window keeps the app in the tray, so calls can ring (Linux/Windows). */
   closeToTray: boolean
+  /** „Darstellung“ (docs/settings.md): device only, kept when signing out. */
+  theme: Theme
+  /** Accent id from design/theme/accents.json; unknown ids show as the default. */
+  accent: string
 }
 
+const THEMES: readonly Theme[] = ['system', 'light', 'dark']
+
 function loadSettings(): Settings {
-  const defaults: Settings = { closeToTray: true }
+  const defaults: Settings = { closeToTray: true, theme: 'system', accent: DEFAULT_ACCENT }
   try {
-    return { ...defaults, ...(JSON.parse(readFileSync(settingsFile, 'utf8')) as Partial<Settings>) }
+    const stored = { ...defaults, ...(JSON.parse(readFileSync(settingsFile, 'utf8')) as Partial<Settings>) }
+    if (!THEMES.includes(stored.theme)) stored.theme = 'system'
+    if (!ACCENTS.some((a) => a.id === stored.accent)) stored.accent = DEFAULT_ACCENT
+    return stored
   } catch {
     return defaults
   }
@@ -386,17 +400,9 @@ function requireSession(): NativeSession {
 
 // --- Notifications ----------------------------------------------------------------
 
+/** The core gives the effective level (never the server default 0). */
 function wantsNotification(room: RoomView): boolean {
-  switch (room.notificationLevel) {
-    case 1:
-      return true
-    case 2:
-      return room.unreadMention
-    case 3:
-      return false
-    default:
-      return room.roomType === 1 || room.unreadMention
-  }
+  return room.notificationLevel === 1 || (room.notificationLevel === 2 && room.unreadMention)
 }
 
 function notifyNewMessages(rooms: RoomView[]): void {
@@ -728,15 +734,47 @@ function updateTrayMenu(): void {
         label: 'Beim Schließen im Hintergrund weiterlaufen',
         type: 'checkbox',
         checked: settings.closeToTray,
-        click: (item) => {
-          settings.closeToTray = item.checked
-          saveSettings()
-        },
+        click: (item) => setCloseToTray(item.checked),
       },
       { type: 'separator' },
       { label: 'Beenden', click: () => app.quit() },
     ]),
   )
+}
+
+/** Tray check mark and the switch in „Allgemein“ are the same setting. */
+function setCloseToTray(on: boolean): void {
+  settings.closeToTray = on
+  saveSettings()
+  updateTrayMenu()
+  send({ type: 'closeToTrayChanged', on } satisfies AppEvent)
+}
+
+// --- Appearance (docs/settings.md „Darstellung“) ----------------------------------
+
+/** Follows the CSS colour scheme, the window background, the tray icon and the avatars. */
+function applyTheme(): void {
+  nativeTheme.themeSource = settings.theme
+  win?.setBackgroundColor(windowBackground())
+}
+
+function windowBackground(): string {
+  return nativeTheme.shouldUseDarkColors ? '#121212' : '#ffffff'
+}
+
+function setAppearance(theme: Theme, accent: string): void {
+  if (!THEMES.includes(theme) || !ACCENTS.some((a) => a.id === accent)) return
+  settings.theme = theme
+  settings.accent = accent
+  saveSettings()
+  applyTheme()
+  send({ type: 'appearanceChanged', theme, accent } satisfies AppEvent)
+}
+
+/** Opens the settings in the window (⌘, in the macOS app menu). */
+function openSettings(): void {
+  showWindow()
+  send({ type: 'openSettings' } satisfies AppEvent)
 }
 
 // --- Window ------------------------------------------------------------------------
@@ -758,7 +796,7 @@ function createWindow(): void {
     show: false,
     title: 'Wolkenfunk',
     autoHideMenuBar: true,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121212' : '#ffffff',
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -987,6 +1025,27 @@ function registerIpc(): void {
   ipcMain.handle('talk:deleteGroup', (_e, token: string) => (session ? session.deleteGroup(token) : NOT_SIGNED_IN))
   ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
 
+  // Chat menu (docs/settings.md): shown at once, a German error text or null.
+  ipcMain.handle('talk:setFavorite', (_e, token: string, on: boolean) =>
+    session ? session.setFavorite(token, on) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:setRoomCategories', (_e, token: string, ids: string[]) =>
+    session ? session.setRoomCategories(token, ids) : NOT_SIGNED_IN,
+  )
+  ipcMain.handle('talk:markRoomRead', (_e, token: string) => (session ? session.markRoomRead(token) : NOT_SIGNED_IN))
+
+  // Settings (docs/settings.md): device settings in settings.json.
+  ipcMain.handle('talk:appearance', () => ({ theme: settings.theme, accent: settings.accent }))
+  ipcMain.handle('talk:setAppearance', (_e, theme: Theme, accent: string) => setAppearance(theme, accent))
+  ipcMain.handle('talk:closeToTray', () => settings.closeToTray)
+  ipcMain.handle('talk:setCloseToTray', (_e, on: boolean) => setCloseToTray(!!on))
+  ipcMain.handle('talk:appInfo', () => ({
+    version: app.getVersion(),
+    core: core.coreVersion(),
+    canUpdate: updatesActive(),
+  }))
+  ipcMain.handle('talk:checkForUpdates', () => checkForUpdatesNow())
+
   // Calls (docs/calls.md).
   // macOS asks for the microphone first (and explains a refusal) instead of a silent call.
   ipcMain.handle('talk:startCall', async (_e, token: string, silent: boolean) => {
@@ -1165,6 +1224,8 @@ function macMenu(): Menu {
       submenu: [
         { role: 'about', label: `Über ${name}` },
         { type: 'separator' },
+        { label: 'Einstellungen …', accelerator: 'CmdOrCtrl+,', click: openSettings },
+        { type: 'separator' },
         { role: 'services', label: 'Dienste' },
         { type: 'separator' },
         { role: 'hide', label: `${name} ausblenden` },
@@ -1227,6 +1288,8 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   void app.whenReady().then(() => {
+    // Before the tray and the first window: no flash of the other theme.
+    applyTheme()
     if (process.platform === 'darwin') Menu.setApplicationMenu(macMenu())
     registerIpc()
     registerAvatarProtocol()
