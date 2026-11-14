@@ -12,12 +12,13 @@ import {
   Tray,
 } from 'electron'
 import { randomBytes } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged } from './system'
 import { installScreenShare } from './screen'
+import { installAutoUpdate } from './update'
 import {
   recordingNoticeTitle,
   withAttachment,
@@ -165,6 +166,7 @@ interface StoredAccount {
 }
 
 const dataDir = app.getPath('userData')
+migrateLegacyDataDir()
 const accountFile = join(dataDir, 'account.json')
 /** Core cache (conversations, messages, avatars) and outbox of the signed-in account. */
 const coreDir = join(dataDir, 'talk')
@@ -195,6 +197,24 @@ function saveSettings(): void {
     writeFileSync(settingsFile, JSON.stringify(settings))
   } catch (err) {
     console.warn('saving settings failed:', (err as Error).message)
+  }
+}
+
+/**
+ * The app was called "Sirplus Talk" before it became Wolkenfunk: carry its data folder over
+ * (account, cache, settings), once, before Chromium uses the new one.
+ */
+function migrateLegacyDataDir(): void {
+  const legacy = join(app.getPath('appData'), 'Sirplus Talk')
+  if (!existsSync(legacy) || existsSync(join(dataDir, 'account.json'))) return
+  try {
+    mkdirSync(dataDir, { recursive: true })
+    for (const entry of readdirSync(legacy)) {
+      if (!existsSync(join(dataDir, entry))) renameSync(join(legacy, entry), join(dataDir, entry))
+    }
+    rmSync(legacy, { recursive: true, force: true })
+  } catch (err) {
+    console.warn('moving the old data folder failed:', (err as Error).message)
   }
 }
 
@@ -680,7 +700,7 @@ function createTray(): void {
     console.warn('no tray:', (err as Error).message)
     return
   }
-  tray.setToolTip('Sirplus Talk')
+  tray.setToolTip('Wolkenfunk')
   tray.on('click', showWindow)
   updateTrayMenu()
 }
@@ -688,7 +708,7 @@ function createTray(): void {
 function updateTrayMenu(): void {
   tray?.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Sirplus Talk öffnen', click: showWindow },
+      { label: 'Wolkenfunk öffnen', click: showWindow },
       ...(callActive() ? [{ label: 'Auflegen', click: () => session?.hangUp() }] : []),
       { type: 'separator' },
       {
@@ -723,7 +743,7 @@ function createWindow(): void {
     minWidth: 380,
     minHeight: 480,
     show: false,
-    title: 'Sirplus Talk',
+    title: 'Wolkenfunk',
     autoHideMenuBar: true,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#121212' : '#ffffff',
     webPreferences: {
@@ -1185,7 +1205,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', showWindow)
-  if (process.platform === 'win32') app.setAppUserModelId('org.sirplus.talk')
+  if (process.platform === 'win32') app.setAppUserModelId('org.wolkenfunk.Wolkenfunk')
   // Cmd+Q, the dock menu or logout on macOS: deliver what is in flight first.
   app.on('before-quit', (e) => {
     if (readyToQuit) return
@@ -1226,7 +1246,18 @@ if (!app.requestSingleInstanceLock()) {
     const dev = devAccount()
     const stored = existsSync(accountFile) ? loadAccount() : null
     if (dev) startSession({ server: dev.server, loginName: dev.user, secret: '' }, dev.password)
-    else if (stored) startSession(stored)
+    else if (stored) {
+      try {
+        startSession(stored)
+      } catch (err) {
+        // The keyring no longer opens the stored password (e.g. after the rename from
+        // "Sirplus Talk", whose key it is filed under): sign in again.
+        console.warn('stored account unusable:', (err as Error).message)
+        session = null
+        clearAccount()
+      }
+    }
+    installAutoUpdate()
     createWindow()
     nativeTheme.on('updated', () => avatarCache.clear())
     if (process.platform !== 'darwin') {

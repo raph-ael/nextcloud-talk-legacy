@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (Flathub, software centres). Validate: see packaging/README.md. -->
+<component type="desktop-application">
+  <id>org.wolkenfunk.Wolkenfunk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+
+  <name>Wolkenfunk</name>
+  <summary>Fast desktop client for Nextcloud Talk</summary>
+  <summary xml:lang="de">Schneller Desktop-Client für Nextcloud Talk</summary>
+
+  <developer id="org.wolkenfunk">
+    <name>CODELABOR UG (haftungsbeschränkt)</name>
+  </developer>
+
+  <description>
+    <p>Wolkenfunk brings Nextcloud Talk to your desktop: chats and calls with your own Nextcloud server, quick to open and usable offline.</p>
+    <ul>
+      <li>Chats open instantly, also without a connection; messages go out as soon as you are back online</li>
+      <li>Voice and video calls, screen sharing</li>
+      <li>Voice messages, attachments, replies and reactions</li>
+      <li>Notifications and a tray icon, so calls can ring while the window is closed</li>
+    </ul>
+    <p>Wolkenfunk is an independent project and not affiliated with Nextcloud GmbH.</p>
+    <p xml:lang="de">Wolkenfunk bringt Nextcloud Talk auf den Desktop: Chats und Anrufe mit deinem eigenen Nextcloud-Server, schnell geöffnet und auch offline nutzbar.</p>
+    <ul xml:lang="de">
+      <li>Chats öffnen sofort, auch ohne Netz; Nachrichten gehen raus, sobald die Verbindung wieder steht</li>
+      <li>Sprach- und Videoanrufe, Bildschirmfreigabe</li>
+      <li>Sprachnachrichten, Anhänge, Antworten und Reaktionen</li>
+      <li>Benachrichtigungen und Tray-Symbol, damit Anrufe auch bei geschlossenem Fenster klingeln</li>
+    </ul>
+    <p xml:lang="de">Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden.</p>
+  </description>
+
+  <launchable type="desktop-id">org.wolkenfunk.Wolkenfunk.desktop</launchable>
+
+  <url type="homepage">https://wolkenfunk.org/</url>
+  <url type="vcs-browser">https://github.com/raph-ael/nextcloud-talk-legacy</url>
+  <url type="bugtracker">https://github.com/raph-ael/nextcloud-talk-legacy/issues</url>
+  <url type="contact">mailto:hallo@codelabor.io</url>
+
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <keywords>
+    <keyword>Nextcloud</keyword>
+    <keyword>Talk</keyword>
+    <keyword>Chat</keyword>
+    <keyword>Messenger</keyword>
+    <keyword>Video call</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#8FB4F5</color>
+    <color type="primary" scheme_preference="dark">#1650C4</color>
+  </branding>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <internet>always</internet>
+  </recommends>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+  </content_rating>
+
+  <!-- TODO before submitting to Flathub: at least one screenshot (PNG, 16:9 or similar, hosted on
+       wolkenfunk.org, default caption), see https://docs.flathub.org/docs/for-app-authors/metainfo-guidelines/ -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Chats and calls with your own Nextcloud</caption>
+      <image>https://wolkenfunk.org/screenshots/desktop-chat.png</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.1.0" date="2026-11-14" type="development">
+      <description>
+        <p>First test release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

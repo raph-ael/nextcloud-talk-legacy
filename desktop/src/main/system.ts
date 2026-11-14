@@ -78,7 +78,7 @@ export async function ensureMicrophone(purpose: 'call' | 'voice'): Promise<boole
     message: 'Kein Zugriff auf das Mikrofon',
     detail:
       (purpose === 'call' ? 'Für Anrufe' : 'Für Sprachnachrichten') +
-      ' braucht Sirplus Talk das Mikrofon. Erlaube es unter Systemeinstellungen › Datenschutz & Sicherheit › Mikrofon.',
+      ' braucht Wolkenfunk das Mikrofon. Erlaube es unter Systemeinstellungen › Datenschutz & Sicherheit › Mikrofon.',
     buttons: ['Systemeinstellungen öffnen', 'Abbrechen'],
     defaultId: 0,
     cancelId: 1,
@@ -109,7 +109,7 @@ export async function ensureCamera(): Promise<boolean> {
     type: 'warning',
     message: 'Kein Zugriff auf die Kamera',
     detail:
-      'Für Videoanrufe braucht Sirplus Talk die Kamera. Erlaube es unter Systemeinstellungen › Datenschutz & Sicherheit › Kamera.',
+      'Für Videoanrufe braucht Wolkenfunk die Kamera. Erlaube es unter Systemeinstellungen › Datenschutz & Sicherheit › Kamera.',
     buttons: ['Systemeinstellungen öffnen', 'Abbrechen'],
     defaultId: 0,
     cancelId: 1,
@@ -144,7 +144,7 @@ export async function ensureScreenCapture(register: () => Promise<unknown>): Pro
     type: 'warning',
     message: 'Bildschirmaufnahme erlauben',
     detail:
-      'Zum Teilen des Bildschirms braucht Sirplus Talk die Bildschirmaufnahme. Erlaube sie unter Systemeinstellungen › Datenschutz & Sicherheit › Aufnahme von Bildschirm & Systemaudio und starte Sirplus Talk danach neu.',
+      'Zum Teilen des Bildschirms braucht Wolkenfunk die Bildschirmaufnahme. Erlaube sie unter Systemeinstellungen › Datenschutz & Sicherheit › Aufnahme von Bildschirm & Systemaudio und starte Wolkenfunk danach neu.',
     buttons: ['Systemeinstellungen öffnen', 'Abbrechen'],
     defaultId: 0,
     cancelId: 1,
@@ -283,9 +283,9 @@ function updateMenus(): void {
     Menu.buildFromTemplate([
       ...calls,
       ...(calls.length ? [{ type: 'separator' as const }] : []),
-      { label: 'Sirplus Talk öffnen', click: () => controls?.showWindow() },
+      { label: 'Wolkenfunk öffnen', click: () => controls?.showWindow() },
       { type: 'separator' },
-      { label: 'Sirplus Talk beenden', role: 'quit' },
+      { label: 'Wolkenfunk beenden', role: 'quit' },
     ]),
   )
 }
@@ -436,7 +436,7 @@ export function installSystem(c: SystemControls): void {
   app.on('before-quit', () => log('quit', current?.state ?? 'no call'))
   if (!mac) return
   tray = new Tray(menuBarImage())
-  tray.setToolTip('Sirplus Talk')
+  tray.setToolTip('Wolkenfunk')
   updateMenus()
   app.on('activate', () => c.showWindow())
 }

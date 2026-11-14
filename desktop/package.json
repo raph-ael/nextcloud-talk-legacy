@@ -1,12 +1,16 @@
 {
-  "name": "sirplus-talk-desktop",
-  "productName": "Sirplus Talk",
+  "name": "wolkenfunk",
+  "productName": "Wolkenfunk",
   "version": "0.1.0",
   "description": "Fast Nextcloud Talk desktop client",
   "license": "AGPL-3.0-or-later",
-  "author": "Sirplus Talk contributors",
-  "homepage": "https://github.com/raph-ael/nextcloud-talk-legacy",
-  "desktopName": "sirplus-talk.desktop",
+  "author": {
+    "name": "CODELABOR UG (haftungsbeschränkt)",
+    "email": "hallo@codelabor.io",
+    "url": "https://wolkenfunk.org"
+  },
+  "homepage": "https://wolkenfunk.org",
+  "desktopName": "org.wolkenfunk.Wolkenfunk.desktop",
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
@@ -21,8 +25,8 @@
     "dist:deb": "scripts/linux-icon.sh && npm run core:release && electron-vite build && electron-builder --linux deb"
   },
   "build": {
-    "appId": "org.sirplus.talk",
-    "productName": "Sirplus Talk",
+    "appId": "org.wolkenfunk.Wolkenfunk",
+    "productName": "Wolkenfunk",
     "files": [
       "out/**/*",
       "resources/tray.png"
@@ -38,17 +42,32 @@
         "AppImage",
         "deb"
       ],
-      "executableName": "sirplus-talk",
+      "executableName": "wolkenfunk",
       "category": "Network;InstantMessaging",
       "icon": "build/icons",
       "synopsis": "Nextcloud Talk desktop client",
       "description": "Fast desktop client for Nextcloud Talk: chats, voice and video calls, screen sharing.",
-      "maintainer": "Sirplus Talk contributors",
+      "maintainer": "CODELABOR UG (haftungsbeschränkt) <hallo@codelabor.io>",
       "desktop": {
         "entry": {
           "Keywords": "Nextcloud;Talk;Chat;Call;"
         }
-      }
+      },
+      "syncDesktopName": true,
+      "vendor": "CODELABOR UG (haftungsbeschränkt)",
+      "extraResources": [
+        {
+          "from": "packaging/linux/apt/wolkenfunk.asc",
+          "to": "apt/wolkenfunk.asc"
+        }
+      ],
+      "publish": [
+        {
+          "provider": "generic",
+          "url": "https://pkg.wolkenfunk.org/appimage",
+          "channel": "latest"
+        }
+      ]
     },
     "mac": {
       "target": [
@@ -94,7 +113,15 @@
       "recommends": [
         "xdg-desktop-portal",
         "pipewire"
-      ]
+      ],
+      "afterInstall": "packaging/linux/deb/after-install.tpl",
+      "afterRemove": "packaging/linux/deb/after-remove.tpl"
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
     }
   },
   "devDependencies": {
@@ -111,6 +138,7 @@
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
     "@fontsource-variable/inter": "^5.3.0",
+    "electron-updater": "^6.8.11",
     "emoji-mart": "^5.6.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
