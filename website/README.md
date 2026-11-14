@@ -8,6 +8,7 @@ public/                 ausgelieferte Dateien
   index.html            Startseite (SEO-Meta, Open Graph, JSON-LD)
   404.html              Fehlerseite (siehe „Server“)
   impressum/, datenschutz/   Rechtliches (CODELABOR UG i.G., Angaben wie auf codelabor.io), bleiben noindex
+  download/             Installation (Linux: APT, AppImage, Flathub); Dateien liegen auf pkg.wolkenfunk.org
   styles.css            Hell/Dunkel über prefers-color-scheme
   favicon.svg/.ico, apple-touch-icon.png, icon-*.png, og-image.png   ← generiert
   site.webmanifest, robots.txt, sitemap.xml, .well-known/security.txt
@@ -47,6 +48,9 @@ hinter dem Reverse-Proxy CT100). `--delete`: was nicht in `public/` liegt, versc
 - In `index.html` die Zeile `<meta name="robots" content="noindex">` entfernen.
 - `lastmod` in `sitemap.xml` pflegen, bei neuen Seiten Einträge ergänzen.
 - `Expires` in `.well-known/security.txt` spätestens jährlich verlängern.
+- Mit dem ersten Linux-Release (`desktop/scripts/release-linux.sh`): `download/` von der Startseite
+  verlinken, den Hinweis „noch in Entwicklung“ dort anpassen, Flathub-Abschnitt aktualisieren und
+  `download/` in `sitemap.xml` aufnehmen.
 - Impressum nachziehen, sobald die UG eingetragen ist (HRB, ggf. USt-IdNr.; „i.G.“ streichen).
   Datenschutz anpassen, wenn Skripte, Formulare oder Dienste Dritter dazukommen.
 

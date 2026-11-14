@@ -115,6 +115,17 @@ main { padding: clamp(40px, 7vw, 72px) 0 24px; }
   .brand svg { color: var(--link); }
 }
 
+/* Download */
+.download pre {
+  margin: 0 0 16px; padding: 12px 16px; overflow-x: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  font-size: 0.9rem; line-height: 1.5;
+}
+.download code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.download .button { margin: 4px 0; }
+.download .note { font-size: 0.95rem; color: var(--muted); }
+.download .fpr { font-size: 0.85rem; }
+
 /* 404 */
 .notfound { min-height: 100vh; display: grid; place-content: center; text-align: center; gap: 8px; padding: 32px 16px; }
 .notfound .logo { color: var(--brand); width: 72px; margin-bottom: 8px; }
