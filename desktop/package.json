@@ -20,9 +20,9 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "electron-vite preview",
-    "dist:linux": "scripts/linux-icon.sh && npm run core:release && electron-vite build && electron-builder --linux",
-    "dist:mac": "scripts/mac-icon.sh && PROFILE=release UNIVERSAL=1 scripts/build-core.sh && electron-vite build && electron-builder --mac --universal",
-    "dist:deb": "scripts/linux-icon.sh && npm run core:release && electron-vite build && electron-builder --linux deb"
+    "dist:linux": "npm run core:release && electron-vite build && electron-builder --linux",
+    "dist:mac": "PROFILE=release UNIVERSAL=1 scripts/build-core.sh && electron-vite build && electron-builder --mac --universal",
+    "dist:deb": "npm run core:release && electron-vite build && electron-builder --linux deb"
   },
   "build": {
     "appId": "org.wolkenfunk.Wolkenfunk",
@@ -44,7 +44,7 @@
       ],
       "executableName": "wolkenfunk",
       "category": "Network;InstantMessaging",
-      "icon": "build/icons",
+      "icon": "resources/icons",
       "synopsis": "Nextcloud Talk desktop client",
       "description": "Fast desktop client for Nextcloud Talk: chats, voice and video calls, screen sharing.",
       "maintainer": "CODELABOR UG (haftungsbeschränkt) <hallo@codelabor.io>",
@@ -90,7 +90,8 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "resources/icon.ico"
     },
     "dmg": {
       "title": "${productName}"

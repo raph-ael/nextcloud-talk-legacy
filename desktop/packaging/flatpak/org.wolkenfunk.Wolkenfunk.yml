@@ -67,9 +67,9 @@ modules:
       # Start script, desktop entry, icon, AppStream metadata.
       - install -Dm755 wolkenfunk.sh /app/bin/wolkenfunk
       - install -Dm644 org.wolkenfunk.Wolkenfunk.desktop -t /app/share/applications
-      - install -Dm644 design/icon/app-icon.svg /app/share/icons/hicolor/scalable/apps/org.wolkenfunk.Wolkenfunk.svg
-      - for s in 128 256 512; do rsvg-convert -w $s -h $s design/icon/app-icon.svg -o icon-$s.png &&
-        install -Dm644 icon-$s.png /app/share/icons/hicolor/${s}x${s}/apps/org.wolkenfunk.Wolkenfunk.png; done
+      # Icons are prebuilt by design/icon/build-icons.py (rounded tile, like the .deb).
+      - for s in 16 24 32 48 64 128 256 512; do install -Dm644 desktop/resources/icons/${s}x${s}.png
+        /app/share/icons/hicolor/${s}x${s}/apps/org.wolkenfunk.Wolkenfunk.png; done
       - install -Dm644 desktop/packaging/linux/org.wolkenfunk.Wolkenfunk.metainfo.xml -t /app/share/metainfo
     sources:
       # Local test build: the working tree (the manifest lies in desktop/packaging/flatpak/).
