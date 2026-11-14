@@ -1,0 +1,14 @@
+{
+  "me": "mira",
+  "people": [
+    { "id": "mira", "name": "Mira Lange", "avatar": "avatars/mira.png" },
+    { "id": "lena", "name": "Lena Hoffmann", "avatar": "avatars/lena.png" },
+    { "id": "tobias", "name": "Tobias Krüger", "avatar": "avatars/tobias.png" },
+    { "id": "hilde", "name": "Hilde Lange", "avatar": "avatars/hilde.png" },
+    { "id": "paul", "name": "Paul Lange", "avatar": "avatars/paul.png" },
+    { "id": "sophie", "name": "Sophie Neumann", "avatar": "avatars/sophie.png" },
+    { "id": "jonas", "name": "Jonas Richter", "avatar": "avatars/jonas.png" },
+    { "id": "clara", "name": "Clara Vogel", "avatar": "avatars/clara.png" },
+    { "id": "emil", "name": "Emil Lange", "avatar": "avatars/emil.png" }
+  ]
+}

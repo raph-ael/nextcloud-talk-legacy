@@ -1,0 +1,175 @@
+{
+  "_hinweis": "Demo-Inhalte (alles erfunden). Zeiten: \"at\": \"-2 18:30\" = vor 2 Tagen um 18:30 Ortszeit, \"-45m\" / \"-3h\" = so lange vor dem Serverstart. Pro Unterhaltung aufsteigend sortieren. \"from\": Personen-id aus people.json. \"@id\" im Text wird zur Erwähnung. \"unread\": die letzten N Nachrichten der anderen sind ungelesen. \"reply\": \"key\" einer früheren Nachricht. \"file\": Bild oder Sprachnachricht aus media/. \"system\": conversation_created | user_added (mit \"user\") oder eigener \"text\".",
+  "categories": [
+    { "id": "3", "name": "Familie & Freunde", "rooms": ["familie", "hilde", "paul", "lena"] },
+    { "id": "4", "name": "Arbeit", "rooms": ["website", "tobias", "sophie"] }
+  ],
+  "rooms": [
+    {
+      "token": "garten",
+      "type": "group",
+      "name": "Gartenprojekt",
+      "description": "Unser Gemeinschaftsbeet hinter dem Fahrradschuppen 🌱",
+      "avatar": "avatars/garten.png",
+      "owner": "jonas",
+      "members": ["jonas", "mira", "lena", "clara"],
+      "unread": 5,
+      "messages": [
+        { "at": "-6 17:20", "from": "jonas", "system": "conversation_created" },
+        { "at": "-6 17:21", "from": "jonas", "system": "user_added", "user": "mira" },
+        { "at": "-6 17:24", "from": "jonas", "text": "Hallo zusammen! 🌱 Wir dürfen die Ecke hinter dem Fahrradschuppen für ein Gemeinschaftsbeet nutzen." },
+        { "at": "-6 17:30", "from": "lena", "text": "Wie toll! Ich habe noch Saatgut von Tomaten und Ringelblumen übrig." },
+        { "at": "-6 17:41", "from": "mira", "text": "Bin dabei! Am Samstag hätte ich Zeit zum Bauen.", "reactions": { "👍": ["jonas", "lena"] } },
+        { "at": "-2 10:05", "from": "clara", "text": "Ich bringe zum Bauen Kuchen mit 🍰", "reactions": { "❤️": ["mira", "jonas"] } },
+        { "key": "holz", "at": "-2 10:12", "from": "jonas", "text": "Das Holz für das Hochbeet ist bestellt und kommt Donnerstag." },
+        { "key": "frage", "at": "-1 19:40", "from": "lena", "text": "Soll ich die Tomaten schon vorziehen oder warten wir damit noch?" },
+        { "at": "-1 19:52", "from": "mira", "reply": "frage", "text": "Lieber noch warten, bis das Beet steht. Erst mal Salat und Kräuter 🙂", "reactions": { "👍": ["lena"] } },
+        { "at": "-95m", "from": "jonas", "text": "Das Hochbeet steht! 🎉" },
+        { "at": "-94m", "from": "jonas", "file": { "asset": "media/garden.jpg", "name": "Hochbeet.jpg" } },
+        { "at": "-80m", "from": "lena", "text": "Wow, sieht super aus! Die Sonnenblumen sind ja riesig 🌻", "reactions": { "❤️": ["jonas"] } },
+        { "at": "-31m", "from": "jonas", "text": "Den Gießplan hänge ich an die Schuppentür." },
+        { "at": "-12m", "from": "clara", "text": "Wer gießt am Wochenende? Ich könnte am Sonntag." }
+      ]
+    },
+    {
+      "token": "lena",
+      "type": "one-to-one",
+      "with": "lena",
+      "messages": [
+        { "at": "-4 21:05", "from": "lena", "text": "Hast du das Buch für den Lesekreis schon angefangen?" },
+        { "at": "-4 21:20", "from": "mira", "text": "Ja, ich bin bei Kapitel drei. Total spannend!" },
+        { "at": "-4 21:22", "from": "lena", "text": "Verrat nichts! 🙈", "reactions": { "😂": ["mira"] } },
+        { "at": "-1 18:00", "from": "mira", "text": "Laufen wir morgen früh eine Runde am See?" },
+        { "at": "-1 18:05", "from": "lena", "text": "Gerne! 8 Uhr an der Brücke?" },
+        { "at": "-1 18:06", "from": "mira", "text": "Perfekt 👍" },
+        { "at": "-25m", "from": "lena", "text": "Das war so schön heute früh. Nächste Woche wieder? ☀️" }
+      ]
+    },
+    {
+      "token": "website",
+      "type": "group",
+      "name": "Team Website",
+      "description": "Relaunch der neuen Website",
+      "avatar": "avatars/website.png",
+      "owner": "tobias",
+      "members": ["tobias", "mira", "sophie"],
+      "unread": 2,
+      "messages": [
+        { "at": "-5 09:00", "from": "tobias", "system": "conversation_created" },
+        { "at": "-5 09:02", "from": "tobias", "text": "Hier stimmen wir alles für den Relaunch ab." },
+        { "at": "-5 09:10", "from": "sophie", "text": "Ich lade die ersten Entwürfe bis Mittwoch hoch." },
+        { "key": "start", "at": "-2 14:30", "from": "sophie", "text": "Die Startseite ist fertig. Feedback gerne bis Freitag 🙏" },
+        { "at": "-2 14:45", "from": "mira", "reply": "start", "text": "Sieht richtig gut aus! Nur die Schrift im Footer ist mir etwas zu klein.", "reactions": { "👍": ["sophie", "tobias"] } },
+        { "at": "-2 15:02", "from": "tobias", "text": "Stimmt, passe ich an." },
+        { "at": "-1 16:20", "from": "mira", "text": "Die Texte für **Über uns** liegen jetzt im gemeinsamen Ordner." },
+        { "at": "-40m", "from": "tobias", "text": "Die Testseite läuft ✅" },
+        { "at": "-38m", "from": "tobias", "text": "@mira kannst du bitte noch einmal über die Kontaktseite schauen?" }
+      ]
+    },
+    {
+      "token": "familie",
+      "type": "group",
+      "name": "Familie",
+      "description": "Kuchen, Termine und alles andere ❤️",
+      "avatar": "avatars/familie.png",
+      "owner": "mira",
+      "members": ["mira", "hilde", "paul", "emil"],
+      "favorite": true,
+      "unread": 2,
+      "messages": [
+        { "at": "-9 20:15", "from": "mira", "system": "conversation_created" },
+        { "at": "-9 20:16", "from": "mira", "text": "Damit wir nicht alles per SMS hin- und herschicken 😄" },
+        { "key": "tablet", "at": "-9 20:30", "from": "emil", "text": "Sehr gut. Funktioniert das auch auf meinem Tablet?" },
+        { "at": "-9 20:31", "from": "paul", "reply": "tablet", "text": "Ja, Papa, einfach die App installieren 😉", "reactions": { "😂": ["mira"] } },
+        { "at": "-3 12:10", "from": "hilde", "text": "Am Sonntag gibt es Apfelkuchen. Wer kommt?", "reactions": { "❤️": ["mira", "paul", "emil"] } },
+        { "at": "-3 12:24", "from": "paul", "text": "Ich bin um drei da!" },
+        { "at": "-3 12:40", "from": "mira", "text": "Wir auch, ich bringe Sahne mit." },
+        { "at": "-1 09:15", "from": "emil", "text": "Danke für den schönen Nachmittag, war richtig gemütlich." },
+        { "at": "-1 09:20", "from": "mira", "text": "Fand ich auch! Oma, das Rezept musst du mir unbedingt geben 😋", "reactions": { "👍": ["hilde"] } },
+        { "at": "-3h", "from": "hilde", "file": { "asset": "media/voice.mp3", "name": "Sprachnachricht.mp3", "voice": true } },
+        { "at": "-170m", "from": "hilde", "text": "Ich habe dir das Rezept aufgesprochen, das Tippen dauert bei mir so lange 😊" }
+      ]
+    },
+    {
+      "token": "lesekreis",
+      "type": "group",
+      "name": "Lesekreis",
+      "description": "Ein Buch im Monat, Tee und gute Gespräche 📚",
+      "avatar": "avatars/lesekreis.png",
+      "owner": "clara",
+      "members": ["clara", "mira", "lena", "sophie"],
+      "messages": [
+        { "at": "-8 19:00", "from": "clara", "system": "conversation_created" },
+        { "at": "-8 19:05", "from": "clara", "text": "Willkommen im Lesekreis! 📚 Das nächste Treffen ist bei mir." },
+        { "at": "-8 19:20", "from": "sophie", "text": "Ich freue mich! Welches Buch nehmen wir als Nächstes?" },
+        { "at": "-8 19:31", "from": "clara", "text": "Jede bringt einen Vorschlag mit, dann stimmen wir ab." },
+        { "at": "-3 21:00", "from": "lena", "text": "Ich bin fast durch. Das Ende hat mich echt überrascht!" },
+        { "at": "-3 21:10", "from": "mira", "text": "Nicht spoilern, ich bin erst in der Mitte! 😄", "reactions": { "😂": ["lena", "clara", "sophie"] } },
+        { "at": "-3 21:12", "from": "clara", "text": "Keine Sorge, wir heben uns alles fürs Treffen auf." },
+        { "at": "-1 20:00", "from": "clara", "text": "Erinnerung: Donnerstag um 19 Uhr bei mir. Ich mache Tee ☕", "reactions": { "👍": ["mira", "lena"] } }
+      ]
+    },
+    {
+      "token": "tobias",
+      "type": "one-to-one",
+      "with": "tobias",
+      "messages": [
+        { "at": "-3 08:45", "from": "tobias", "text": "Guten Morgen! Hast du kurz Zeit für die Bilder auf der Startseite?" },
+        { "at": "-3 08:50", "from": "mira", "text": "Klar, in zehn Minuten?" },
+        { "at": "-3 08:51", "from": "tobias", "text": "Super, danke!" },
+        { "at": "-1 17:30", "from": "tobias", "text": "Schönen Feierabend! 👋" }
+      ]
+    },
+    {
+      "token": "hilde",
+      "type": "one-to-one",
+      "with": "hilde",
+      "messages": [
+        { "at": "-7 15:00", "from": "hilde", "text": "Hallo mein Schatz, klappt das hier mit dem Schreiben?" },
+        { "at": "-7 15:05", "from": "mira", "text": "Ja, Oma, perfekt! 😊", "reactions": { "❤️": ["hilde"] } },
+        { "at": "-7 15:06", "from": "hilde", "text": "Wie schön. Dann schicke ich dir ab jetzt öfter Nachrichten." },
+        { "at": "-2 11:00", "from": "mira", "text": "Brauchst du am Samstag Hilfe beim Einkaufen?" },
+        { "at": "-2 11:30", "from": "hilde", "text": "Das wäre lieb. Gegen zehn?" },
+        { "at": "-2 11:31", "from": "mira", "text": "Ich bin um zehn bei dir." }
+      ]
+    },
+    {
+      "token": "paul",
+      "type": "one-to-one",
+      "with": "paul",
+      "messages": [
+        { "at": "-6 19:00", "from": "paul", "text": "Kannst du mir am Wochenende beim Umzug helfen? 📦" },
+        { "at": "-6 19:12", "from": "mira", "text": "Klar! Wann soll ich da sein?" },
+        { "at": "-6 19:15", "from": "paul", "text": "Samstag um 9, ich besorge Brötchen 🥐", "reactions": { "👍": ["mira"] } },
+        { "at": "-4 20:30", "from": "paul", "text": "Danke nochmal, ohne dich hätte das ewig gedauert!" },
+        { "at": "-4 20:41", "from": "mira", "text": "Gerne! Die neue Wohnung ist wirklich schön." }
+      ]
+    },
+    {
+      "token": "sophie",
+      "type": "one-to-one",
+      "with": "sophie",
+      "messages": [
+        { "at": "-5 13:00", "from": "sophie", "text": "Ich habe zwei Farbvarianten für die Buttons gemacht. Welche gefällt dir besser?" },
+        { "at": "-5 13:10", "from": "mira", "text": "Die grüne! Die wirkt freundlicher." },
+        { "at": "-5 13:12", "from": "sophie", "text": "Dachte ich mir auch 💚", "reactions": { "❤️": ["mira"] } }
+      ]
+    },
+    {
+      "token": "sommerfest",
+      "type": "group",
+      "name": "Sommerfest",
+      "description": "Nachbarschaftsfest im Hof 🎈",
+      "avatar": "avatars/sommerfest.png",
+      "owner": "lena",
+      "members": ["lena", "mira", "paul", "jonas", "tobias", "sophie"],
+      "messages": [
+        { "at": "-12 18:00", "from": "lena", "system": "conversation_created" },
+        { "at": "-12 18:02", "from": "lena", "text": "Wer hat Lust, ein kleines Nachbarschaftsfest zu organisieren? 🎈" },
+        { "at": "-12 18:10", "from": "jonas", "text": "Ich kann Grill und Bierbänke besorgen." },
+        { "at": "-12 18:20", "from": "paul", "text": "Ich bringe Musik mit 🎶" },
+        { "at": "-10 12:00", "from": "lena", "text": "Danke euch allen, das war ein toller Tag!", "reactions": { "❤️": ["mira", "jonas", "paul", "tobias", "sophie"] } }
+      ]
+    }
+  ]
+}

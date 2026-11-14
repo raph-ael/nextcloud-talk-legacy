@@ -1,0 +1,30 @@
+[package]
+name = "talk-demo"
+description = "Fake Talk server with invented demo content, for website screenshots of the real clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "talk-demo"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "signal"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+base64.workspace = true
+image.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "form"] }
+serde_urlencoded = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6", features = ["derive"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+[dev-dependencies]
+# The strongest shape check: parse our responses with the clients' own wire types.
+talk-core.workspace = true
+reqwest.workspace = true

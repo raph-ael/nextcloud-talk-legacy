@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["talk-core", "talk-ffi", "talk-node", "talk-cli"]
+members = ["talk-core", "talk-ffi", "talk-node", "talk-cli", "talk-demo"]
 
 [workspace.package]
 version = "0.1.0"
