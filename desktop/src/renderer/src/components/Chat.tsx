@@ -526,7 +526,7 @@ const MessageRow = memo(function MessageRow({
       {day}
       <div className={cls} data-ts={msg.timestamp}>
         {isGroup && !own && (
-          <div className="msg-avatar">{last && <Avatar name={msg.author} size={28} />}</div>
+          <div className="msg-avatar">{last && <Avatar name={msg.author} userId={msg.actorType === 'users' ? msg.actorId : undefined} size={28} />}</div>
         )}
         <div className="msg-col">
           <div
