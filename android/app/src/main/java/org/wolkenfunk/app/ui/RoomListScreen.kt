@@ -142,7 +142,7 @@ fun RoomListScreen(sessions: SessionManager, state: UiState, onCompose: () -> Un
                     } else {
                         Box(
                             Modifier.padding(start = 12.dp, end = 8.dp).clip(CircleShape).clickable { menu = true },
-                        ) { Avatar(state.user, 32.dp) }
+                        ) { UserAvatar(sessions, state.userId.ifEmpty { state.user }, state.userId, 32.dp) }
                     }
                 },
                 actions = {

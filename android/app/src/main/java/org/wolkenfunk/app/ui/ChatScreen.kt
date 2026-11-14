@@ -726,7 +726,7 @@ private fun MessageRow(
                 verticalAlignment = Alignment.Bottom,
             ) {
                 if (isGroup && !own) {
-                    Box(Modifier.width(36.dp)) { if (last) Avatar(msg.author, 28.dp) }
+                    Box(Modifier.width(36.dp)) { if (last) UserAvatar(sessions, msg.author, if (msg.actorType == "users") msg.actorId else "", 28.dp) }
                 }
                 Box {
                     Column(

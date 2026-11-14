@@ -114,6 +114,8 @@ data class UiState(
     val session: SessionState = SessionState.LOADING,
     val server: String = "",
     val user: String = "",
+    /** Own Talk user id (for the own avatar); the login name until the server confirmed it. */
+    val userId: String = "",
     val rooms: List<RoomView> = emptyList(),
     /** Bumped on every `RoomsChanged`: sections may change (collapsed, categories) with equal rooms. */
     val roomsRev: Int = 0,
@@ -223,13 +225,20 @@ class SessionManager(private val context: Context) : CoreListener {
         s.setMediaEngine(media)
         _state.update {
             // Cached conversation list: shown in the first frame, before any request.
-            it.copy(session = SessionState.READY, server = account.server, user = account.loginName, rooms = s.rooms())
+            it.copy(
+                session = SessionState.READY,
+                server = account.server,
+                user = account.loginName,
+                userId = s.userId(),
+                rooms = s.rooms(),
+            )
         }
         // Unsent messages of an earlier run continue in the background worker as well.
         scheduleOutboxIfNeeded()
         scope.launch {
             try {
                 s.start()
+                _state.update { it.copy(userId = s.userId()) }
                 onRecordings(s.recordingNotices())
                 registerPush()
             } catch (e: CoreException.Unauthorized) {
