@@ -44,7 +44,6 @@ website/scripts/stage.py /tmp/wf --all    # Vorschau: alles verfügbar (--none: 
 python3 -m http.server -d /tmp/wf 8080
 ```
 
-Den Hinweistext zu macOS (Gatekeeper) bestätigt desktop-macos, siehe Kommentar in `download/`.
 
 ## Screenshots
 
