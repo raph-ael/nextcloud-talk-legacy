@@ -5,7 +5,8 @@
 # Apple Distribution certificate under Settings → Code signing identities. Codemagic creates
 # the provisioning profile for BUNDLE_ID itself; no secrets live in this file or the repo.
 #
-# Trigger: push a tag like `ios-v0.1.0`, or start the workflow manually.
+# Trigger: push a tag like `ios-v0.1.0`, or start the workflow manually. The extension
+# (BUNDLE_ID.notify) gets its profile the same way; both App IDs need the shared keychain group.
 
 workflows:
   ios-testflight:
@@ -23,9 +24,9 @@ workflows:
     environment:
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: org.sirplus.talk
+        bundle_identifier: org.wolkenfunk.app
       vars:
-        BUNDLE_ID: "org.sirplus.talk"
+        BUNDLE_ID: "org.wolkenfunk.app"
         XCODE_PROJECT: "ios/TalkLegacy.xcodeproj"
         XCODE_SCHEME: "TalkLegacy"
       xcode: latest
@@ -59,12 +60,13 @@ workflows:
         script: |
           xcode-project use-profiles --project "$XCODE_PROJECT"
 
+      # Version and build number come from ios/project.yml (scripts/set-version.sh:
+      # X*10000 + Y*100 + Z); Codemagic does not count builds itself.
       - name: Build IPA
         script: |
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
-            --scheme "$XCODE_SCHEME" \
-            --archive-xcargs "CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
+            --scheme "$XCODE_SCHEME"
 
     artifacts:
       - build/ios/ipa/*.ipa

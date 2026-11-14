@@ -134,7 +134,8 @@ final class UnreadLineTests: XCTestCase {
         let older = app.staticTexts.matching(NSPredicate(
             format: "label == 'Gestern' OR label MATCHES '^(Mo|Di|Mi|Do|Fr|Sa|So)\\\\., [0-9]{1,2}\\\\. .+' OR label MATCHES '^[0-9]{1,2}\\\\. .+ [0-9]{4}$'"
         )).firstMatch
-        for _ in 0..<25 where !older.exists { list.swipeDown(velocity: .fast) }
+        // Earlier test runs may have left a few hundred messages of today.
+        for _ in 0..<80 where !older.exists { list.swipeDown(velocity: .fast) }
         XCTAssertTrue(older.exists, "no divider of an earlier day")
         list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
             .press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)),

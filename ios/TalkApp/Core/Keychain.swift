@@ -9,7 +9,7 @@ struct StoredAccount: Codable, Equatable {
 
 /// Minimal Keychain wrapper for the single account (multi-account comes later).
 enum Keychain {
-    private static let service = "org.sirplus.talk.account"
+    private static let service = "org.wolkenfunk.app.account"
     private static let key = "primary"
 
     private static var baseQuery: [String: Any] {

@@ -8,7 +8,7 @@
 name: TalkLegacy
 
 options:
-  bundleIdPrefix: org.sirplus
+  bundleIdPrefix: org.wolkenfunk
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -57,12 +57,12 @@ targets:
       properties:
         aps-environment: $(APS_ENVIRONMENT)
         keychain-access-groups:
-          - $(AppIdentifierPrefix)org.sirplus.talk
-          - $(AppIdentifierPrefix)org.sirplus.talk.shared
+          - $(AppIdentifierPrefix)org.wolkenfunk.app
+          - $(AppIdentifierPrefix)org.wolkenfunk.app.shared
     info:
       path: TalkApp/Info.plist
       properties:
-        CFBundleDisplayName: Sirplus Talk
+        CFBundleDisplayName: Wolkenfunk
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -75,7 +75,7 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         TalkPushProxyURL: $(TALK_PUSH_PROXY_URL)
         # Shared with TalkNotify: the push device key.
-        TalkKeychainGroup: $(AppIdentifierPrefix)org.sirplus.talk.shared
+        TalkKeychainGroup: $(AppIdentifierPrefix)org.wolkenfunk.app.shared
         NSMicrophoneUsageDescription: Für Anrufe und zum Aufnehmen von Sprachnachrichten.
         NSCameraUsageDescription: Zum Aufnehmen und Senden von Fotos und für Videoanrufe.
         NSPhotoLibraryUsageDescription: Zum Senden von Fotos aus deiner Mediathek.
@@ -87,10 +87,10 @@ targets:
           - voip
           - processing
         BGTaskSchedulerPermittedIdentifiers:
-          - org.sirplus.talk.outbox
+          - org.wolkenfunk.app.outbox
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.sirplus.talk
+        PRODUCT_BUNDLE_IDENTIFIER: org.wolkenfunk.app
         PRODUCT_NAME: TalkLegacy
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -120,20 +120,20 @@ targets:
       path: NotifyExt/TalkNotify.entitlements
       properties:
         keychain-access-groups:
-          - $(AppIdentifierPrefix)org.sirplus.talk.shared
+          - $(AppIdentifierPrefix)org.wolkenfunk.app.shared
     info:
       path: NotifyExt/Info.plist
       properties:
-        CFBundleDisplayName: Sirplus Talk
+        CFBundleDisplayName: Wolkenfunk
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        TalkKeychainGroup: $(AppIdentifierPrefix)org.sirplus.talk.shared
+        TalkKeychainGroup: $(AppIdentifierPrefix)org.wolkenfunk.app.shared
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.sirplus.talk.notify
+        PRODUCT_BUNDLE_IDENTIFIER: org.wolkenfunk.app.notify
         PRODUCT_NAME: TalkNotify
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
@@ -147,7 +147,7 @@ targets:
       - target: TalkLegacy
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.sirplus.talk.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: org.wolkenfunk.app.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: TalkLegacy
 

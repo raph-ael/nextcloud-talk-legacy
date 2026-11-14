@@ -588,7 +588,7 @@ final class CallController: NSObject {
     func reportPushed(_ message: PushMessage?, completion: @escaping () -> Void) {
         guard let provider else { return completion() }
         var token: String?
-        var name = "Talk"
+        var name = "Wolkenfunk"
         if case .call(let t, _, let subject)? = message {
             token = t
             name = pushCallerName(subject: subject)
@@ -882,23 +882,8 @@ extension CallController: CXProviderDelegate {
     }
 }
 
-/// CallKit's template icon (white on transparent), drawn here: a speech bubble.
+/// CallKit's template icon (white on transparent): the Wolkenfunk glyph from the asset
+/// catalog (`design/icon/build-icons.py ios`).
 enum CallKitIcon {
-    static func png() -> Data? {
-        let size = CGSize(width: 40, height: 40)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
-        let img = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            UIColor.white.setFill()
-            let bubble = UIBezierPath(roundedRect: CGRect(x: 3, y: 5, width: 34, height: 24), cornerRadius: 10)
-            bubble.fill()
-            let tail = UIBezierPath()
-            tail.move(to: CGPoint(x: 10, y: 26))
-            tail.addLine(to: CGPoint(x: 8, y: 36))
-            tail.addLine(to: CGPoint(x: 19, y: 28))
-            tail.close()
-            tail.fill()
-        }
-        return img.pngData()
-    }
+    static func png() -> Data? { UIImage(named: "CallKitIcon")?.pngData() }
 }

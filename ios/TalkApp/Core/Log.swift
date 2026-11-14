@@ -1,17 +1,17 @@
 import os
 
-/// Unified logging (`log stream --predicate 'subsystem == "org.sirplus.talk"'`).
+/// Unified logging (`log stream --predicate 'subsystem == "org.wolkenfunk.app"'`).
 enum Log {
-    static let voice = Logger(subsystem: "org.sirplus.talk", category: "voice")
-    static let media = Logger(subsystem: "org.sirplus.talk", category: "media")
-    static let session = Logger(subsystem: "org.sirplus.talk", category: "session")
-    static let call = Logger(subsystem: "org.sirplus.talk", category: "call")
-    static let push = Logger(subsystem: "org.sirplus.talk", category: "push")
+    static let voice = Logger(subsystem: "org.wolkenfunk.app", category: "voice")
+    static let media = Logger(subsystem: "org.wolkenfunk.app", category: "media")
+    static let session = Logger(subsystem: "org.wolkenfunk.app", category: "session")
+    static let call = Logger(subsystem: "org.wolkenfunk.app", category: "call")
+    static let push = Logger(subsystem: "org.wolkenfunk.app", category: "push")
 }
 
 /// The Rust core's logs (tracing) go to the unified log under category "core".
 final class CoreLog: LogSink, @unchecked Sendable {
-    private static let logger = Logger(subsystem: "org.sirplus.talk", category: "core")
+    private static let logger = Logger(subsystem: "org.wolkenfunk.app", category: "core")
 
     /// Once, before the first session. Debug builds log the call machinery in detail.
     static func install() {
@@ -44,7 +44,7 @@ import OSLog
 import UserNotifications
 
 /// Debug builds with `TALK_LOG_DUMP=1`: the app's own log entries (subsystem
-/// org.sirplus.talk) are written to Documents/talk.log after each call, so device tests can
+/// org.wolkenfunk.app) are written to Documents/talk.log after each call, so device tests can
 /// fetch them (`devicectl device copy from --domain-type appDataContainer`).
 enum LogDump {
     static var enabled: Bool { DebugEnv.sticky("TALK_LOG_DUMP") == "1" }
@@ -55,7 +55,7 @@ enum LogDump {
         let run = {
             guard let store = try? OSLogStore(scope: .currentProcessIdentifier) else { return }
             let since = store.position(timeIntervalSinceLatestBoot: 0)
-            let entries = (try? store.getEntries(at: since, matching: NSPredicate(format: "subsystem == 'org.sirplus.talk'"))) ?? AnySequence([])
+            let entries = (try? store.getEntries(at: since, matching: NSPredicate(format: "subsystem == 'org.wolkenfunk.app'"))) ?? AnySequence([])
             let f = DateFormatter()
             f.dateFormat = "HH:mm:ss.SSS"
             let text = entries.compactMap { $0 as? OSLogEntryLog }

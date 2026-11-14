@@ -6,7 +6,7 @@ import Security
 /// keychain group shared with the Notification Service Extension (`TalkKeychainGroup`),
 /// which decrypts chat pushes. Builds without that entitlement (simulator) keep it private.
 enum PushKey {
-    private static let logger = Logger(subsystem: "org.sirplus.talk", category: "push")
+    private static let logger = Logger(subsystem: "org.wolkenfunk.app", category: "push")
 
     nonisolated private static var group: String? {
         let g = Bundle.main.object(forInfoDictionaryKey: "TalkKeychainGroup") as? String ?? ""
@@ -16,7 +16,7 @@ enum PushKey {
     nonisolated private static func query(group: String?) -> [String: Any] {
         var q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "org.sirplus.talk.push",
+            kSecAttrService as String: "org.wolkenfunk.app.push",
             kSecAttrAccount as String: "device-key",
         ]
         if let group { q[kSecAttrAccessGroup as String] = group }

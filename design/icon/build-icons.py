@@ -18,6 +18,7 @@ Needs rsvg-convert (librsvg2-bin) and Python 3 with Pillow.
   android/…/drawable/ic_launcher_*.xml      adaptive icon: background, foreground, monochrome
   android/…/drawable/ic_stat_wolkenfunk.xml notification small icon
   ios/…/AppIcon.appiconset/                 light, dark and tinted 1024 icons
+  ios/…/CallKitIcon.imageset/               CallKit template glyph (white + alpha, 40 pt @1–3x)
   website/public/…                          via website/scripts/build-assets.py
 """
 from __future__ import annotations
@@ -217,6 +218,16 @@ def ios() -> None:
         "info": {"author": "xcode", "version": 1},
     }
     write(out / "Contents.json", json.dumps(contents, indent=2) + "\n")
+    # CallKit: the glyph alone, white on transparent (the system tints it), 40 pt.
+    kit = ROOT / "ios" / "TalkApp" / "Assets.xcassets" / "CallKitIcon.imageset"
+    images = []
+    for scale in (1, 2, 3):
+        name = f"CallKitIcon@{scale}x.png" if scale > 1 else "CallKitIcon.png"
+        save_png(render(svg512(placed("#FFFFFF", 0.92)), 40 * scale), kit / name)
+        images.append({"idiom": "universal", "filename": name, "scale": f"{scale}x"})
+    write(kit / "Contents.json", json.dumps(
+        {"images": images, "info": {"author": "xcode", "version": 1},
+         "properties": {"template-rendering-intent": "template"}}, indent=2) + "\n")
 
 
 def website() -> None:

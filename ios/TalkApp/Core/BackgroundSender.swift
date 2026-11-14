@@ -9,7 +9,7 @@ import UIKit
 @MainActor
 final class BackgroundSender {
     static let shared = BackgroundSender()
-    static let taskId = "org.sirplus.talk.outbox"
+    static let taskId = "org.wolkenfunk.app.outbox"
 
     private var task: UIBackgroundTaskIdentifier = .invalid
     private var waiter: Task<Void, Never>?
