@@ -3,15 +3,20 @@
 # Ziel: Bind-Mount auf dem PVE-Host jw.helsinki → CT122 /var/www/wolkenfunk.org (sofort live).
 #   website/scripts/deploy.sh            # ausspielen
 #   website/scripts/deploy.sh --dry-run  # nur anzeigen, was sich ändern würde
+# Vorher prüft stage.py, welche Downloads auf pkg.wolkenfunk.org schon existieren; die übrigen
+# erscheinen als „bald“. Nach einem Release also einfach erneut ausspielen.
 set -euo pipefail
 
 HOST="${WOLKENFUNK_HOST:-jw.helsinki}"
 DEST="/root/claudes/wolkenfunk/site/"
-SRC="$(cd "$(dirname "$0")/../public" && pwd)/"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+"$(dirname "$0")/stage.py" "$STAGE/public"
 
 rsync -rlt --checksum --delete --itemize-changes \
   --chown=101000:101000 --chmod=D755,F644 \
-  "$@" "$SRC" "$HOST:$DEST"
+  "$@" "$STAGE/public/" "$HOST:$DEST"
 
 if [[ " $* " != *" --dry-run "* && " $* " != *" -n "* ]]; then
   # Prüfen über den Reverse-Proxy (öffentliche IP ist vom Host aus nicht erreichbar)

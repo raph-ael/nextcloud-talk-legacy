@@ -12,7 +12,7 @@
   --border: #DCE3EE;
   --link: #1650C4;
   --ok: #1E9E5A;
-  --hero-1: var(--brand-1);
+  --hero-1: var(--brand);
   --hero-2: var(--brand-2);
   --radius: 16px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
@@ -72,8 +72,28 @@ a:focus-visible, .button:focus-visible { outline: 3px solid var(--brand-1); outl
   background: rgb(255 255 255 / 0.14); border: 1px solid rgb(255 255 255 / 0.28);
 }
 
+/* Download auf der Startseite: ohne JS alle Plattformen, mit JS (platform.js) nur die eigene. */
+.get { margin: 32px 0 0; }
+.get-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 16px 20px; }
+.get-list li { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.get.is-detected .get-list li:not(.is-match) { display: none; }
+.hero .button { background: #FFFFFF; color: var(--brand-2); }
+.hero a.button:hover { background: #E8F0FE; }
+.hero .button[aria-disabled="true"] { background: transparent; color: var(--on-brand); border-color: rgb(255 255 255 / 0.6); }
+.button.big { padding: 14px 28px; font-size: 1.1rem; }
+.get.is-detected .button.big { padding: 16px 36px; font-size: 1.2rem; }
+.hint { font-size: 0.9rem; opacity: 0.92; }
+.get-more { margin: 20px 0 0; font-size: 0.95rem; }
+.hero a { color: var(--on-brand); }
+.hero :focus-visible { outline-color: #FFFFFF; }
+
 .status { margin: 24px 0 0; font-size: 0.95rem; opacity: 0.9; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #7CF0B0; margin-right: 6px; vertical-align: 1px; }
+
+/* Verfügbarkeit: website/scripts/stage.py setzt beim Ausspielen data-available an jedes
+   [data-pkg], dessen Datei auf pkg.wolkenfunk.org existiert. Ohne das gilt alles als „bald“. */
+[data-pkg]:not([data-available]) .ready, .ready[data-pkg]:not([data-available]) { display: none !important; }
+[data-pkg][data-available] .soon { display: none !important; }
 
 /* Inhalt */
 main { padding: clamp(40px, 7vw, 72px) 0 24px; }
@@ -89,9 +109,14 @@ main { padding: clamp(40px, 7vw, 72px) 0 24px; }
 .cta { text-align: center; margin: 40px 0 0; }
 .button {
   display: inline-block; padding: 12px 22px; border-radius: 999px; font-weight: 600; text-decoration: none;
-  background: var(--brand); color: var(--on-brand);
+  background: var(--brand); color: var(--on-brand); border: 2px solid transparent;
 }
-.button:hover { background: var(--brand-2); }
+a.button:hover { background: var(--brand-2); }
+.button.outline { background: transparent; color: var(--link); border-color: currentColor; }
+a.button.outline:hover { background: var(--surface); }
+.button[aria-disabled="true"] {
+  background: transparent; color: var(--muted); border: 2px dashed var(--border); cursor: default;
+}
 
 .footer { padding: 32px 0 40px; color: var(--muted); font-size: 0.9rem; text-align: center; }
 .footer p { margin: 0 auto; max-width: 60ch; }
@@ -116,15 +141,28 @@ main { padding: clamp(40px, 7vw, 72px) 0 24px; }
 }
 
 /* Download */
+.download h3 { margin: 24px 0 6px; font-size: 1.05rem; }
+.download section { scroll-margin-top: 16px; }
 .download pre {
   margin: 0 0 16px; padding: 12px 16px; overflow-x: auto;
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   font-size: 0.9rem; line-height: 1.5;
 }
-.download code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.download code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.92em; }
 .download .button { margin: 4px 0; }
 .download .note { font-size: 0.95rem; color: var(--muted); }
-.download .fpr { font-size: 0.85rem; }
+.download .fpr { font-size: 0.85rem; overflow-wrap: anywhere; }
+.jump { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 8px; }
+.jump a {
+  padding: 4px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  text-decoration: none; font-size: 0.95rem;
+}
+.jump a:hover { border-color: var(--link); }
+.table-wrap { overflow-x: auto; }
+.download table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.download th, .download td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--border); }
+.download thead th { color: var(--muted); font-weight: 600; }
+.download tbody th { font-weight: 600; white-space: nowrap; }
 
 /* 404 */
 .notfound { min-height: 100vh; display: grid; place-content: center; text-align: center; gap: 8px; padding: 32px 16px; }

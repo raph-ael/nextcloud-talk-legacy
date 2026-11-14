@@ -8,7 +8,7 @@
   <!-- Vor dem Launch: Zeile entfernen, dann darf die Seite in den Suchindex. -->
   <meta name="robots" content="noindex">
   <link rel="canonical" href="https://wolkenfunk.org/">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
 
   <meta name="color-scheme" content="light dark">
@@ -32,7 +32,7 @@
   <meta property="og:image:alt" content="Wolkenfunk-Logo: Sprechblase mit Funkwellen, daneben „Schnelle, native Clients für Nextcloud Talk“">
   <meta name="twitter:card" content="summary_large_image">
 
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=2">
 
   <script type="application/ld+json">
   {
@@ -54,7 +54,8 @@
         "operatingSystem": "Android, iOS, macOS, Windows, Linux",
         "license": "https://www.gnu.org/licenses/agpl-3.0.html",
         "codeRepository": "https://github.com/raph-ael/nextcloud-talk-legacy",
-        "image": "https://wolkenfunk.org/icon-512.png"
+        "image": "https://wolkenfunk.org/icon-512.png",
+        "downloadUrl": "https://wolkenfunk.org/download/"
       }
     ]
   }
@@ -70,22 +71,51 @@
       </svg>
       <h1>Wolkenfunk</h1>
       <p class="lead">Schnelle, native Clients für Nextcloud&nbsp;Talk.</p>
-      <ul class="platforms" aria-label="Plattformen">
-        <li>Android</li><li>iOS</li><li>macOS</li><li>Windows</li><li>Linux</li>
-      </ul>
-      <p class="status"><span class="dot" aria-hidden="true"></span> In Entwicklung – bald zum Ausprobieren</p>
+
+      <div class="get" id="get">
+        <ul class="get-list" aria-label="Herunterladen">
+          <li data-platform="windows" data-pkg="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe">
+            <a class="button big ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe">Für Windows herunterladen</a>
+            <span class="button big soon" aria-disabled="true">Windows: bald</span>
+            <span class="hint">Windows 10 und 11, 64-Bit</span>
+          </li>
+          <li data-platform="mac" data-pkg="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg">
+            <a class="button big ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg">Für macOS herunterladen</a>
+            <span class="button big soon" aria-disabled="true">macOS: bald</span>
+            <span class="hint">macOS 12 oder neuer, Intel und Apple Silicon</span>
+          </li>
+          <li data-platform="linux" data-pkg="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb">
+            <a class="button big ready" href="/download/#linux">Für Linux herunterladen</a>
+            <span class="button big soon" aria-disabled="true">Linux: bald</span>
+            <span class="hint">Debian, Ubuntu, AppImage, bald Flathub</span>
+          </li>
+          <li data-platform="android" data-pkg="https://pkg.wolkenfunk.org/android/wolkenfunk.apk">
+            <a class="button big ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk">Für Android herunterladen</a>
+            <span class="button big soon" aria-disabled="true">Android: bald</span>
+            <span class="hint">Android 8 oder neuer, APK</span>
+          </li>
+          <li data-platform="ios">
+            <span class="button big" aria-disabled="true">iOS: bald im App&nbsp;Store</span>
+            <span class="hint">iPhone und iPad</span>
+          </li>
+        </ul>
+        <p class="get-more"><a href="/download/" data-more="Andere Plattformen">Alle Varianten und Installationshinweise</a></p>
+      </div>
+      <script src="/platform.js?v=1"></script>
+
+      <p class="status"><span class="dot" aria-hidden="true"></span> In Entwicklung: frühe Testversionen</p>
     </div>
   </header>
 
   <main id="inhalt" class="wrap">
     <section class="features" aria-label="Was Wolkenfunk ausmacht">
       <article>
-        <h2>Schnell &amp; offline-first</h2>
+        <h2>Schnell und offline-first</h2>
         <p>Chats öffnen sofort, auch ohne Netz. Nachrichten gehen raus, sobald die Verbindung wieder steht.</p>
       </article>
       <article>
         <h2>Nativ auf jedem Gerät</h2>
-        <p>Ein gemeinsamer Kern in Rust, darüber echte native Oberflächen – keine Kompromisse bei der Bedienung.</p>
+        <p>Ein gemeinsamer Kern in Rust, darüber echte native Oberflächen für Android, iOS, macOS, Windows und Linux.</p>
       </article>
       <article>
         <h2>Dein Server</h2>
@@ -94,14 +124,14 @@
     </section>
 
     <p class="cta">
-      <a class="button" href="https://github.com/raph-ael/nextcloud-talk-legacy">Quellcode auf GitHub</a>
+      <a class="button outline" href="https://github.com/raph-ael/nextcloud-talk-legacy">Quellcode auf GitHub</a>
     </p>
   </main>
 
   <footer class="wrap footer">
     <p>Open Source unter <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.
       Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden.</p>
-    <nav class="legal-nav" aria-label="Rechtliches"><a href="/impressum/">Impressum</a><a href="/datenschutz/">Datenschutz</a></nav>
+    <nav class="legal-nav" aria-label="Weitere Seiten"><a href="/download/">Herunterladen</a><a href="/impressum/">Impressum</a><a href="/datenschutz/">Datenschutz</a></nav>
   </footer>
 </body>
 </html>
