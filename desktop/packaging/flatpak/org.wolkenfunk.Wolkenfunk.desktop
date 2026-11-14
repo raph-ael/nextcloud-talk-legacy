@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Wolkenfunk
+GenericName=Nextcloud Talk Client
+GenericName[de]=Nextcloud-Talk-Client
+Comment=Chats and calls with your own Nextcloud
+Comment[de]=Chats und Anrufe mit deiner eigenen Nextcloud
+Exec=wolkenfunk %U
+Icon=org.wolkenfunk.Wolkenfunk
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=Nextcloud;Talk;Chat;Call;Messenger;
+StartupNotify=true
+StartupWMClass=org.wolkenfunk.Wolkenfunk
+SingleMainWindow=true

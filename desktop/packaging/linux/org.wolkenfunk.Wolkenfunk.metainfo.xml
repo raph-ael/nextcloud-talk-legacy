@@ -15,20 +15,18 @@
 
   <description>
     <p>Wolkenfunk brings Nextcloud Talk to your desktop: chats and calls with your own Nextcloud server, quick to open and usable offline.</p>
+    <p xml:lang="de">Wolkenfunk bringt Nextcloud Talk auf den Desktop: Chats und Anrufe mit deinem eigenen Nextcloud-Server, schnell geöffnet und auch offline nutzbar.</p>
     <ul>
       <li>Chats open instantly, also without a connection; messages go out as soon as you are back online</li>
+      <li xml:lang="de">Chats öffnen sofort, auch ohne Netz; Nachrichten gehen raus, sobald die Verbindung wieder steht</li>
       <li>Voice and video calls, screen sharing</li>
+      <li xml:lang="de">Sprach- und Videoanrufe, Bildschirmfreigabe</li>
       <li>Voice messages, attachments, replies and reactions</li>
+      <li xml:lang="de">Sprachnachrichten, Anhänge, Antworten und Reaktionen</li>
       <li>Notifications and a tray icon, so calls can ring while the window is closed</li>
+      <li xml:lang="de">Benachrichtigungen und Tray-Symbol, damit Anrufe auch bei geschlossenem Fenster klingeln</li>
     </ul>
     <p>Wolkenfunk is an independent project and not affiliated with Nextcloud GmbH.</p>
-    <p xml:lang="de">Wolkenfunk bringt Nextcloud Talk auf den Desktop: Chats und Anrufe mit deinem eigenen Nextcloud-Server, schnell geöffnet und auch offline nutzbar.</p>
-    <ul xml:lang="de">
-      <li>Chats öffnen sofort, auch ohne Netz; Nachrichten gehen raus, sobald die Verbindung wieder steht</li>
-      <li>Sprach- und Videoanrufe, Bildschirmfreigabe</li>
-      <li>Sprachnachrichten, Anhänge, Antworten und Reaktionen</li>
-      <li>Benachrichtigungen und Tray-Symbol, damit Anrufe auch bei geschlossenem Fenster klingeln</li>
-    </ul>
     <p xml:lang="de">Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden.</p>
   </description>
 
@@ -37,7 +35,7 @@
   <url type="homepage">https://wolkenfunk.org/</url>
   <url type="vcs-browser">https://github.com/raph-ael/nextcloud-talk-legacy</url>
   <url type="bugtracker">https://github.com/raph-ael/nextcloud-talk-legacy/issues</url>
-  <url type="contact">mailto:hallo@codelabor.io</url>
+  <url type="contact">https://wolkenfunk.org/impressum/</url>
 
   <categories>
     <category>Network</category>

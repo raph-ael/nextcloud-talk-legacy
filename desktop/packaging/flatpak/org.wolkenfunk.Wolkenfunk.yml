@@ -1,0 +1,100 @@
+# Flatpak manifest for Wolkenfunk (desktop). Builds everything from source, offline:
+# the Rust core (napi module) with cargo, the Electron app with npm/electron-vite/electron-builder.
+# Generated offline sources: ./update-sources.sh (README.md). For Flathub this file goes into the
+# flathub/org.wolkenfunk.Wolkenfunk repo together with the two generated JSON files.
+app-id: org.wolkenfunk.Wolkenfunk
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '26.08'
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node24
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: wolkenfunk
+separate-locales: false
+
+finish-args:
+  # Talk is a network client.
+  - --share=network
+  # Window: Wayland, X11 only where there is no Wayland. IPC for X11 shared memory.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Microphone and audio output (calls, voice messages, ringing).
+  - --socket=pulseaudio
+  # Camera for video calls, and GPU acceleration. Chromium talks to /dev/video* directly (V4L2);
+  # its PipeWire camera path (camera portal) is still behind a feature flag, so --device=all is
+  # what works today. It includes --device=dri.
+  - --device=all
+  # Notifications (Electron goes to the notification daemon over D-Bus, not the portal).
+  - --talk-name=org.freedesktop.Notifications
+  # Tray icon (StatusNotifierItem), so calls can ring while the window is closed.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # safeStorage keeps the app password in the keyring: Secret Service (GNOME, KeePassXC, …) or
+  # KWallet on KDE (Chromium picks the backend by desktop; without access it would fall back to
+  # storing the key in plain text).
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.kwalletd5
+  - --talk-name=org.kde.kwalletd6
+  # powerMonitor: suspend/resume (reconnect calls and signaling after wake-up).
+  - --system-talk-name=org.freedesktop.login1
+  # Not needed: file system access (attachments go through the file chooser portal, links open via
+  # the OpenURI portal) and screen sharing (ScreenCast portal over PipeWire).
+
+modules:
+  - name: wolkenfunk
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node24/bin:/usr/lib/sdk/rust-stable/bin
+      env:
+        # Offline sources from generated-sources.json (npm) and cargo-sources.json (crates).
+        XDG_CACHE_HOME: /run/build/wolkenfunk/flatpak-node/cache
+        npm_config_cache: /run/build/wolkenfunk/flatpak-node/npm-cache
+        npm_config_offline: 'true'
+        CARGO_HOME: /run/build/wolkenfunk/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      # Rust core → desktop/native/talk_node.node (what scripts/build-core.sh does, offline).
+      - cargo --offline build --manifest-path core/Cargo.toml --release -p talk-node
+      - install -Dm644 core/target/release/libtalk_node.so desktop/native/talk_node.node
+      # Electron app, unpacked (no AppImage/deb inside Flatpak).
+      - cd desktop && npm ci --offline --no-audit --no-fund
+      - cd desktop && npx --offline electron-vite build
+      - cd desktop && . ../flatpak-node/electron-builder-arch-args.sh &&
+        npx --offline electron-builder --linux --dir --publish never $ELECTRON_BUILDER_ARCH_ARGS
+      - cp -a desktop/dist/linux*unpacked /app/main
+      # Start script, desktop entry, icon, AppStream metadata.
+      - install -Dm755 wolkenfunk.sh /app/bin/wolkenfunk
+      - install -Dm644 org.wolkenfunk.Wolkenfunk.desktop -t /app/share/applications
+      - install -Dm644 design/icon/app-icon.svg /app/share/icons/hicolor/scalable/apps/org.wolkenfunk.Wolkenfunk.svg
+      - for s in 128 256 512; do rsvg-convert -w $s -h $s design/icon/app-icon.svg -o icon-$s.png &&
+        install -Dm644 icon-$s.png /app/share/icons/hicolor/${s}x${s}/apps/org.wolkenfunk.Wolkenfunk.png; done
+      - install -Dm644 desktop/packaging/linux/org.wolkenfunk.Wolkenfunk.metainfo.xml -t /app/share/metainfo
+    sources:
+      # Local test build: the working tree (the manifest lies in desktop/packaging/flatpak/).
+      - type: dir
+        path: ../../..
+        skip:
+          - .git
+          - core/target
+          - desktop/node_modules
+          - desktop/native
+          - desktop/out
+          - desktop/dist
+          - desktop/build
+          - android
+          - ios
+          - website
+          - push-proxy
+      # Flathub: a fixed release instead of the working tree.
+      # - type: git
+      #   url: https://github.com/raph-ael/nextcloud-talk-legacy.git
+      #   tag: desktop-v0.1.0
+      #   commit: <sha of the tag>
+      - generated-sources.json
+      - cargo-sources.json
+      - type: file
+        path: wolkenfunk.sh
+      - type: file
+        path: org.wolkenfunk.Wolkenfunk.desktop
