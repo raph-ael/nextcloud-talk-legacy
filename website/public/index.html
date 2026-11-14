@@ -32,7 +32,7 @@
   <meta property="og:image:alt" content="Wolkenfunk-Logo: Sprechblase mit Funkwellen, daneben „Schnelle, native Clients für Nextcloud Talk“">
   <meta name="twitter:card" content="summary_large_image">
 
-  <link rel="stylesheet" href="/styles.css?v=2">
+  <link rel="stylesheet" href="/styles.css?v=3">
 
   <script type="application/ld+json">
   {
@@ -104,6 +104,10 @@
       <script src="/platform.js?v=1"></script>
 
       <p class="status"><span class="dot" aria-hidden="true"></span> In Entwicklung: frühe Testversionen</p>
+      <div class="shots">
+        <div class="shot-desktop"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-ungelesen-dunkel.800w.webp 800w, /screenshots/desktop-ungelesen-dunkel.webp 1280w" sizes="(min-width: 920px) 830px, 90vw"><img src="/screenshots/desktop-ungelesen-hell.webp" srcset="/screenshots/desktop-ungelesen-hell.800w.webp 800w, /screenshots/desktop-ungelesen-hell.webp 1280w" sizes="(min-width: 920px) 830px, 90vw" width="1280" height="800" fetchpriority="high" decoding="async" alt="Wolkenfunk am Computer: links die Chatliste mit den Kategorien „Arbeit“ und „Chats“, rechts der geöffnete Chat „Gartenprojekt“ mit der Linie „5 ungelesene Nachrichten“ und einem Foto vom neuen Hochbeet."></picture></div>
+        <div class="shot-phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-chats-dunkel.400w.webp 400w, /screenshots/android-chats-dunkel.webp 1080w" sizes="(min-width: 920px) 190px, 22vw"><img src="/screenshots/android-chats-hell.webp" srcset="/screenshots/android-chats-hell.400w.webp 400w, /screenshots/android-chats-hell.webp 1080w" sizes="(min-width: 920px) 190px, 22vw" width="1080" height="2400" decoding="async" alt="Wolkenfunk auf einem Android-Handy: die Chatliste mit den Kategorien „Familie &amp; Freunde“ und „Arbeit“."></picture></div>
+      </div>
     </div>
   </header>
 
@@ -115,7 +119,7 @@
       </article>
       <article>
         <h2>Nativ auf jedem Gerät</h2>
-        <p>Ein gemeinsamer Kern in Rust, darüber echte native Oberflächen für Android, iOS, macOS, Windows und Linux.</p>
+        <p>Ein gemeinsamer Kern in Rust, darüber eine eigene App für jedes System: nativ auf Android und iOS, schlank am Computer unter Windows, macOS und Linux.</p>
       </article>
       <article>
         <h2>Dein Server</h2>
@@ -124,6 +128,7 @@
     </section>
 
     <p class="cta">
+      <a class="button" href="/funktionen/">Alle Funktionen</a>
       <a class="button outline" href="https://github.com/raph-ael/nextcloud-talk-legacy">Quellcode auf GitHub</a>
     </p>
   </main>
@@ -131,7 +136,7 @@
   <footer class="wrap footer">
     <p>Open Source unter <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>.
       Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden.</p>
-    <nav class="legal-nav" aria-label="Weitere Seiten"><a href="/download/">Herunterladen</a><a href="/impressum/">Impressum</a><a href="/datenschutz/">Datenschutz</a></nav>
+    <nav class="legal-nav" aria-label="Weitere Seiten"><a href="/funktionen/">Funktionen</a><a href="/download/">Herunterladen</a><a href="/impressum/">Impressum</a><a href="/datenschutz/">Datenschutz</a></nav>
   </footer>
 </body>
 </html>

@@ -6,17 +6,19 @@ auf der Startseite); ohne JS zeigt die Seite einfach alle Plattformen.
 
 ```
 public/                 ausgelieferte Dateien
-  index.html            Startseite (SEO-Meta, Open Graph, JSON-LD), Download-Knopf je Plattform
+  index.html            Startseite (SEO-Meta, Open Graph, JSON-LD), Download-Knopf je Plattform, Hero-Bilder
+  funktionen/           Funktionen mit Screenshots
   platform.js           erkennt das Betriebssystem und zeigt nur dessen Knopf (CSP script-src 'self')
   404.html              Fehlerseite (siehe „Server“)
   impressum/, datenschutz/   Rechtliches (CODELABOR UG i.G., Angaben wie auf codelabor.io), bleiben noindex
   download/             alle Plattformen mit Hinweisen und Update-Tabelle; Dateien liegen auf pkg.wolkenfunk.org
   styles.css            Hell/Dunkel über prefers-color-scheme
+  screenshots/          Bilder vom Demo-Server (scripts/screenshots/README.md), nicht von Hand
   favicon.svg/.ico, apple-touch-icon.png, icon-*.png, og-image.png   ← generiert
   site.webmanifest, robots.txt, sitemap.xml, .well-known/security.txt
 scripts/
   build-assets.py       erzeugt alle Icons + og-image.png aus design/icon/wolkenfunk-symbolic.svg
-  stage.py              kopiert public/ und markiert Downloads, die es auf pkg.wolkenfunk.org gibt
+  stage.py              kopiert public/, markiert vorhandene Downloads, prüft Bilder, erzeugt kleine Varianten
   deploy.sh             stage.py, dann rsync nach jw.helsinki (CT122), danach Statusprüfung
 ```
 
@@ -44,6 +46,21 @@ python3 -m http.server -d /tmp/wf 8080
 
 Den Hinweistext zu macOS (Gatekeeper) bestätigt desktop-macos, siehe Kommentar in `download/`.
 
+## Screenshots
+
+Die Bilder in `public/screenshots/` kommen aus `scripts/screenshots/` (Demo-Server, erfundene Daten),
+benannt `<plattform>-<szene>-<hell|dunkel>.webp`. Die Seiten binden sie per `<picture>` ein: das
+dunkle Bild über `prefers-color-scheme`, mit `width`/`height`, unterhalb des ersten Bildschirms
+`loading="lazy"`.
+
+- Für `srcset` verweisen die Seiten zusätzlich auf verkleinerte Varianten `NAME.<breite>w.webp`.
+  Die erzeugt `stage.py` beim Ausspielen aus dem Original, ins Repo kommen nur die Originale.
+- `stage.py` bricht ab, wenn ein Bild fehlt, und warnt, wenn das Seitenverhältnis nicht zu
+  `width`/`height` passt (z. B. wenn sich die Größe der Mac-Bilder mit Fensterrahmen ändert).
+- Vorschau ohne die echten Bilder: `stage.py /tmp/wf --all --placeholders`.
+- `screenshots/desktop-chat.png` ist das AppStream-Bild aus
+  `desktop/packaging/linux/org.wolkenfunk.Wolkenfunk.metainfo.xml` (Flathub), keine Seite nutzt es.
+
 ## Icons neu erzeugen
 
 Nach Änderungen am Symbol (`design/icon/wolkenfunk-symbolic.svg`) oder an den Farben im Skript:
@@ -69,7 +86,7 @@ hinter dem Reverse-Proxy CT100). `--delete`: was nicht in `public/` liegt, versc
 - In `index.html` die Zeile `<meta name="robots" content="noindex">` entfernen.
 - `lastmod` in `sitemap.xml` pflegen, bei neuen Seiten Einträge ergänzen.
 - `Expires` in `.well-known/security.txt` spätestens jährlich verlängern.
-- In `download/index.html` ebenfalls `noindex` entfernen.
+- In `download/` und `funktionen/` ebenfalls `noindex` entfernen.
 - Wer `styles.css` oder `platform.js` ändert, zählt `?v=` in den HTML-Dateien hoch (Cache 1 h).
 - Impressum nachziehen, sobald die UG eingetragen ist (HRB, ggf. USt-IdNr.; „i.G.“ streichen).
   Datenschutz anpassen, wenn weitere Skripte, Formulare oder Dienste Dritter dazukommen.
