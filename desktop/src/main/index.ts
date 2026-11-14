@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   Notification,
   protocol,
@@ -1215,6 +1216,19 @@ async function quitAfterOutbox(): Promise<void> {
   setImmediate(() => app.quit())
 }
 
+/**
+ * Gear for „Einstellungen …“ (system symbol): from macOS 26 on, the system menu items carry
+ * icons, and an item without one sits out of line. Earlier versions show no menu icons.
+ */
+function settingsMenuIcon(): Electron.NativeImage | undefined {
+  if (Number(process.getSystemVersion().split('.')[0]) < 26) return undefined
+  const image = nativeImage.createFromNamedImage('gearshape')
+  if (image.isEmpty()) return undefined
+  const icon = image.resize({ height: 16 })
+  icon.setTemplateImage(true)
+  return icon
+}
+
 /** Standard macOS menu bar (app, edit, view, window); other platforms keep no menu. */
 function macMenu(): Menu {
   const name = app.getName()
@@ -1224,7 +1238,7 @@ function macMenu(): Menu {
       submenu: [
         { role: 'about', label: `Über ${name}` },
         { type: 'separator' },
-        { label: 'Einstellungen …', accelerator: 'CmdOrCtrl+,', click: openSettings },
+        { label: 'Einstellungen …', accelerator: 'CmdOrCtrl+,', icon: settingsMenuIcon(), click: openSettings },
         { type: 'separator' },
         { role: 'services', label: 'Dienste' },
         { type: 'separator' },
