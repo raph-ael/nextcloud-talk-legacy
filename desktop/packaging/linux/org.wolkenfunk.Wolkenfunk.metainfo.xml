@@ -83,7 +83,9 @@
   <releases>
     <release version="0.3.0" date="2026-11-14" type="development">
       <description>
-        <p>Version 0.3.0.</p>
+        <p>Neuer Bereich „Einstellungen“ mit Darstellung: Design hell, dunkel oder wie das System, dazu zehn Akzentfarben.</p>
+        <p>Rechtsklick auf einen Chat: als gelesen markieren, Favorit, Kategorie, Benachrichtigungen (alle, nur Erwähnungen, aus) und Gruppeneinstellungen.</p>
+        <p>Stummgeschaltete Chats sind in der Liste markiert und zählen nicht mehr im Badge.</p>
       </description>
     </release>
     <release version="0.2.0" date="2026-11-14" type="development">
