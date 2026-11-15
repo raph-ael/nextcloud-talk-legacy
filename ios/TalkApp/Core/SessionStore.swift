@@ -266,10 +266,16 @@ final class SessionStore {
     private func loadAccounts() {
         var list = AccountList.load()
         var unreadable = false
-        if !AccountList.migrated {
+        if !AccountList.migrated || list.isEmpty {
             switch takeOver(&list) {
             case .failed: unreadable = true
             default: break
+            }
+        } else if list.contains(where: { $0.dir == Self.legacyDir }) {
+            // The list written by the takeover was read back: only now the old items go.
+            Keychain.deleteLegacy()
+            if let a = list.first(where: { $0.dir == Self.legacyDir }), DeviceKeys.key(for: a.id) != nil {
+                DeviceKeys.deleteLegacy()
             }
         }
         for a in list where runtimes[a.id] == nil {
@@ -287,6 +293,11 @@ final class SessionStore {
                 unreadable = true
             }
         }
+        // Push keys without an entry (an account whose list got lost) would name a missing
+        // account for a push that its entry's key decrypts just as well.
+        for e in DeviceKeys.all() where !list.contains(where: { $0.id == e.accountId }) {
+            DeviceKeys.delete(for: e.accountId)
+        }
         accounts = list.filter { runtimes[$0.id] != nil }
         if let id = activeId, runtimes[id] != nil {
             phase = .ready
@@ -302,8 +313,10 @@ final class SessionStore {
     private enum TakeOver { case none, done, failed }
 
     /// First start with several accounts: the earlier version's account becomes the first
-    /// entry, without a new login. It keeps its folder `talk/` and its push key; the old
-    /// Keychain items go only once the new list is written.
+    /// entry, without a new login. It keeps its folder `talk/` and its push key. The old
+    /// Keychain items go only on a later start that reads the new list back: UserDefaults
+    /// may not reach the disk before iOS moves the container (update), and a lost list then
+    /// simply takes over again.
     private func takeOver(_ list: inout [Account]) -> TakeOver {
         let old: StoredAccount
         switch Keychain.legacyAccount() {
@@ -328,14 +341,12 @@ final class SessionStore {
         a.userId = rt.session.userId()
         a.name = rt.session.displayName()
         rt.account = a
-        let keyKept = DeviceKeys.adoptLegacy(for: id, line: a.line)
+        _ = DeviceKeys.adoptLegacy(for: id, line: a.line)
         list.insert(a, at: 0)
         AccountList.save(list)
         AccountList.active = id
         AccountList.migrated = true
         Push.adoptLegacyRegistration(for: id)
-        Keychain.deleteLegacy()
-        if keyKept { DeviceKeys.deleteLegacy() }
         Log.push.info("takeover: account \(id, privacy: .public)")
         return .done
     }
@@ -561,7 +572,14 @@ final class SessionStore {
         if revoke { try? await s.logout() } else { s.shutdown() }
         Keychain.deletePassword(for: id)
         DeviceKeys.delete(for: id)
-        if !devRun { AccountList.save(AccountList.load().filter { $0.id != id }) }
+        if !devRun {
+            AccountList.save(AccountList.load().filter { $0.id != id })
+            // Not taken over again on the next start.
+            if rt.account.dir == Self.legacyDir {
+                Keychain.deleteLegacy()
+                DeviceKeys.deleteLegacy()
+            }
+        }
         // Unsent messages belong to this account: never deliver them under another one.
         try? FileManager.default.removeItem(at: Self.dataDir(rt.account.dir))
         Notifications.removeAll(account: id, legacy: rt.account.dir == Self.legacyDir)
