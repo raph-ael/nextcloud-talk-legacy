@@ -1157,6 +1157,9 @@ function showWindow(): void {
   if (win.isMinimized()) win.restore()
   win.show()
   win.focus()
+  // macOS: a button in a notification („Annehmen“) does not activate the app, and focus()
+  // alone leaves an inactive app behind the others. Every caller answers a click.
+  if (process.platform === 'darwin') app.focus({ steal: true })
 }
 
 function createWindow(): void {
