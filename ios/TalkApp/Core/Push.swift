@@ -57,6 +57,7 @@ final class Push {
             }
             do {
                 let r = try await session.registerPush(pushToken: "\(apns) \(voip)", proxyUrl: Self.proxyURL, deviceKeyPem: key)
+                guard SessionStore.shared.runtime(id) === rt else { return }
                 UserDefaults.standard.set(true, forKey: Self.registeredKey(id))
                 Log.push.info("registered \(id, privacy: .public) at \(r.proxy, privacy: .public)")
                 #if DEBUG
@@ -86,6 +87,9 @@ final class Push {
     /// Logout of one account: the server stops pushing to it, its key is thrown away.
     func unregister(_ rt: AccountRuntime) async {
         let id = rt.account.id
+        // A registration still on its way would come back after the sign-out.
+        rt.registerAgain = false
+        for _ in 0..<100 where rt.registering { try? await Task.sleep(for: .milliseconds(100)) }
         if UserDefaults.standard.bool(forKey: Self.registeredKey(id)) {
             do { try await rt.session.unregisterPush() } catch {
                 Log.push.error("unregister \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -96,8 +100,17 @@ final class Push {
 
     /// The account is gone (also after `authFailed`, without asking the server).
     func forget(_ rt: AccountRuntime) {
+        rt.registerAgain = false
         UserDefaults.standard.removeObject(forKey: Self.registeredKey(rt.account.id))
         DeviceKeys.delete(for: rt.account.id)
+    }
+
+    /// Flags of accounts that are gone (e.g. a registration that finished after its sign-out).
+    static func dropFlags(keeping ids: Set<String>) {
+        let d = UserDefaults.standard
+        for key in d.dictionaryRepresentation().keys where key.hasPrefix("push.registered.") {
+            if !ids.contains(String(key.dropFirst("push.registered.".count))) { d.removeObject(forKey: key) }
+        }
     }
 
     /// Background push (deletions: a call that ended rings no longer). The key that

@@ -237,8 +237,9 @@ final class SessionStore {
             guard let server = env["TALK_DEV_SERVER\(suffix)"], let user = env["TALK_DEV_USER\(suffix)"],
                   let pass = env["TALK_DEV_PASS\(suffix)"], !server.isEmpty, !user.isEmpty, !pass.isEmpty else { continue }
             let id = "de00000\(n + 1)"
+            // Never `talk/`: on a device that is the stored first account's folder (outbox!).
             let a = Account(id: id, server: server, loginName: user, userId: user, name: user, key: "",
-                            dir: n == 0 ? legacyDir : "accounts/\(id)")
+                            dir: "accounts/\(id)")
             list.append((a, pass))
         }
         guard !list.isEmpty else { return nil }
@@ -298,6 +299,7 @@ final class SessionStore {
         for e in DeviceKeys.all() where !list.contains(where: { $0.id == e.accountId }) {
             DeviceKeys.delete(for: e.accountId)
         }
+        Push.dropFlags(keeping: Set(list.map(\.id)))
         accounts = list.filter { runtimes[$0.id] != nil }
         if let id = activeId, runtimes[id] != nil {
             phase = .ready
@@ -387,7 +389,12 @@ final class SessionStore {
         Push.shared.update(rt)
         await refreshIdentity(rt, password: password)
         #if DEBUG
-        if ProcessInfo.processInfo.environment["TALK_DEV_LOGOUT"] == "1", rt.account.id == activeId { logout() }
+        let env = ProcessInfo.processInfo.environment
+        if env["TALK_DEV_LOGOUT"] == "1", rt.account.id == activeId { logout() }
+        // Device tests: sign out exactly this stored account (login name), like "Abmelden".
+        if let who = env["TALK_DEV_REMOVE"], !who.isEmpty, who == rt.account.loginName {
+            await signOut(rt.account.id, revoke: true)
+        }
         #endif
     }
 
