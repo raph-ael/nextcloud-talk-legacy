@@ -162,7 +162,7 @@ Beim ersten Start mit dieser Version wird das vorhandene Konto der erste Eintrag
 - Es bekommt eine neue `id`, behält aber seinen Datenordner **`talk/`**. Der Ordner wird nicht umbenannt, das spart einen Umzug bei geöffnetem Cache. In der Liste steht `dir` relativ, nie als absoluter Pfad: iOS gibt der App mit jedem Update einen neuen Container-Pfad. Der Postausgang biegt seine Anhänge beim Laden selbst auf den aktuellen Ordner um.
 - Es behält seinen Push-Schlüssel, damit die bestehende Registrierung gilt.
 - `userId`, `name` und `key` kommen aus dem Cache (`userId`, `displayName()`), ohne Netz. Der `key` wird nach dem ersten `start()` mit `resolveAccount` nachgetragen.
-- Die alten Einträge (Desktop `account.json`, iOS Keychain „primary“, Android die einzelnen Prefs-Schlüssel) werden erst gelöscht, wenn die neue Liste geschrieben ist.
+- Die alten Einträge (Desktop `account.json`, iOS Keychain „primary“, Android die einzelnen Prefs-Schlüssel) werden erst gelöscht, wenn die neue Liste sicher auf der Platte liegt: synchron geschrieben (Desktop atomar, Android `commit()`), oder wie auf iOS erst bei einem späteren Start, der die Liste zurückliest. Geht die Liste vorher verloren, übernimmt die App einfach noch einmal.
 - iOS: PushKit und die Notification-Erweiterung können laufen, bevor die App übernommen hat. Finden sie keine Schlüsselliste, nehmen sie den alten Schlüssel `device-key`.
 
 ### Lesefehler ist nicht „kein Konto“
