@@ -160,6 +160,8 @@ final class SessionStore {
         callMedia.onStartAudio = { _ in CallAudio.shared.startAudio() }
         callMedia.onStopAudio = { _ in CallAudio.shared.stopAudio() }
         callMedia.onCameraFailed = { CallController.shared.cameraFailed($0) }
+        // Started in the background (a push, a notification action): nothing is seen.
+        foreground = UIApplication.shared.applicationState != .background
         if let devs = Self.devAccounts() {
             devRun = true
             for (a, password) in devs {
@@ -168,7 +170,9 @@ final class SessionStore {
             if let first = accounts.first { activate(first.id) } else { phase = .loggedOut }
         } else {
             loadAccounts()
+            retryRevokes()
         }
+        Notifications.registerCategories()
         // Started before the first unlock (push after a restart): the Keychain could not be
         // read, the accounts start once it can.
         NotificationCenter.default.addObserver(
@@ -390,6 +394,7 @@ final class SessionStore {
         await refreshIdentity(rt, password: password)
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
+        DevPushKeys.export(rt.account)
         if env["TALK_DEV_LOGOUT"] == "1", rt.account.id == activeId { logout() }
         // Device tests: sign out exactly this stored account (login name), like "Abmelden".
         if let who = env["TALK_DEV_REMOVE"], !who.isEmpty, who == rt.account.loginName {
@@ -490,11 +495,8 @@ final class SessionStore {
         if let known = accounts.first(where: {
             $0.key == who.key || ($0.key.isEmpty && $0.server == result.server && $0.userId == who.userId)
         }) {
-            Task.detached {
-                try? await revokeAppPassword(
-                    server: result.server, loginName: result.loginName, appPassword: result.appPassword, platform: .ios
-                )
-            }
+            let surplus = StoredAccount(server: result.server, loginName: result.loginName, appPassword: result.appPassword)
+            Task { await self.revoke(surplus) }
             adding = false
             switchTo(known.id)
             Toast.show("Dieses Konto ist schon angemeldet")
@@ -571,12 +573,27 @@ final class SessionStore {
         }
         // Only this account's own call.
         if CallController.shared.account == id { s.hangUp() }
+        // Read before it is deleted: given back to the server below, or on a later start.
+        let password: String? = if case .found(let p) = Keychain.password(for: id) { p } else { nil }
         if revoke { await Push.shared.unregister(rt) } else { Push.shared.forget(rt) }
         runtimes[id] = nil
         rt.bridge.store = nil
         badges[id] = nil
         accounts.removeAll { $0.id == id }
-        if revoke { try? await s.logout() } else { s.shutdown() }
+        if revoke {
+            do {
+                try await s.logout()
+            } catch CoreError.Unauthorized {
+                // Already invalid at the server.
+            } catch {
+                // No network: the server would keep pushing to an account that is gone here.
+                if let password, !devRun {
+                    rememberRevoke(StoredAccount(server: rt.account.server, loginName: rt.account.loginName, appPassword: password))
+                }
+            }
+        } else {
+            s.shutdown()
+        }
         Keychain.deletePassword(for: id)
         DeviceKeys.delete(for: id)
         if !devRun {
@@ -614,6 +631,112 @@ final class SessionStore {
             user = ""
             userId = ""
             phase = .loggedOut
+        }
+    }
+
+    // MARK: - Notifications (docs/notifications.md)
+
+    /// Back in front: deletions do not arrive reliably, so the notifications of chats
+    /// without anything unread go (after a fresh list) and the icon number is set anew.
+    /// The permission is read again, and asked for once.
+    func cameToFront() {
+        Task { await NotificationPermission.shared.refresh() }
+        if phase == .ready { Notifications.askAtStart() }
+        for rt in allRuntimes {
+            let id = rt.account.id
+            let legacy = rt.account.dir == Self.legacyDir
+            Task {
+                // Offline: the old list could remove a notification that just came in.
+                do { try await rt.session.refreshRooms() } catch { return }
+                guard self.runtimes[id] === rt else { return }
+                let unread = rt.session.rooms().filter { $0.unreadMessages > 0 || $0.unreadMention }.map(\.token)
+                Notifications.keepOnly(account: id, legacy: legacy, unread: Set(unread))
+                self.badges[id] = rt.session.badge()
+                self.updateAppBadge()
+            }
+        }
+    }
+
+    /// "Antworten" in a notification: into the outbox of the notification's account,
+    /// without making it active; also when iOS started the app in the background for it.
+    func reply(account: String?, token: String, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard let rt = runtime(account) else {
+            Log.push.error("reply: account \(account ?? "-", privacy: .public) not running")
+            return
+        }
+        _ = rt.session.enqueueText(token: token, text: text, replyTo: nil, referenceId: newReferenceId())
+        BackgroundSender.shared.actionQueued(rt.session)
+        Notifications.removeChats(account: rt.account.id, legacy: rt.account.dir == Self.legacyDir, tokens: [token])
+    }
+
+    /// "Als gelesen markieren" in a notification, in its account. The list first: after a
+    /// cold start or in the background it may not know the newest message yet.
+    func markReadFromNotification(account: String?, token: String) async {
+        guard let rt = runtime(account) else {
+            Log.push.error("mark read: account \(account ?? "-", privacy: .public) not running")
+            return
+        }
+        try? await rt.session.refreshRooms()
+        if let error = await rt.session.markRoomRead(token: token) {
+            Log.push.error("mark read: \(error, privacy: .public)")
+        }
+        Notifications.removeChats(account: rt.account.id, legacy: rt.account.dir == Self.legacyDir, tokens: [token])
+        badges[rt.account.id] = rt.session.badge()
+        updateAppBadge()
+    }
+
+    /// "Push testen": a test push to the active account's devices.
+    func testPush() async -> Bool {
+        guard let s = session else { return false }
+        do {
+            try await s.testPush()
+            return true
+        } catch {
+            Log.push.error("test push: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    // MARK: - Sign-out without network
+
+    /// Gives an app password back; remembered for the next start when that fails.
+    private func revoke(_ a: StoredAccount) async {
+        do {
+            try await revokeAppPassword(server: a.server, loginName: a.loginName, appPassword: a.appPassword, platform: .ios)
+        } catch CoreError.Unauthorized {
+        } catch {
+            rememberRevoke(a)
+        }
+    }
+
+    private func rememberRevoke(_ a: StoredAccount) {
+        var list = Keychain.pendingRevokes()
+        guard !list.contains(a) else { return }
+        list.append(a)
+        Keychain.setPendingRevokes(list)
+        Log.push.info("revoke later (\(list.count) waiting)")
+    }
+
+    /// On start: the app passwords of earlier sign-outs without network.
+    private func retryRevokes() {
+        let waiting = Keychain.pendingRevokes()
+        guard !waiting.isEmpty else { return }
+        Task {
+            var left: [StoredAccount] = []
+            for a in waiting {
+                do {
+                    try await revokeAppPassword(server: a.server, loginName: a.loginName, appPassword: a.appPassword, platform: .ios)
+                } catch CoreError.Unauthorized {
+                } catch {
+                    left.append(a)
+                }
+            }
+            // Others may have been added meanwhile.
+            let added = Keychain.pendingRevokes().filter { !waiting.contains($0) }
+            Keychain.setPendingRevokes(left + added)
+            Log.push.info("revoked \(waiting.count - left.count), \(left.count) still waiting")
         }
     }
 
@@ -720,10 +843,11 @@ final class SessionStore {
         case .participantsChanged(let token):
             guard active else { return }
             participantsVersion[token, default: 0] += 1
-        case .messageNotices, .noticesCleared:
-            // iOS notifies from pushes; clearing comes with the notifications block
-            // (docs/notifications.md).
+        case .messageNotices:
+            // iOS notifies from pushes (docs/notifications.md "Zwei Wege").
             break
+        case .noticesCleared(let tokens):
+            Notifications.removeChats(account: id, legacy: rt.account.dir == Self.legacyDir, tokens: Set(tokens))
         }
     }
 
@@ -858,6 +982,9 @@ final class SessionStore {
         groupInfoOpen = false
         listPath = []
         voice.loadDraft(token)
+        if let id = activeId {
+            Notifications.removeChats(account: id, legacy: runtimes[id]?.account.dir == Self.legacyDir, tokens: [token])
+        }
         Task {
             do {
                 let page = try await s.openChat(token: token)
@@ -984,7 +1111,6 @@ final class SessionStore {
         guard let s = session else { return }
         clearUnreadLine(token)
         _ = s.enqueueText(token: token, text: text, replyTo: replyTo?.toReply, referenceId: newReferenceId())
-        Notifications.askOnce()
         BackgroundSender.shared.queued()
     }
 
@@ -1008,7 +1134,6 @@ final class SessionStore {
             Toast.show("Bild konnte nicht gespeichert werden")
             return
         }
-        Notifications.askOnce()
         BackgroundSender.shared.queued()
     }
 

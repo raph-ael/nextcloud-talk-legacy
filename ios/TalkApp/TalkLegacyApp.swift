@@ -39,6 +39,10 @@ struct TalkLegacyApp: App {
             .tint(Talk.accent)
             .preferredColorScheme(appearance.colorScheme)
             .onAppear { appearance.applyToWindows() }
+            // The first account just signed in: ask for notifications (docs/notifications.md).
+            .onChange(of: store.phase) { _, phase in
+                if phase == .ready && scenePhase == .active { Notifications.askAtStart() }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             store.foreground = phase == .active
@@ -46,6 +50,7 @@ struct TalkLegacyApp: App {
             case .active:
                 BackgroundSender.shared.enteredForeground()
                 if let token = store.activeToken { store.markVisibleRead(token) }
+                store.cameToFront()
             case .inactive:
                 // Screen off, app switcher, incoming call: like Signal, a recording stops as draft.
                 store.voice.interrupt()
@@ -178,14 +183,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             guard let token, token == store.activeToken else { return false }
             return store.runtime(account)?.account.id == store.activeId
         }
-        return open ? [] : [.banner, .sound]
+        return open ? [] : [.banner, .list, .sound]
     }
 
     /// A tap switches into the notification's account and opens the chat (not during a call).
+    /// "Antworten" and "Als gelesen markieren" act in the notification's account without
+    /// switching; for them iOS may start the app in the background.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
         guard let token = info["token"] as? String else { return }
         let account = info["account"] as? String
+        switch response.actionIdentifier {
+        case Notifications.replyAction:
+            let text = (response as? UNTextInputNotificationResponse)?.userText ?? ""
+            await MainActor.run { SessionStore.shared.reply(account: account, token: token, text: text) }
+            return
+        case Notifications.readAction:
+            await SessionStore.shared.markReadFromNotification(account: account, token: token)
+            return
+        case UNNotificationDefaultActionIdentifier:
+            break
+        default:
+            return
+        }
         await MainActor.run {
             let store = SessionStore.shared
             guard let id = store.runtime(account)?.account.id, store.switchTo(id) else { return }

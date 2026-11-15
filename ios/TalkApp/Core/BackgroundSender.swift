@@ -50,15 +50,30 @@ final class BackgroundSender {
 
     /// The scene left the foreground.
     func enteredBackground() {
-        let sessions = sending
+        keepAlive(sending)
+    }
+
+    /// A notification action ("Antworten") queued a message; iOS may have started the app
+    /// in the background just for it.
+    func actionQueued(_ s: TalkSession) {
+        s.networkChanged()
+        keepAlive(sending)
+    }
+
+    /// A background task (about 30 s) until these outboxes are idle, the processing task
+    /// for what is left.
+    private func keepAlive(_ sessions: [TalkSession]) {
         guard !sessions.isEmpty else { return }
         schedule()
-        guard task == .invalid else { return }
-        task = UIApplication.shared.beginBackgroundTask(withName: "outbox") { [weak self] in
-            Task { @MainActor in self?.endTask() }
+        if task == .invalid {
+            task = UIApplication.shared.beginBackgroundTask(withName: "outbox") { [weak self] in
+                Task { @MainActor in self?.endTask() }
+            }
         }
+        waiter?.cancel()
         waiter = Task {
             _ = await Self.waitIdle(sessions)
+            guard !Task.isCancelled else { return }
             self.endTask()
         }
     }

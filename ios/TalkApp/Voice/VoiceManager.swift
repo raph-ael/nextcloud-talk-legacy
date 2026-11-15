@@ -240,7 +240,6 @@ final class VoiceManager {
             return
         }
         drafts[key(token)] = nil
-        Notifications.askOnce()
         BackgroundSender.shared.queued()
         onSent()
     }

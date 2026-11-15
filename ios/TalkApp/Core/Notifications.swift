@@ -5,14 +5,34 @@ import UserNotifications
 /// Local notifications: a failed send per conversation, missed calls, finished recordings
 /// (taps open the chat) and the app badge.
 enum Notifications {
-    private static let askedKey = "notifications.asked"
+    /// Category of chat pushes (set by the extension): "Antworten", "Als gelesen markieren".
+    static let chatCategory = "chat"
+    static let replyAction = "reply"
+    static let readAction = "read"
 
-    /// Asks once, the first time the user sends something.
-    static func askOnce() {
+    /// At launch, before the first push can be acted on.
+    static func registerCategories() {
+        let reply = UNTextInputNotificationAction(
+            identifier: replyAction, title: "Antworten", options: [],
+            textInputButtonTitle: "Senden", textInputPlaceholder: "Nachricht")
+        let read = UNNotificationAction(identifier: readAction, title: "Als gelesen markieren", options: [])
+        let chat = UNNotificationCategory(identifier: chatCategory, actions: [reply, read], intentIdentifiers: [], options: [])
+        UNUserNotificationCenter.current().setNotificationCategories([chat])
+    }
+
+    private static let askedKey = "notifications.asked.start"
+
+    /// On the start with an account (also installations that asked only on the first send
+    /// so far): asks once; iOS shows the question only while nothing is decided.
+    static func askAtStart() {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: askedKey) else { return }
         defaults.set(true, forKey: askedKey)
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
+        Task {
+            guard await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .notDetermined else { return }
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+            await NotificationPermission.shared.refresh()
+        }
     }
 
     /// Where a notification belongs (docs/accounts.md): the account id goes into the id,
@@ -40,13 +60,21 @@ enum Notifications {
         UNUserNotificationCenter.current().add(request)
     }
 
-    /// A call that rang here unanswered, or came in during another call. Tap opens the chat.
+    /// A call that rang here unanswered, came in during another call, or was turned away by
+    /// the system (focus, blocked). Tap opens the chat. The same call may be reported twice
+    /// (by CallKit and later by the core): one per conversation within ten minutes.
     static func missedCall(_ o: Origin, token: String, name: String) {
         let content = content(o, token: token, title: "Verpasster Anruf", body: name)
         content.sound = .default
-        content.threadIdentifier = "\(o.account).missed_call.\(token)"
-        let id = "\(o.account).missed_call.\(token).\(Int(Date().timeIntervalSince1970))"
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        let thread = "\(o.account).missed_call.\(token)"
+        content.threadIdentifier = thread
+        let id = "\(thread).\(Int(Date().timeIntervalSince1970))"
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { list in
+            let recent = list.contains { $0.request.content.threadIdentifier == thread && $0.date.timeIntervalSinceNow > -600 }
+            guard !recent else { return }
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        }
     }
 
     /// A finished recording (transcript, summary) while the app runs: quiet, tap opens the chat.
@@ -62,20 +90,84 @@ enum Notifications {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["\(account).recording.\(id)"])
     }
 
+    /// Whether a delivered notification belongs to this account; `legacy`: the account taken
+    /// over from the earlier version, whose notifications carry no or the legacy account.
+    nonisolated static func belongs(_ n: UNNotification, to account: String, legacy: Bool) -> Bool {
+        let a = n.request.content.userInfo["account"] as? String
+        return a == account || (legacy && (a == nil || a == DeviceKeys.legacyId))
+    }
+
+    /// The chat notifications of pushes (they carry `nid`) of one account.
+    nonisolated private static func chats(_ list: [UNNotification], account: String, legacy: Bool) -> [UNNotification] {
+        list.filter { n in
+            n.request.content.userInfo["nid"] != nil && n.request.content.userInfo["token"] is String
+                && belongs(n, to: account, legacy: legacy)
+        }
+    }
+
+    /// `noticesCleared`, "Als gelesen markieren", the chat opened: its notifications go.
+    static func removeChats(account: String, legacy: Bool, tokens: Set<String>) {
+        guard !tokens.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { list in
+            let ids = chats(list, account: account, legacy: legacy)
+                .filter { tokens.contains($0.request.content.userInfo["token"] as? String ?? "") }
+                .map(\.request.identifier)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
+    /// Back in front (deletions do not arrive reliably): notifications of chats without
+    /// anything unread go. `unread`: the tokens with unread messages, from a fresh list.
+    static func keepOnly(account: String, legacy: Bool, unread: Set<String>) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { list in
+            let ids = chats(list, account: account, legacy: legacy)
+                .filter { !unread.contains($0.request.content.userInfo["token"] as? String ?? "") }
+                .map(\.request.identifier)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
     /// Sign-out: the account's notifications go, the others' stay.
     static func removeAll(account: String, legacy: Bool) {
         let center = UNUserNotificationCenter.current()
         center.getDeliveredNotifications { list in
-            let ids = list.filter { n in
-                let a = n.request.content.userInfo["account"] as? String
-                return a == account || (legacy && (a == nil || a == DeviceKeys.legacyId))
-            }.map(\.request.identifier)
+            let ids = list.filter { belongs($0, to: account, legacy: legacy) }.map(\.request.identifier)
             center.removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
 
+    /// The icon number, also for the extension, which counts on from it.
     static func setBadge(_ count: Int) {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
+        SharedBadge.write(count)
+    }
+}
+
+/// Whether notifications are allowed (docs/notifications.md "Erlaubnis und Einstellungen"),
+/// read again whenever the app comes to the front (the user may have changed it).
+@MainActor
+@Observable
+final class NotificationPermission {
+    static let shared = NotificationPermission()
+    private(set) var status: UNAuthorizationStatus?
+
+    /// Off: denied, or not decided yet.
+    var off: Bool { status == .denied || status == .notDetermined }
+
+    func refresh() async {
+        status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    /// "Einschalten": asks while nothing is decided, else the system page of the app.
+    func turnOn(open: (URL) -> Void) async {
+        if status == .notDetermined {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+            await refresh()
+        } else if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+            open(url)
+        }
     }
 }
 

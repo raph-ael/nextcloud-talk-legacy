@@ -1,4 +1,5 @@
 import os
+import Security
 
 /// Unified logging (`log stream --predicate 'subsystem == "org.wolkenfunk.app"'`).
 enum Log {
@@ -142,6 +143,58 @@ enum Heartbeat {
         main.resume()
         bg.resume()
         timers = [main, bg]
+    }
+}
+#endif
+
+#if DEBUG
+/// Simulator tests of the Notification Service Extension (`TALK_DEV_PUSH_KEYS=<folder>`):
+/// every account gets its push key and its public half (PKCS#1 DER, nothing secret) lands in
+/// `<folder>/<loginName>.der` (its account id in `.id`), so a test can encrypt a push like the server and hand it to
+/// `simctl push`.
+enum DevPushKeys {
+    static func export(_ a: Account) {
+        guard let dir = ProcessInfo.processInfo.environment["TALK_DEV_PUSH_KEYS"], !dir.isEmpty,
+              let pem = DeviceKeys.loadOrCreate(for: a.id, line: a.line),
+              let pkcs1 = privateKeyBody(pem) else { return }
+        let attrs: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+        ]
+        guard let key = SecKeyCreateWithData(pkcs1 as CFData, attrs as CFDictionary, nil),
+              let pub = SecKeyCopyPublicKey(key),
+              let der = SecKeyCopyExternalRepresentation(pub, nil) as Data? else { return }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? der.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(a.loginName).der"))
+        try? Data(a.id.utf8).write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(a.loginName).id"))
+    }
+
+    /// The RSAPrivateKey inside a PKCS#8 PEM: SEQ { INTEGER, SEQ { algorithm }, OCTET STRING }.
+    private static func privateKeyBody(_ pem: String) -> Data? {
+        let b64 = pem.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined()
+        guard let der = Data(base64Encoded: b64) else { return nil }
+        let bytes = [UInt8](der)
+        var i = 0
+        func header() -> (tag: UInt8, len: Int)? {
+            guard i + 1 < bytes.count else { return nil }
+            let tag = bytes[i]
+            var len = Int(bytes[i + 1])
+            i += 2
+            if len & 0x80 != 0 {
+                let n = len & 0x7f
+                guard i + n <= bytes.count else { return nil }
+                len = bytes[i..<(i + n)].reduce(0) { $0 << 8 | Int($1) }
+                i += n
+            }
+            return (tag, len)
+        }
+        guard header()?.tag == 0x30 else { return nil }
+        guard let version = header(), version.tag == 0x02 else { return nil }
+        i += version.len
+        guard let alg = header(), alg.tag == 0x30 else { return nil }
+        i += alg.len
+        guard let body = header(), body.tag == 0x04, i + body.len <= bytes.count else { return nil }
+        return Data(bytes[i..<(i + body.len)])
     }
 }
 #endif

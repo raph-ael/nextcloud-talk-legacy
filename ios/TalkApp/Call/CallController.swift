@@ -157,7 +157,6 @@ final class CallController: NSObject {
             Task { await self.startInCore(token, callId: nil) }
             return
         }
-        Notifications.askOnce()
         let id = UUID()
         uuid = id
         uuidToken = token
@@ -662,6 +661,20 @@ final class CallController: NSObject {
                     // Do not disturb, blocked: this device does not ring.
                     Log.push.info("pushed call not shown: \(error.localizedDescription, privacy: .public)")
                     if self.uuid == id { self.clearCallKit() }
+                    // Turned away by the system: "Verpasster Anruf" (docs/notifications.md "Anrufe").
+                    let e = error as NSError
+                    let filtered = e.domain == CXErrorDomainIncomingCall
+                        && (e.code == CXErrorCodeIncomingCallError.filteredByDoNotDisturb.rawValue
+                            || e.code == CXErrorCodeIncomingCallError.filteredByBlockList.rawValue)
+                    if filtered, let token, let rt {
+                        let room = rt.rooms.first { $0.token == token }
+                        let group = room.map { $0.roomType == 2 || $0.roomType == 3 } ?? false
+                        let caller = message.map { m in
+                            if case .call(_, _, let subject) = m { pushCallerName(subject: subject) } else { "" }
+                        } ?? ""
+                        let shown = group || caller.isEmpty ? (room?.name ?? caller) : caller
+                        Notifications.missedCall(SessionStore.shared.origin(rt.account.id), token: token, name: shown)
+                    }
                     return
                 }
                 guard let token, let message, adopt, let session = rt?.session else {

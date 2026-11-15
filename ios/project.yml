@@ -81,11 +81,13 @@ targets:
         NSPhotoLibraryUsageDescription: Zum Senden von Fotos aus deiner Mediathek.
         # audio: voice messages keep playing with the screen locked, calls keep their audio;
         # voip: incoming calls via PushKit; processing: the outbox finishes sending after
-        # the app was left.
+        # the app was left; remote-notification: deletions ("read elsewhere") as background
+        # pushes (docs/notifications.md).
         UIBackgroundModes:
           - audio
           - voip
           - processing
+          - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - org.wolkenfunk.app.outbox
     settings:
@@ -109,6 +111,7 @@ targets:
     sources:
       - path: NotifyExt
       - path: TalkApp/Core/DeviceKeys.swift
+      - path: TalkApp/Core/SharedBadge.swift
       - path: Generated/talk_ffi.swift
         group: Generated
     dependencies:

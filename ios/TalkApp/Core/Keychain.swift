@@ -152,4 +152,25 @@ enum Keychain {
     static func deleteLegacy() {
         SecItemDelete(query(legacyKey) as CFDictionary)
     }
+
+    // MARK: Sign-out without network
+
+    private static let revokeKey = "revoke.pending"
+
+    /// App passwords that could not be given back at sign-out (docs/notifications.md
+    /// "Abmelden ohne Netz"); the next start tries again.
+    static func pendingRevokes() -> [StoredAccount] {
+        guard case .found(let data) = read(revokeKey),
+              let list = try? JSONDecoder().decode([StoredAccount].self, from: data) else { return [] }
+        return list
+    }
+
+    static func setPendingRevokes(_ list: [StoredAccount]) {
+        SecItemDelete(query(revokeKey) as CFDictionary)
+        guard !list.isEmpty, let data = try? JSONEncoder().encode(list) else { return }
+        var q = query(revokeKey)
+        q[kSecValueData as String] = data
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(q as CFDictionary, nil)
+    }
 }

@@ -9,7 +9,7 @@ enum SettingsPage: Hashable {
     func view(store: SessionStore) -> some View {
         switch self {
         case .appearance: AppearanceSettingsView()
-        case .notifications: NotificationSettingsView()
+        case .notifications: NotificationSettingsView(store: store)
         case .about: AboutView()
         }
     }
@@ -60,7 +60,8 @@ struct SettingsView: View {
 
             Section {
                 row(.appearance, icon: "paintpalette", title: "Darstellung")
-                row(.notifications, icon: "bell", title: "Benachrichtigungen")
+                row(.notifications, icon: "bell", title: "Benachrichtigungen",
+                    value: NotificationPermission.shared.off ? "Aus" : nil)
                 row(.about, icon: "info.circle", title: "Über Wolkenfunk")
             }
 
@@ -110,11 +111,18 @@ struct SettingsView: View {
         }
     }
 
-    private func row(_ page: SettingsPage, icon: String, title: String) -> some View {
+    /// `value`: a state at the right ("Aus"), also in the label.
+    private func row(_ page: SettingsPage, icon: String, title: String, value: String? = nil) -> some View {
         NavigationLink(value: Route.settingsPage(page)) {
-            SettingsLabel(icon: icon, text: title)
+            HStack {
+                SettingsLabel(icon: icon, text: title)
+                if let value {
+                    Spacer(minLength: 8)
+                    Text(value).font(.system(size: 17)).foregroundStyle(Talk.muted)
+                }
+            }
         }
-        .accessibilityLabel(title)
+        .accessibilityLabel(value.map { "\(title), \($0.lowercased())" } ?? title)
         .accessibilityIdentifier("settings:\(title)")
         .listRowBackground(Talk.groupedRow)
     }
@@ -210,12 +218,41 @@ private struct AccentGrid: View {
     }
 }
 
-/// "Benachrichtigungen": the system page of the app; single chats via the chat menu.
+/// "Benachrichtigungen" (docs/notifications.md "Erlaubnis und Einstellungen"): the state
+/// when they are off, with "Einschalten"; the system page of the app (single chats via the
+/// chat menu); "Push testen" for the active account.
 struct NotificationSettingsView: View {
+    let store: SessionStore
     @Environment(\.openURL) private var openURL
+    @State private var testing = false
+    private var permission: NotificationPermission { .shared }
 
     var body: some View {
         List {
+            if permission.off {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Benachrichtigungen sind ausgeschaltet")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Talk.onSurface)
+                        Text("Neue Nachrichten und Anrufe bemerkst du dann nur bei geöffneter App.")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Talk.muted)
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("notifications-off")
+                    .listRowBackground(Talk.groupedRow)
+                    Button {
+                        Task { await permission.turnOn { openURL($0) } }
+                    } label: {
+                        Text("Einschalten").font(.system(size: 17)).foregroundStyle(Talk.accent)
+                    }
+                    .accessibilityIdentifier("notifications-on")
+                    .listRowBackground(Talk.groupedRow)
+                }
+            }
+
             Section {
                 Button {
                     if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
@@ -234,8 +271,38 @@ struct NotificationSettingsView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Talk.muted)
             }
+
+            Section {
+                if Push.proxyURL.isEmpty {
+                    SettingsLabel(icon: "bell.badge", text: "Diese App-Version hat keinen Push")
+                        .foregroundStyle(Talk.muted)
+                        .accessibilityIdentifier("settings-test-push")
+                        .listRowBackground(Talk.groupedRow)
+                } else {
+                    Button { test() } label: {
+                        SettingsLabel(icon: "bell.badge", text: "Push testen")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(testing)
+                    .accessibilityLabel("Push testen")
+                    .accessibilityIdentifier("settings-test-push")
+                    .listRowBackground(Talk.groupedRow)
+                }
+            }
         }
         .settingsList("Benachrichtigungen")
+        .task { await permission.refresh() }
+    }
+
+    private func test() {
+        testing = true
+        Task {
+            let ok = await store.testPush()
+            testing = false
+            Toast.show(ok
+                ? "Test angefordert. Die Benachrichtigung sollte in wenigen Sekunden erscheinen."
+                : "Der Server hat den Test nicht angenommen.")
+        }
     }
 }
 
