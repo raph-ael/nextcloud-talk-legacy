@@ -8,7 +8,7 @@ Im Kern ist ein `TalkSession` genau ein Konto, und mehrere bestehen nebeneinande
 
 - **Konto-`id`:** eine zufällige lokale Kennung (mindestens 8 Hex-Zeichen), die beim Anmelden entsteht und nie wiederverwendet wird. Sie steht in Ordnernamen, Schlüsselnamen und Benachrichtigungs-IDs. Sie verlässt das Gerät nicht.
 - **Name:** der Anzeigename vom Server (`displayName()`), ersatzweise die Benutzer-ID.
-- **Server:** die Adresse ohne `https://`, wie im Kopf der Einstellungen.
+- **Server:** die Adresse ohne `https://` bzw. `http://`, überall wo sie gezeigt wird.
 - **Laufzeit:** eine gestartete `TalkSession` mit eigenem Listener, der die Konto-`id` kennt. Ereignisse aus dem Kern tragen kein Konto, nur der Listener weiß, zu wem sie gehören.
 
 ## Bedienung
@@ -69,6 +69,7 @@ Die Zahl ist die Summe von `badge().chats` der anderen Konten, also die Chats mi
   - Titel „Abmelden?“
   - Text „{Name} ({Server}) wird auf diesem Gerät abgemeldet. Ungesendete Nachrichten und der Offline-Speicher dieses Kontos werden gelöscht.“
   - Knöpfe „Abmelden“ (in `danger`) und „Abbrechen“.
+  - iOS zeigt sie als Alert, nicht als `confirmationDialog`: Der hat als Popover kein „Abbrechen“.
 - Abgemeldet wird nur dieses Konto: Push abmelden (`unregisterPush`), `logout()`, dann seinen Eintrag, sein Geheimnis, seinen Push-Schlüssel und seinen Datenordner löschen. Die anderen Konten bleiben unberührt, auch ihre Benachrichtigungen und ihr Postausgang.
 - Danach wird das erste verbleibende Konto aktiv. Ist keines mehr da, erscheint die Anmeldung.
 
@@ -106,7 +107,7 @@ Alle Laufzeiten sind gestartet (`start()`), nicht nur die aktive. Nur die aktive
 
 Über alle Konten gibt es **einen** Anruf gleichzeitig. Das erzwingt der Kern (`docs/calls.md`, „Ein Anruf gleichzeitig“): Klingelt oder läuft ein Anruf in einem Konto, sind alle anderen besetzt.
 
-- Ein Anruf in einem inaktiven Konto klingelt wie jeder andere. Ab zwei Konten nennt die Klingelanzeige das Konto.
+- Ein Anruf in einem inaktiven Konto klingelt wie jeder andere. Ab zwei Konten nennt die Klingelanzeige das Konto: in der App als Zeile „{Name} · {Server}“ unter dem Anrufer, in CallKit als „{Anrufer} ({Name} · {Server})“.
 - **Annehmen, Ablehnen, Auflegen, Stumm, Kamera, Bildschirm und alle Media-Reports gehen an die Laufzeit des Anrufs,** nicht an die aktive. Die Anrufsteuerung merkt sich dazu bei `callChanged` das Konto.
 - **Annehmen** schickt zuerst `acceptCall` an dieses Konto und wechselt danach dorthin. **Ablehnen** wechselt nicht.
 - Kommt während eines Anrufs ein zweiter, egal in welchem Konto, meldet der Kern ihn als verpasst (`callMissed`). Die Benachrichtigung „Verpasster Anruf“ nennt ab zwei Konten das Konto.
@@ -158,7 +159,7 @@ Neue Konten bekommen den Datenordner `accounts/<id>/` neben dem bisherigen `talk
 
 Beim ersten Start mit dieser Version wird das vorhandene Konto der erste Eintrag, ohne neue Anmeldung:
 
-- Es bekommt eine neue `id`, behält aber seinen Datenordner **`talk/`**. Der Ordner wird nicht verschoben: Der Postausgang merkt sich absolute Dateipfade und würde wartende Anhänge sonst verwerfen.
+- Es bekommt eine neue `id`, behält aber seinen Datenordner **`talk/`**. Der Ordner wird nicht umbenannt, das spart einen Umzug bei geöffnetem Cache. In der Liste steht `dir` relativ, nie als absoluter Pfad: iOS gibt der App mit jedem Update einen neuen Container-Pfad. Der Postausgang biegt seine Anhänge beim Laden selbst auf den aktuellen Ordner um.
 - Es behält seinen Push-Schlüssel, damit die bestehende Registrierung gilt.
 - `userId`, `name` und `key` kommen aus dem Cache (`userId`, `displayName()`), ohne Netz. Der `key` wird nach dem ersten `start()` mit `resolveAccount` nachgetragen.
 - Die alten Einträge (Desktop `account.json`, iOS Keychain „primary“, Android die einzelnen Prefs-Schlüssel) werden erst gelöscht, wenn die neue Liste geschrieben ist.
