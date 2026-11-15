@@ -671,14 +671,13 @@ final class SessionStore {
         Notifications.removeChats(account: rt.account.id, legacy: rt.account.dir == Self.legacyDir, tokens: [token])
     }
 
-    /// "Als gelesen markieren" in a notification, in its account. The list first: after a
-    /// cold start or in the background it may not know the newest message yet.
+    /// "Als gelesen markieren" in a notification, in its account (the core asks the server
+    /// for the newest message: after a cold start the list may not know it yet).
     func markReadFromNotification(account: String?, token: String) async {
         guard let rt = runtime(account) else {
             Log.push.error("mark read: account \(account ?? "-", privacy: .public) not running")
             return
         }
-        try? await rt.session.refreshRooms()
         if let error = await rt.session.markRoomRead(token: token) {
             Log.push.error("mark read: \(error, privacy: .public)")
         }

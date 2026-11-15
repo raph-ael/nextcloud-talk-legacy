@@ -40,7 +40,8 @@ final class NotificationService: UNNotificationServiceExtension {
                     content.badge = NSNumber(value: SharedBadge.increment())
                 }
             case .other(_, let text) where !text.isEmpty:
-                content.title = ""
+                // Not Talk (also "Push testen"): a plain notification, a tap opens the app.
+                content.title = "Wolkenfunk"
                 content.body = text
                 content.subtitle = line ?? ""
                 content.userInfo["account"] = found.accountId
