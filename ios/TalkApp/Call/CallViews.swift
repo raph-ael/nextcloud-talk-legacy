@@ -123,9 +123,9 @@ struct CallBackdrop: View {
     let call: CallView
 
     var body: some View {
-        let room = SessionStore.shared.room(call.token)
+        let room = SessionStore.shared.room(call.token, account: CallController.shared.account)
         GeometryReader { geo in
-            Avatar(name: call.roomName, size: max(geo.size.width, geo.size.height), token: call.token, version: room?.avatarVersion ?? "")
+            Avatar(name: call.roomName, size: max(geo.size.width, geo.size.height), token: call.token, version: room?.avatarVersion ?? "", account: CallController.shared.account)
                 .frame(width: geo.size.width, height: geo.size.height)
                 .blur(radius: 50)
                 .clipped()
@@ -159,7 +159,7 @@ struct ActiveCallView: View {
 
     /// Without a shared screen: avatar or the other side's video, tiles in a group.
     @ViewBuilder private var classic: some View {
-        let room = SessionStore.shared.room(call.token)
+        let room = SessionStore.shared.room(call.token, account: CallController.shared.account)
         // 1:1: the other side's video fills the stage while it runs.
         let stage = call.isGroup ? nil : call.participants.lazy.compactMap { video.track(for: $0) }.first
         ZStack {
@@ -206,7 +206,7 @@ struct ActiveCallView: View {
                 if call.isGroup {
                     CallTiles(call: call)
                 } else if stage == nil {
-                    Avatar(name: call.roomName, size: 160, token: call.token, version: room?.avatarVersion ?? "")
+                    Avatar(name: call.roomName, size: 160, token: call.token, version: room?.avatarVersion ?? "", account: CallController.shared.account)
                         .overlay(Circle().stroke(Color.white.opacity(speaking ? 0.9 : 0), lineWidth: 3).padding(-6))
                         .animation(.easeOut(duration: 0.2), value: speaking)
                 }
@@ -469,7 +469,7 @@ struct CallTile: View {
         .accessibilityIdentifier("call-tile")
         .task(id: p.userId) {
             guard !p.userId.isEmpty else { return }
-            image = await CallAvatars.shared.image(p.userId, dark: scheme == .dark)
+            image = await CallAvatars.shared.image(p.userId, dark: scheme == .dark, account: CallController.shared.account)
         }
     }
 }
@@ -510,24 +510,30 @@ struct LocalPreview: View {
     }
 }
 
-/// Avatars of users (not rooms): call participants, chat authors, reactions. Cached while the
-/// app runs; rows of the same author share one request.
+/// Avatars of users (not rooms): call participants, chat authors, reactions. Cached per
+/// account while the app runs (user ids of servers overlap); rows of the same author share
+/// one request.
 @MainActor
 final class CallAvatars {
     static let shared = CallAvatars()
     private var cache: [String: UIImage] = [:]
     private var loading: [String: Task<UIImage?, Never>] = [:]
 
-    /// Already loaded: shown in the first frame, without the initials flashing.
-    func cached(_ userId: String, dark: Bool) -> UIImage? { cache["\(userId)|\(dark)"] }
+    private func key(_ userId: String, _ dark: Bool, _ account: String?) -> String {
+        "\(account ?? SessionStore.shared.activeId ?? "")|\(userId)|\(dark)"
+    }
 
-    func image(_ userId: String, dark: Bool) async -> UIImage? {
-        let key = "\(userId)|\(dark)"
+    /// Already loaded: shown in the first frame, without the initials flashing.
+    func cached(_ userId: String, dark: Bool, account: String? = nil) -> UIImage? { cache[key(userId, dark, account)] }
+
+    /// `account` nil: the active one.
+    func image(_ userId: String, dark: Bool, account: String? = nil) async -> UIImage? {
+        let key = key(userId, dark, account)
         if let hit = cache[key] { return hit }
         if let running = loading[key] { return await running.value }
+        let session = account.flatMap { SessionStore.shared.runtime($0)?.session } ?? SessionStore.shared.session
         let task = Task<UIImage?, Never> {
-            guard let s = SessionStore.shared.session,
-                  let data = try? await s.userAvatar(userId: userId, dark: dark) else { return nil }
+            guard let s = session, let data = try? await s.userAvatar(userId: userId, dark: dark) else { return nil }
             return UIImage(data: data)
         }
         loading[key] = task
@@ -535,6 +541,10 @@ final class CallAvatars {
         loading[key] = nil
         if let img { cache[key] = img }
         return img
+    }
+
+    func forget(account: String) {
+        cache = cache.filter { !$0.key.hasPrefix("\(account)|") }
     }
 }
 
@@ -544,17 +554,24 @@ struct IncomingCallView: View {
     private var controller: CallController { .shared }
 
     var body: some View {
-        let room = SessionStore.shared.room(call.token)
+        let room = SessionStore.shared.room(call.token, account: CallController.shared.account)
         ZStack {
             CallBackdrop(call: call)
             VStack(spacing: 12) {
                 Spacer().frame(height: 60)
-                Avatar(name: call.roomName, size: 80, token: call.token, version: room?.avatarVersion ?? "")
+                Avatar(name: call.roomName, size: 80, token: call.token, version: room?.avatarVersion ?? "", account: CallController.shared.account)
                 Text(CallText.title(call))
                     .font(.system(size: 26, weight: .semibold))
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("call-title")
                 CallStatusLine(call: call)
+                // From two accounts on, the ringing names the account (docs/accounts.md).
+                if let line = controller.accountLine {
+                    Text(line)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityIdentifier("call-account")
+                }
                 Spacer()
                 HStack {
                     RoundAction(symbol: "phone.down.fill", color: Talk.danger, label: "Ablehnen", id: "call-decline") {

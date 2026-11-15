@@ -108,7 +108,7 @@ targets:
     platform: iOS
     sources:
       - path: NotifyExt
-      - path: TalkApp/Core/PushKey.swift
+      - path: TalkApp/Core/DeviceKeys.swift
       - path: Generated/talk_ffi.swift
         group: Generated
     dependencies:

@@ -19,7 +19,7 @@ struct Composer: View {
     private var voice: VoiceManager { store.voice }
 
     var body: some View {
-        let recording = voice.recording.flatMap { $0.token == token ? $0 : nil }
+        let recording = voice.recording(for: token)
         let draft = recording == nil ? voice.draft(token) : nil
         VStack(spacing: 0) {
             if let r = replyTo, recording == nil {
@@ -38,8 +38,8 @@ struct Composer: View {
             }
         }
         .background(Talk.background)
-        .onAppear { text = store.textDrafts[token] ?? "" }
-        .onChange(of: text) { _, t in store.textDrafts[token] = t }
+        .onAppear { text = store.textDraft(token) }
+        .onChange(of: text) { _, t in store.setTextDraft(token, t) }
         .onChange(of: focused) { _, f in if f { panelOpen = false } }
         .onChange(of: panelOpen) { _, open in if open { focused = false } }
     }

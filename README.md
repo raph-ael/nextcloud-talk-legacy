@@ -109,7 +109,8 @@ xcodebuild -scheme TalkLegacy -destination "platform=iOS Simulator,name=iPhone 1
 ```
 
 Debug-Builds kennen zwei Umgebungsvariablen für Tests: `TALK_DEV_SERVER`/`TALK_DEV_USER`/
-`TALK_DEV_PASS` melden ohne Browser an, `TALK_FAKE_MIC=<Audiodatei>` ersetzt das Mikrofon.
+`TALK_DEV_PASS` melden ohne Browser an (dieselben mit `_2` ein zweites Konto, siehe
+`docs/accounts.md`), `TALK_FAKE_MIC=<Audiodatei>` ersetzt das Mikrofon.
 Die UI-Tests in `ios/UITests` nutzen sie (an `xcodebuild test` als `TEST_RUNNER_<Name>`).
 Wer unter Linux entwickelt und auf einem Mac baut: `MAC_HOST=user@mac scripts/mac-sync.sh '<Befehl>'`.
 

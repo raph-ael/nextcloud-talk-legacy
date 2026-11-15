@@ -40,6 +40,7 @@ final class CallController: NSObject {
     /// The CallKit call and its conversation (one call at a time).
     @ObservationIgnored private var uuid: UUID?
     @ObservationIgnored private var uuidToken: String?
+    @ObservationIgnored private var uuidAccount: String?
     /// CallKit already knows the call is over (ended through an action).
     @ObservationIgnored private var endedLocally = false
     @ObservationIgnored private var reportedConnecting = false
@@ -62,7 +63,30 @@ final class CallController: NSObject {
     @ObservationIgnored private var reportedVideo = false
     @ObservationIgnored private var keepsScreenOn = false
 
-    private var session: TalkSession? { SessionStore.shared.session }
+    /// The account of the call (docs/accounts.md "Anrufe"): accept, decline, hang up, mute,
+    /// camera and every media report go to its runtime, not to the active one.
+    private(set) var account: String?
+
+    private var session: TalkSession? {
+        account.flatMap { SessionStore.shared.runtime($0)?.session } ?? SessionStore.shared.session
+    }
+
+    /// A call rings or runs (also one reported from a push the core has not taken over
+    /// yet): switching accounts is locked.
+    var busy: Bool { (call.map { $0.state != .ended } ?? false) || uuid != nil }
+
+    /// "{Name} · {Server}" of the call's account, from two accounts on.
+    var accountLine: String? {
+        let store = SessionStore.shared
+        guard store.accounts.count > 1 else { return nil }
+        return store.runtime(account)?.account.line
+    }
+
+    /// The media engine reports to the session of the call.
+    private func follow(_ id: String?) {
+        account = id
+        SessionStore.shared.callMedia.session = session
+    }
 
     /// Debug builds: `TALK_CALL_SILENT=1` calls without ringing anybody (tests in shared rooms).
     private var silent: Bool {
@@ -121,11 +145,12 @@ final class CallController: NSObject {
             if call.token == token { presented = true } else { Toast.show("Es läuft bereits ein Anruf") }
             return
         }
-        guard session != nil else { return }
+        guard let active = SessionStore.shared.activeId else { return }
         guard AVAudioApplication.shared.recordPermission != .denied else {
             Toast.show("Mikrofon in den Einstellungen erlauben, um anzurufen.")
             return
         }
+        follow(active)
         presented = true
         guard useCallKit else {
             CallAudio.shared.beginCall()
@@ -136,6 +161,7 @@ final class CallController: NSObject {
         let id = UUID()
         uuid = id
         uuidToken = token
+        uuidAccount = active
         endedLocally = false
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: token))
         action.contactIdentifier = name
@@ -191,7 +217,10 @@ final class CallController: NSObject {
             _ = await AVAudioApplication.requestRecordPermission()
         }
         do {
+            let id = account
             try await session?.acceptCall(token: token)
+            // Accepting a call of another account switches there afterwards.
+            if let id { SessionStore.shared.followCall(id) }
             return true
         } catch {
             Log.call.error("acceptCall: \(error.localizedDescription, privacy: .public)")
@@ -417,8 +446,11 @@ final class CallController: NSObject {
 
     // MARK: Core events
 
-    func update(_ new: CallView?) {
+    func update(_ new: CallView?, account id: String) {
         if mocking { return }
+        // `call: null` always comes from the call's account; another one's is no news.
+        if new == nil, call != nil, let account, account != id { return }
+        if let new, new.state != .ended, account != id || call?.id != new.id { follow(id) }
         guard let new else {
             #if DEBUG
             LogDump.write(sync: UIApplication.shared.applicationState == .background)
@@ -567,10 +599,10 @@ final class CallController: NSObject {
         let id = UUID(uuidString: c.id) ?? UUID()
         uuid = id
         uuidToken = c.token
+        uuidAccount = account
         ringingSince = Date()
         endedLocally = false
-        let update = Self.update(c)
-        provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in
+        provider.reportNewIncomingCall(with: id, update: update(c)) { [weak self] error in
             guard let error else { return }
             // Do not disturb, blocked or another call: this device does not ring.
             Task { @MainActor in
@@ -583,57 +615,82 @@ final class CallController: NSObject {
     }
 
     /// PushKit: iOS requires a CallKit report for every VoIP push, right away. A push that
-    /// cannot be read (or is no call) shows and ends at once. A call push is reported with a
-    /// new UUID that the core takes over through `handlePush`.
-    func reportPushed(_ message: PushMessage?, completion: @escaping () -> Void) {
+    /// cannot be read (or is no call, or its account is gone) shows and ends at once. A call
+    /// push is reported with a new UUID that the core of its account takes over through
+    /// `handlePush`.
+    func reportPushed(_ message: PushMessage?, account raw: String?, completion: @escaping () -> Void) {
         guard let provider else { return completion() }
+        // The store comes up here on a cold start, with the runtimes of all accounts.
+        let rt = message == nil ? nil : SessionStore.shared.runtime(raw)
+        let pushed = rt?.account.id
         var token: String?
         var name = "Wolkenfunk"
         if case .call(let t, _, let subject)? = message {
             token = t
             name = pushCallerName(subject: subject)
+            if SessionStore.shared.accounts.count > 1, let line = rt?.account.line { name = "\(name) (\(line))" }
         }
         // notify_push was faster: report that call again (CallKit answers that it exists,
-        // the push is accounted for).
-        let known = token != nil && uuid != nil && uuidToken == token
-        let adopt = token != nil && uuid == nil
+        // the push is accounted for). The same call: same token in the same account, or in
+        // an account of the same server (two accounts in one room ring once).
+        let known = token != nil && uuid != nil && uuidToken == token && Self.sameServer(uuidAccount, pushed)
+        let adopt = token != nil && uuid == nil && rt != nil
         let id = known ? uuid! : UUID()
         if adopt {
             uuid = id
             uuidToken = token
+            uuidAccount = pushed
             ringingSince = Date()
             endedLocally = false
             reportedConnecting = false
             reportedConnected = false
+            if call == nil { follow(pushed) }
         }
+        let ringing = uuidAccount
         provider.reportNewIncomingCall(with: id, update: Self.update(handle: token ?? "talk", name: name)) { [weak self] error in
             Task { @MainActor in
                 completion()
-                guard let self, !known else { return }
+                guard let self, !known else {
+                    // The same call in a second account of that server: its core learns of
+                    // the push and stays quiet.
+                    if known, let message, let rt, rt.account.id != ringing {
+                        _ = await rt.session.handlePush(message: message, callId: nil)
+                    }
+                    return
+                }
                 if let error {
                     // Do not disturb, blocked: this device does not ring.
                     Log.push.info("pushed call not shown: \(error.localizedDescription, privacy: .public)")
                     if self.uuid == id { self.clearCallKit() }
                     return
                 }
-                guard let token, let message, adopt, let session = self.session else {
-                    // Unreadable, no call, or another call runs here: end it; the core still
-                    // learns of the push (deletions, missed second call).
+                guard let token, let message, adopt, let session = rt?.session else {
+                    // Unreadable, no call, account gone or another call runs here: end it;
+                    // the core still learns of the push (deletions, missed second call).
                     provider.reportCall(with: id, endedAt: nil, reason: token == nil ? .failed : .unanswered)
                     if self.uuid == id { self.clearCallKit() }
-                    if let message, let session = self.session {
-                        _ = await session.handlePush(message: message, callId: nil)
+                    if let message, let rt {
+                        _ = await rt.session.handlePush(message: message, callId: nil)
                     }
                     return
                 }
                 let rang = await session.handlePush(message: message, callId: id.uuidString)
                 Log.push.info("handlePush rang=\(rang)")
+                // `false`: nothing rings for it, e.g. the same call already rings in another
+                // account. Unless this account's call is that token, end the reported call.
                 if !rang, session.currentCall()?.token != token, self.uuid == id {
                     provider.reportCall(with: id, endedAt: nil, reason: .unanswered)
                     self.clearCallKit()
                 }
             }
         }
+    }
+
+    private static func sameServer(_ a: String?, _ b: String?) -> Bool {
+        if a == b { return true }
+        let store = SessionStore.shared
+        guard let x = store.runtime(a)?.account.server, let y = store.runtime(b)?.account.server else { return false }
+        return x == y
     }
 
     private static func update(handle: String, name: String) -> CXCallUpdate {
@@ -648,8 +705,10 @@ final class CallController: NSObject {
         return u
     }
 
-    private static func update(_ c: CallView) -> CXCallUpdate {
-        update(handle: c.token, name: c.isGroup || c.callerName.isEmpty ? c.roomName : c.callerName)
+    /// From two accounts on, the ringing names the account.
+    private func update(_ c: CallView) -> CXCallUpdate {
+        let name = c.isGroup || c.callerName.isEmpty ? c.roomName : c.callerName
+        return Self.update(handle: c.token, name: accountLine.map { "\(name) (\($0))" } ?? name)
     }
 
     private static func reason(_ r: EndReason?, _ direction: CallDirection) -> CXCallEndedReason {
@@ -674,6 +733,7 @@ final class CallController: NSObject {
         uuid = nil
         ringingSince = nil
         uuidToken = nil
+        uuidAccount = nil
         endedLocally = false
         reportedConnecting = false
         reportedConnected = false

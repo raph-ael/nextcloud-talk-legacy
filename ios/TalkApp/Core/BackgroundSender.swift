@@ -1,8 +1,9 @@
 import BackgroundTasks
 import UIKit
 
-/// Keeps the process alive while the outbox delivers (iOS counterpart of Android's
-/// `OutboxWorker`). The core does the sending; this only buys time:
+/// Keeps the process alive while the outboxes of all accounts deliver (iOS counterpart of
+/// Android's `OutboxWorker`, docs/accounts.md "Postausgang"). The core does the sending;
+/// this only buys time, one deadline for all:
 /// - leaving the app with unsent messages: a background task (about 30 s on iOS),
 /// - afterwards / after a restart: a `BGProcessingTask` that needs network and waits until
 ///   the outbox is idle, rescheduled while messages are still waiting.
@@ -24,7 +25,18 @@ final class BackgroundSender {
         }
     }
 
-    private var session: TalkSession? { SessionStore.shared.session }
+    /// Sessions with something unsent.
+    private var sending: [TalkSession] {
+        SessionStore.shared.allRuntimes.map(\.session).filter { $0.outboxUnsent() > 0 }
+    }
+
+    /// Waits until every given outbox is idle; the number still waiting.
+    nonisolated private static func waitIdle(_ sessions: [TalkSession]) async -> UInt32 {
+        await withTaskGroup(of: UInt32.self) { group in
+            for s in sessions { group.addTask { await s.waitOutboxIdle().waiting } }
+            return await group.reduce(0, +)
+        }
+    }
 
     /// Takes the session directly: runs while `SessionStore.shared` is still being created.
     func sessionStarted(_ s: TalkSession) {
@@ -38,21 +50,22 @@ final class BackgroundSender {
 
     /// The scene left the foreground.
     func enteredBackground() {
-        guard let s = session, s.outboxUnsent() > 0 else { return }
+        let sessions = sending
+        guard !sessions.isEmpty else { return }
         schedule()
         guard task == .invalid else { return }
         task = UIApplication.shared.beginBackgroundTask(withName: "outbox") { [weak self] in
             Task { @MainActor in self?.endTask() }
         }
         waiter = Task {
-            _ = await s.waitOutboxIdle()
+            _ = await Self.waitIdle(sessions)
             self.endTask()
         }
     }
 
     func enteredForeground() {
         endTask()
-        session?.networkChanged()
+        for rt in SessionStore.shared.allRuntimes { rt.session.networkChanged() }
     }
 
     private func endTask() {
@@ -73,15 +86,16 @@ final class BackgroundSender {
     }
 
     private func run(_ task: BGTask) {
-        guard let s = session, s.outboxUnsent() > 0 else {
+        let sessions = sending
+        guard !sessions.isEmpty else {
             task.setTaskCompleted(success: true)
             return
         }
-        s.networkChanged()
+        for s in sessions { s.networkChanged() }
         let work = Task {
-            let idle = await s.waitOutboxIdle()
-            if idle.waiting > 0 { self.schedule() }
-            task.setTaskCompleted(success: idle.waiting == 0)
+            let waiting = await Self.waitIdle(sessions)
+            if waiting > 0 { self.schedule() }
+            task.setTaskCompleted(success: waiting == 0)
         }
         task.expirationHandler = {
             work.cancel()

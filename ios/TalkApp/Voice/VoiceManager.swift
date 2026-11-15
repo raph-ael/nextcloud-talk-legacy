@@ -4,6 +4,8 @@ import UIKit
 
 /// A recording in progress. `locked`: hands-free (slid up), else the finger holds the mic.
 struct RecordingUi: Equatable {
+    /// Account and conversation the recording belongs to.
+    let account: String
     let token: String
     var durationMs: Int64 = 0
     /// Last levels 0…1, oldest first.
@@ -30,7 +32,7 @@ final class VoiceManager {
     static let autoFetchBytes: Int64 = 15 * 1024 * 1024
 
     private(set) var recording: RecordingUi?
-    /// Unsent recording per conversation (key absent: not loaded yet).
+    /// Unsent recording per account and conversation (`key`; absent: not loaded yet).
     private(set) var drafts: [String: VoiceDraft] = [:]
     @ObservationIgnored private var loadedDrafts = Set<String>()
 
@@ -53,7 +55,18 @@ final class VoiceManager {
 
     private var session: TalkSession? { store?.session }
 
-    func draft(_ token: String) -> VoiceDraft? { drafts[token] }
+    /// Drafts and waveforms per account (docs/accounts.md): tokens and message ids of
+    /// different servers overlap.
+    private var account: String { store?.activeId ?? "" }
+
+    private func key(_ token: String) -> String { "\(account)/\(token)" }
+
+    func draft(_ token: String) -> VoiceDraft? { drafts[key(token)] }
+
+    /// The recording of this chat in the active account.
+    func recording(for token: String) -> RecordingUi? {
+        recording.flatMap { $0.token == token && $0.account == account ? $0 : nil }
+    }
 
     // MARK: Recording
 
@@ -111,7 +124,7 @@ final class VoiceManager {
         }
         core = rec
         capture = cap
-        recording = RecordingUi(token: token)
+        recording = RecordingUi(account: account, token: token)
         Log.voice.info("recording at \(Int(rate)) Hz")
         UIApplication.shared.isIdleTimerDisabled = true
         Haptics.tap()
@@ -132,8 +145,10 @@ final class VoiceManager {
         Haptics.light()
     }
 
+    /// The recording's core handle, capture and draft key.
     private func endCapture() -> (VoiceRecording, VoiceCapture?, String)? {
-        guard let rec = core, let token = recording?.token else { return nil }
+        guard let rec = core, let r = recording else { return nil }
+        let token = "\(r.account)/\(r.token)"
         let cap = capture
         core = nil
         capture = nil
@@ -196,54 +211,61 @@ final class VoiceManager {
     }
 
     func loadDraft(_ token: String) {
-        guard recording?.token != token, let s = session else { return }
+        guard recording(for: token) == nil, let s = session else { return }
+        // Under the account it was asked for, even if another one is active by now.
+        let key = key(token)
         Task.detached {
             let d = s.voiceDraft(token: token)
             await MainActor.run {
-                self.drafts[token] = d
-                self.loadedDrafts.insert(token)
+                self.drafts[key] = d
+                self.loadedDrafts.insert(key)
             }
         }
     }
 
     func discardDraft(_ token: String) {
-        if let d = drafts[token] { player.stop(draftKey(d)) }
-        drafts[token] = nil
+        if let d = drafts[key(token)] { player.stop(draftKey(d)) }
+        drafts[key(token)] = nil
         guard let s = session else { return }
         Task.detached { s.discardVoiceDraft(token: token) }
     }
 
     func sendDraft(_ token: String, replyTo: MessageView?, onSent: @escaping () -> Void = {}) {
         guard let s = session else { return }
-        if let d = drafts[token] { player.stop(draftKey(d)) }
+        if let d = drafts[key(token)] { player.stop(draftKey(d)) }
         do {
             _ = try s.sendVoiceDraft(token: token, name: Format.voiceFileName(), replyTo: replyTo?.toReply, referenceId: newReferenceId())
         } catch {
             Toast.show("Senden nicht möglich: \(error.localizedDescription)")
             return
         }
-        drafts[token] = nil
+        drafts[key(token)] = nil
         Notifications.askOnce()
         BackgroundSender.shared.queued()
         onSent()
     }
 
-    /// Sign-out: nothing of this account may keep running.
+    /// Sign-out of the active account: nothing of it may keep running.
     func reset() {
         cancel()
         player.stop()
-        drafts.removeAll()
-        loadedDrafts.removeAll()
-        infos.removeAll()
         infoTasks.values.forEach { $0.cancel() }
         infoTasks.removeAll()
+    }
+
+    /// A removed account's drafts and waveforms.
+    func forget(account id: String) {
+        let prefix = "\(id)/"
+        drafts = drafts.filter { !$0.key.hasPrefix(prefix) }
+        loadedDrafts = loadedDrafts.filter { !$0.hasPrefix(prefix) }
+        infos = infos.filter { !$0.key.hasPrefix(prefix) }
     }
 
     // MARK: Playback
 
     func draftKey(_ d: VoiceDraft) -> String { "draft:\(d.id)" }
 
-    func messageKey(_ m: UiMessage) -> String { m.key }
+    func messageKey(_ m: UiMessage) -> String { "\(account)/\(m.key)" }
 
     /// Local file of a message's audio: the outbox copy while pending, else downloaded once.
     func localFile(_ m: UiMessage) async -> String? {

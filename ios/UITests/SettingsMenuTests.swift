@@ -79,12 +79,12 @@ final class SettingsMenuTests: XCTestCase {
         for title in ["Darstellung", "Benachrichtigungen", "Über Wolkenfunk"] {
             XCTAssertTrue(app.buttons["settings:\(title)"].exists, title)
         }
-        XCTAssertTrue(app.staticTexts["mira"].exists)
+        XCTAssertTrue(app.staticTexts["Mira Lange"].waitForExistence(timeout: 5))
         sleep(2)
         shot("einstellungen")
         app.buttons["settings-logout"].tap()
         XCTAssertTrue(app.buttons["Abmelden"].firstMatch.waitForExistence(timeout: 3))
-        app.swipeDown()
+        app.alerts["Abmelden?"].buttons["Abbrechen"].tap()
         sleep(1)
 
         // Darstellung: design and accent apply at once.

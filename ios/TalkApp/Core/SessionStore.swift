@@ -58,8 +58,39 @@ enum SessionPhase {
     case loading, loggedOut, ready
 }
 
-/// App-wide state holder (port of Android `SessionManager.kt`): owns the Rust session,
-/// turns core events into observable state and exposes the user actions.
+/// One account's running session (docs/accounts.md "Laufzeit"): a started `TalkSession`
+/// with its own listener that knows the account id. Only the active one fills the UI; the
+/// others deliver the badge, calls, notifications and `authFailed`.
+@MainActor
+final class AccountRuntime {
+    fileprivate(set) var account: Account
+    let session: TalkSession
+    /// Avatars and previews of this account (tokens and file ids of servers overlap).
+    let media: MediaCache
+    fileprivate let bridge: EventBridge
+    /// The last conversation list (inactive accounts: for the call screens).
+    fileprivate(set) var rooms: [RoomView]
+    fileprivate(set) var online = true
+    fileprivate var notifiedFailures = Set<String>()
+    /// Recording notices already known; nil until the first `recordingsChanged` of a session
+    /// (the starting point: banners, but no notifications).
+    fileprivate var notifiedRecordings: Set<Int64>?
+    /// Push registration (`Push`), per account.
+    var registering = false
+    var registerAgain = false
+
+    fileprivate init(account: Account, session: TalkSession, bridge: EventBridge) {
+        self.account = account
+        self.session = session
+        self.bridge = bridge
+        media = MediaCache(session: session)
+        rooms = session.rooms()
+    }
+}
+
+/// App-wide state holder (port of Android `SessionManager.kt`): owns one runtime per account
+/// (docs/accounts.md), turns the active one's core events into observable state and exposes
+/// the user actions. Everything below "Session" works on the active account.
 @MainActor
 @Observable
 final class SessionStore {
@@ -67,9 +98,17 @@ final class SessionStore {
 
     private(set) var phase: SessionPhase = .loading
     private(set) var server = ""
+    /// The active account's name (`displayName()`).
     private(set) var user = ""
     /// Our user id (own avatar in the settings).
     private(set) var userId = ""
+    /// Started accounts in the order of sign-in.
+    private(set) var accounts: [Account] = []
+    private(set) var activeId: String?
+    /// `badge()` per account, after every `RoomsChanged`.
+    private(set) var badges: [String: BadgeView] = [:]
+    /// The login screen for another account is shown ("Konto hinzufügen").
+    var adding = false
     private(set) var rooms: [RoomView] = []
     /// Bumped on every `RoomsChanged`: a collapsed section leaves `rooms` equal, and
     /// Observation skips equal assignments, so the sections read this instead.
@@ -96,35 +135,49 @@ final class SessionStore {
     /// Scene in the foreground (marking read, failure notifications).
     var foreground = true
 
+    /// The active account's session.
     @ObservationIgnored private(set) var session: TalkSession?
-    @ObservationIgnored private let bridge = EventBridge()
-    @ObservationIgnored private var notifiedFailures = Set<String>()
+    @ObservationIgnored private var runtimes: [String: AccountRuntime] = [:]
+    /// `TALK_DEV_*` accounts: they run outside the list and write nothing into it.
+    @ObservationIgnored private var devRun = false
     /// Groups we are leaving or deleting ourselves: no "nicht mehr in dieser Gruppe".
     @ObservationIgnored private var leaving = Set<String>()
-    /// Recording notices already known; nil until the first `recordingsChanged` of a session
-    /// (the starting point: banners, but no notifications).
-    @ObservationIgnored private var notifiedRecordings: Set<Int64>?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var lastPathSatisfied = true
     @ObservationIgnored private var lastPathKey = ""
-    /// WebRTC for calls; reports go back to the session.
+    /// WebRTC for calls, one per process, handed to every runtime; reports go to the session
+    /// of the call (`CallController`).
     @ObservationIgnored let callMedia = WebRTCMediaEngine()
-    /// Unsent text per conversation while the app runs.
-    @ObservationIgnored var textDrafts: [String: String] = [:]
+    /// Unsent text per account and conversation while the app runs (`textDraft`).
+    @ObservationIgnored private var textDrafts: [String: String] = [:]
+    @ObservationIgnored private let noMedia = MediaCache(session: nil)
 
-    @ObservationIgnored let media = MediaCache()
     @ObservationIgnored private(set) lazy var voice = VoiceManager(store: self)
 
     private init() {
-        bridge.store = self
         // Core logs before the first session.
         CoreLog.install()
-        if let dev = Self.devAccount() {
-            start(dev)
-        } else if let saved = Keychain.loadAccount() {
-            start(saved)
+        callMedia.onStartAudio = { _ in CallAudio.shared.startAudio() }
+        callMedia.onStopAudio = { _ in CallAudio.shared.stopAudio() }
+        callMedia.onCameraFailed = { CallController.shared.cameraFailed($0) }
+        if let devs = Self.devAccounts() {
+            devRun = true
+            for (a, password) in devs {
+                if makeRuntime(a, password: password) != nil { accounts.append(a) }
+            }
+            if let first = accounts.first { activate(first.id) } else { phase = .loggedOut }
         } else {
-            phase = .loggedOut
+            loadAccounts()
+        }
+        // Started before the first unlock (push after a restart): the Keychain could not be
+        // read, the accounts start once it can.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.devRun else { return }
+                self.loadAccounts()
+            }
         }
         // Network back or switched (Wi-Fi ↔ cellular): retry waiting messages right away,
         // reconnect the call's signaling and restart ICE.
@@ -134,7 +187,9 @@ final class SessionStore {
             Task { @MainActor in
                 guard let self else { return }
                 let switched = ok && self.lastPathSatisfied && key != self.lastPathKey && !self.lastPathKey.isEmpty
-                if (ok && !self.lastPathSatisfied) || switched { self.session?.networkChanged() }
+                if (ok && !self.lastPathSatisfied) || switched {
+                    for rt in self.allRuntimes { rt.session.networkChanged() }
+                }
                 self.lastPathSatisfied = ok
                 if ok { self.lastPathKey = key }
             }
@@ -145,16 +200,23 @@ final class SessionStore {
 
     // MARK: - Session
 
-    nonisolated static var dataDir: URL {
+    /// A data folder below Application Support (`talk`, `accounts/<id>`).
+    nonisolated static func dataDir(_ dir: String) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        var dir = base.appendingPathComponent("talk", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var url = base.appendingPathComponent(dir, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         // Cache and outbox are rebuilt from the server; no need to put them into backups.
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? dir.setResourceValues(values)
-        return dir
+        try? url.setResourceValues(values)
+        return url
     }
+
+    /// The first account's folder: staging and the free-space check.
+    nonisolated static var dataDir: URL { dataDir(legacyDir) }
+
+    /// Data folder of the account taken over from the earlier version.
+    nonisolated static let legacyDir = "talk"
 
     nonisolated static var stagingDir: URL {
         let dir = dataDir.appendingPathComponent("staging", isDirectory: true)
@@ -162,104 +224,397 @@ final class SessionStore {
         return dir
     }
 
-    /// Debug builds only: `TALK_DEV_SERVER` / `TALK_DEV_USER` / `TALK_DEV_PASS` sign in
-    /// without the browser (simulator tests). Never stored in the Keychain.
-    private static func devAccount() -> StoredAccount? {
+    /// Debug builds only: `TALK_DEV_SERVER` / `TALK_DEV_USER` / `TALK_DEV_PASS` (and the same
+    /// with `_2` for a second account) sign in without the browser (simulator tests). Such a
+    /// run starts only these accounts, never the stored ones, and writes nothing into the
+    /// list. `TALK_DEV_SAVE=1` (push tests) stores them as ordinary accounts instead, so a
+    /// cold start from a VoIP push finds them.
+    private static func devAccounts() -> [(Account, String)]? {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
-        if let server = env["TALK_DEV_SERVER"], let user = env["TALK_DEV_USER"], let pass = env["TALK_DEV_PASS"],
-           !server.isEmpty, !user.isEmpty, !pass.isEmpty {
-            let account = StoredAccount(server: server, loginName: user, appPassword: pass)
-            // Push tests: keep the account so a cold start from a VoIP push finds it.
-            if env["TALK_DEV_SAVE"] == "1" { Keychain.saveAccount(account) }
-            return account
+        var list: [(Account, String)] = []
+        for (n, suffix) in ["", "_2"].enumerated() {
+            guard let server = env["TALK_DEV_SERVER\(suffix)"], let user = env["TALK_DEV_USER\(suffix)"],
+                  let pass = env["TALK_DEV_PASS\(suffix)"], !server.isEmpty, !user.isEmpty, !pass.isEmpty else { continue }
+            let id = "de00000\(n + 1)"
+            let a = Account(id: id, server: server, loginName: user, userId: user, name: user, key: "",
+                            dir: n == 0 ? legacyDir : "accounts/\(id)")
+            list.append((a, pass))
         }
-        #endif
+        guard !list.isEmpty else { return nil }
+        if env["TALK_DEV_SAVE"] == "1" {
+            var stored = AccountList.load()
+            for (a, pass) in list where !stored.contains(where: { $0.server == a.server && $0.loginName == a.loginName }) {
+                let id = Account.newId()
+                let kept = Account(id: id, server: a.server, loginName: a.loginName, userId: a.userId,
+                                   name: a.name, key: "", dir: "accounts/\(id)")
+                if Keychain.savePassword(pass, for: kept.id) { stored.append(kept) }
+            }
+            AccountList.save(stored)
+            AccountList.migrated = true
+            return nil
+        }
+        return list
+        #else
         return nil
+        #endif
     }
 
-    func login(_ result: LoginResult) throws {
-        let saved = StoredAccount(server: result.server, loginName: result.loginName, appPassword: result.appPassword)
-        Keychain.saveAccount(saved)
-        start(saved)
+    /// The stored accounts, after taking over the earlier version's one. Accounts whose
+    /// password cannot be read now (locked since the restart) stay in the list and start
+    /// on the next attempt; nothing is deleted for them.
+    private func loadAccounts() {
+        var list = AccountList.load()
+        var unreadable = false
+        if !AccountList.migrated {
+            switch takeOver(&list) {
+            case .failed: unreadable = true
+            default: break
+            }
+        }
+        for a in list where runtimes[a.id] == nil {
+            switch Keychain.password(for: a.id) {
+            case .found(let password):
+                _ = makeRuntime(a, password: password)
+            case .missing:
+                // Certainly gone: no account any more.
+                Log.push.error("account \(a.id, privacy: .public) without password, removed")
+                list.removeAll { $0.id == a.id }
+                AccountList.save(list)
+                DeviceKeys.delete(for: a.id)
+            case .failed(let status):
+                Log.push.error("account \(a.id, privacy: .public) unreadable (\(status)), later")
+                unreadable = true
+            }
+        }
+        accounts = list.filter { runtimes[$0.id] != nil }
+        if let id = activeId, runtimes[id] != nil {
+            phase = .ready
+        } else if let id = AccountList.active.flatMap({ runtimes[$0] != nil ? $0 : nil }) ?? accounts.first?.id {
+            activate(id)
+        } else {
+            // Nothing to show yet; the login only when there is certainly no account.
+            phase = unreadable ? .loading : .loggedOut
+        }
+        updateAppBadge()
     }
 
-    private func start(_ saved: StoredAccount) {
+    private enum TakeOver { case none, done, failed }
+
+    /// First start with several accounts: the earlier version's account becomes the first
+    /// entry, without a new login. It keeps its folder `talk/` and its push key; the old
+    /// Keychain items go only once the new list is written.
+    private func takeOver(_ list: inout [Account]) -> TakeOver {
+        let old: StoredAccount
+        switch Keychain.legacyAccount() {
+        case .missing:
+            AccountList.migrated = true
+            return .none
+        case .failed(let status):
+            Log.push.error("takeover: account unreadable (\(status))")
+            return .failed
+        case .found(let a):
+            old = a
+        }
+        let id = Account.newId()
+        var a = Account(id: id, server: old.server, loginName: old.loginName, userId: old.loginName,
+                        name: old.loginName, key: "", dir: Self.legacyDir)
+        guard Keychain.savePassword(old.appPassword, for: id) else { return .failed }
+        guard let rt = makeRuntime(a, password: old.appPassword) else {
+            Keychain.deletePassword(for: id)
+            return .failed
+        }
+        // From the cache, without network; the key follows after the first start.
+        a.userId = rt.session.userId()
+        a.name = rt.session.displayName()
+        rt.account = a
+        let keyKept = DeviceKeys.adoptLegacy(for: id, line: a.line)
+        list.insert(a, at: 0)
+        AccountList.save(list)
+        AccountList.active = id
+        AccountList.migrated = true
+        Push.adoptLegacyRegistration(for: id)
+        Keychain.deleteLegacy()
+        if keyKept { DeviceKeys.deleteLegacy() }
+        Log.push.info("takeover: account \(id, privacy: .public)")
+        return .done
+    }
+
+    /// Creates and starts the runtime of an account.
+    private func makeRuntime(_ a: Account, password: String) -> AccountRuntime? {
+        let bridge = EventBridge(account: a.id)
+        bridge.store = self
         let s: TalkSession
         do {
             s = try TalkSession(
-                server: saved.server, user: saved.loginName, appPassword: saved.appPassword,
-                platform: .ios, listener: bridge, dataDir: Self.dataDir.path
+                server: a.server, user: a.loginName, appPassword: password,
+                platform: .ios, listener: bridge, dataDir: Self.dataDir(a.dir).path
             )
         } catch {
-            phase = .loggedOut
-            return
+            Log.push.error("session \(a.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
         }
-        session = s
-        callMedia.session = s
-        callMedia.onStartAudio = { _ in CallAudio.shared.startAudio() }
-        callMedia.onStopAudio = { _ in CallAudio.shared.stopAudio() }
-        callMedia.onCameraFailed = { CallController.shared.cameraFailed($0) }
         s.setMediaEngine(media: callMedia)
-        server = saved.server
-        user = saved.loginName
-        userId = s.userId()
-        // Cached conversation list: shown in the first frame, before any request.
-        rooms = s.rooms()
-        recordings = s.recordingNotices()
-        notifiedRecordings = nil
-        phase = .ready
-        Task {
-            do {
-                try await s.start()
-                Push.shared.update()
-                #if DEBUG
-                if ProcessInfo.processInfo.environment["TALK_DEV_LOGOUT"] == "1" { self.logout() }
-                #endif
-            } catch CoreError.Unauthorized {
-                await self.signOut(revoke: false)
-            } catch {
-                // Offline start: the core keeps retrying in the background.
-            }
-        }
+        let rt = AccountRuntime(account: a, session: s, bridge: bridge)
+        runtimes[a.id] = rt
+        badges[a.id] = s.badge()
+        Task { await self.run(rt, password: password) }
         BackgroundSender.shared.sessionStarted(s)
+        return rt
     }
 
-    func logout() {
-        Task { await signOut(revoke: true) }
+    private func run(_ rt: AccountRuntime, password: String) async {
+        do {
+            try await rt.session.start()
+        } catch CoreError.Unauthorized {
+            await expire(rt.account.id)
+            return
+        } catch {
+            // Offline start: the core keeps retrying in the background.
+        }
+        guard runtimes[rt.account.id] === rt else { return }
+        Push.shared.update(rt)
+        await refreshIdentity(rt, password: password)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["TALK_DEV_LOGOUT"] == "1", rt.account.id == activeId { logout() }
+        #endif
     }
 
-    private func signOut(revoke: Bool) async {
-        guard let s = session else { return }
-        voice.reset()
-        s.hangUp()
-        if revoke { await Push.shared.unregister(s) } else { PushKey.delete() }
-        session = nil
-        callMedia.session = nil
-        if revoke { try? await s.logout() } else { s.shutdown() }
-        Keychain.deleteAccount()
-        // Unsent messages belong to this account: never deliver them under another one.
-        try? FileManager.default.removeItem(at: Self.dataDir)
-        notifiedFailures.removeAll()
-        recordings = []
-        recordingBusy = []
-        notifiedRecordings = nil
-        textDrafts.removeAll()
-        media.clear()
-        rooms = []
+    /// Name after every start; the key of a taken-over account once the server is reachable.
+    private func refreshIdentity(_ rt: AccountRuntime, password: String) async {
+        var a = rt.account
+        a.name = rt.session.displayName()
+        a.userId = rt.session.userId()
+        if a.key.isEmpty,
+           let who = try? await resolveAccount(server: a.server, loginName: a.loginName, appPassword: password, platform: .ios) {
+            a.key = who.key
+            a.userId = who.userId
+        }
+        guard runtimes[a.id] === rt, a != rt.account else { return }
+        update(a)
+    }
+
+    private func update(_ a: Account) {
+        guard let rt = runtimes[a.id] else { return }
+        rt.account = a
+        if let i = accounts.firstIndex(where: { $0.id == a.id }) { accounts[i] = a }
+        if a.id == activeId {
+            user = a.name
+            userId = a.userId
+        }
+        DeviceKeys.setLine(a.line, for: a.id)
+        guard !devRun else { return }
+        var list = AccountList.load()
+        if let i = list.firstIndex(where: { $0.id == a.id }) {
+            list[i] = a
+            AccountList.save(list)
+        }
+    }
+
+    /// Shows an account. Nothing reloads: the list comes from its runtime at once.
+    private func activate(_ id: String) {
+        guard let rt = runtimes[id] else { return }
+        if activeId != id {
+            if activeId != nil { leaveActive() }
+            activeId = id
+            session = rt.session
+            let a = rt.account
+            server = a.server
+            user = a.name
+            userId = a.userId
+            rooms = rt.session.rooms()
+            roomsEvents &+= 1
+            recordings = rt.session.recordingNotices()
+            online = rt.online
+            if !devRun { AccountList.active = id }
+        }
+        phase = .ready
+    }
+
+    /// The open chat closes, a recording becomes a draft; the settings stay open.
+    private func leaveActive() {
+        closeRoom()
         chats = [:]
-        activeToken = nil
+        unreadLine = nil
         groupInfoOpen = false
-        listPath = []
+        listPath.removeAll { if case .groupInfo = $0 { true } else { false } }
         participantsVersion = [:]
         leaving = []
-        server = ""
-        user = ""
-        userId = ""
-        online = true
-        phase = .loggedOut
-        Notifications.setBadge(0)
+        recordingBusy = []
     }
+
+    /// Switch to another account (account menu, settings, notification). Locked while a
+    /// call rings or runs.
+    @discardableResult
+    func switchTo(_ id: String) -> Bool {
+        guard id != activeId else { return true }
+        guard runtimes[id] != nil else { return false }
+        if CallController.shared.busy {
+            Toast.show("Während eines Anrufs nicht möglich")
+            return false
+        }
+        activate(id)
+        return true
+    }
+
+    /// Answering a call of another account switches there afterwards (docs/accounts.md).
+    func followCall(_ id: String) {
+        guard id != activeId, runtimes[id] != nil else { return }
+        activate(id)
+    }
+
+    /// After the browser login: who signed in decides. The same account again only switches
+    /// there; a failing `resolveAccount` keeps the login open and stores nothing.
+    func login(_ result: LoginResult) async throws {
+        let who = try await resolveAccount(
+            server: result.server, loginName: result.loginName, appPassword: result.appPassword, platform: .ios
+        )
+        if let known = accounts.first(where: {
+            $0.key == who.key || ($0.key.isEmpty && $0.server == result.server && $0.userId == who.userId)
+        }) {
+            Task.detached {
+                try? await revokeAppPassword(
+                    server: result.server, loginName: result.loginName, appPassword: result.appPassword, platform: .ios
+                )
+            }
+            adding = false
+            switchTo(known.id)
+            Toast.show("Dieses Konto ist schon angemeldet")
+            return
+        }
+        let id = Account.newId()
+        let a = Account(id: id, server: result.server, loginName: result.loginName, userId: who.userId,
+                        name: who.displayName, key: who.key, dir: "accounts/\(id)")
+        guard Keychain.savePassword(result.appPassword, for: id) else {
+            throw CoreError.Server(detail: "Zugangsdaten konnten nicht gespeichert werden")
+        }
+        guard makeRuntime(a, password: result.appPassword) != nil else {
+            Keychain.deletePassword(for: id)
+            throw CoreError.Server(detail: "Konto konnte nicht gestartet werden")
+        }
+        if !devRun {
+            var list = AccountList.load()
+            list.append(a)
+            AccountList.save(list)
+        }
+        accounts.append(a)
+        adding = false
+        if activeId == nil || !CallController.shared.busy {
+            activate(id)
+        } else {
+            Toast.show("Während eines Anrufs nicht möglich")
+        }
+    }
+
+    /// "Abmelden": the active account only.
+    func logout() {
+        guard let id = activeId else { return }
+        Task { await signOut(id, revoke: true) }
+    }
+
+    /// `authFailed`: this account goes, without asking and without `logout()` at the server.
+    private func expire(_ id: String) async {
+        guard let a = runtimes[id]?.account else { return }
+        await signOut(id, revoke: false)
+        Toast.show("\(a.name) (\(a.serverLabel)) wurde abgemeldet. Bitte neu anmelden.")
+    }
+
+    /// Removes one account: push, session, entry, password, push key, data folder. The
+    /// others stay untouched; the first remaining becomes active.
+    private func signOut(_ id: String, revoke: Bool) async {
+        guard let rt = runtimes[id] else { return }
+        let s = rt.session
+        let wasActive = id == activeId
+        if wasActive {
+            voice.reset()
+            closeRoom()
+        }
+        // Only this account's own call.
+        if CallController.shared.account == id { s.hangUp() }
+        if revoke { await Push.shared.unregister(rt) } else { Push.shared.forget(rt) }
+        runtimes[id] = nil
+        rt.bridge.store = nil
+        badges[id] = nil
+        accounts.removeAll { $0.id == id }
+        if revoke { try? await s.logout() } else { s.shutdown() }
+        Keychain.deletePassword(for: id)
+        DeviceKeys.delete(for: id)
+        if !devRun { AccountList.save(AccountList.load().filter { $0.id != id }) }
+        // Unsent messages belong to this account: never deliver them under another one.
+        try? FileManager.default.removeItem(at: Self.dataDir(rt.account.dir))
+        Notifications.removeAll(account: id, legacy: rt.account.dir == Self.legacyDir)
+        CallAvatars.shared.forget(account: id)
+        voice.forget(account: id)
+        textDrafts = textDrafts.filter { !$0.key.hasPrefix("\(id)/") }
+        updateAppBadge()
+        guard wasActive else { return }
+        activeId = nil
+        session = nil
+        chats = [:]
+        rooms = []
+        recordings = []
+        recordingBusy = []
+        unreadLine = nil
+        groupInfoOpen = false
+        participantsVersion = [:]
+        leaving = []
+        online = true
+        if let next = accounts.first {
+            activate(next.id)
+        } else {
+            listPath = []
+            server = ""
+            user = ""
+            userId = ""
+            phase = .loggedOut
+        }
+    }
+
+    // MARK: - Accounts
+
+    var allRuntimes: [AccountRuntime] { accounts.compactMap { runtimes[$0.id] } }
+
+    /// The runtime a push, notification or call belongs to. `legacy` (the earlier version's
+    /// key) and notifications without an account: the account taken over from it.
+    func runtime(_ id: String?) -> AccountRuntime? {
+        if let id, id != DeviceKeys.legacyId { return runtimes[id] }
+        return allRuntimes.first { $0.account.dir == Self.legacyDir } ?? (accounts.count == 1 ? allRuntimes.first : nil)
+    }
+
+    var activeAccount: Account? { activeId.flatMap { runtimes[$0]?.account } }
+
+    /// Chats with something new in an account (`badge().chats`).
+    func newChats(_ id: String) -> Int { Int(badges[id]?.chats ?? 0) }
+
+    /// The number at the own avatar: the other accounts' chats with something new.
+    var otherNewChats: Int {
+        accounts.filter { $0.id != activeId }.reduce(0) { $0 + newChats($1.id) }
+    }
+
+    /// A conversation of any account (call screens of an inactive account).
+    func room(_ token: String, account: String?) -> RoomView? {
+        guard let account, account != activeId else { return room(token) }
+        return runtimes[account]?.rooms.first { $0.token == token }
+    }
+
+    /// Avatars and previews of the active account, or of another one.
+    var media: MediaCache { activeId.flatMap { runtimes[$0]?.media } ?? noMedia }
+
+    func mediaCache(for account: String?) -> MediaCache { runtime(account)?.media ?? media }
+
+    /// Where a notification of this account belongs; the line from two accounts on.
+    func origin(_ id: String) -> Notifications.Origin {
+        Notifications.Origin(account: id, line: accounts.count > 1 ? runtimes[id]?.account.line : nil)
+    }
+
+    /// App badge: the sum of `badge().messages` over all accounts.
+    private func updateAppBadge() {
+        Notifications.setBadge(badges.values.reduce(0) { $0 + Int($1.messages) })
+    }
+
+    func textDraft(_ token: String) -> String { textDrafts["\(activeId ?? "")/\(token)"] ?? "" }
+
+    func setTextDraft(_ token: String, _ text: String) { textDrafts["\(activeId ?? "")/\(token)"] = text }
 
     func refresh() async {
         try? await session?.refreshRooms()
@@ -271,57 +626,72 @@ final class SessionStore {
 
     // MARK: - Core events
 
-    fileprivate func handle(_ event: CoreEvent) {
+    /// Events of inactive accounts (docs/accounts.md "Im Hintergrund"): badge, calls,
+    /// failed sends, recordings and `authFailed`; everything else is dropped.
+    fileprivate func handle(_ event: CoreEvent, from id: String) {
+        guard let rt = runtimes[id] else { return }
+        let active = id == activeId
         switch event {
         case .roomsChanged(let rooms):
-            let gone = activeToken.flatMap { t in
-                rooms.contains { $0.token == t } ? nil : self.rooms.first { $0.token == t }
+            rt.rooms = rooms
+            badges[id] = rt.session.badge()
+            updateAppBadge()
+            if active { roomsChanged(rooms) }
+        case .connection(let online):
+            rt.online = online
+            if active { self.online = online }
+        case .authFailed:
+            Task { await expire(id) }
+        case .callChanged(let call):
+            CallController.shared.update(call, account: id)
+        case .callMissed(let token, let roomName, let callerName, let isGroup):
+            Notifications.missedCall(origin(id), token: token, name: isGroup || callerName.isEmpty ? roomName : callerName)
+        case .outboxChanged(let token, let items):
+            if active { updateChat(token) { $0.messages = Self.withPending($0.messages, items) } }
+            announceFailures(rt, token, items)
+        case .recordingsChanged(let items):
+            if active { recordings = items }
+            // The first one after the start is the starting point; only later ids are new.
+            if let known = rt.notifiedRecordings {
+                for n in items where !known.contains(n.id) { Notifications.recording(origin(id), n) }
             }
-            self.rooms = rooms
-            roomsEvents &+= 1
-            // Group settings from the chat menu of a group that is gone.
-            if let i = listPath.firstIndex(where: { if case .groupInfo(let t) = $0 { !rooms.contains { $0.token == t } } else { false } }) {
-                listPath.removeSubrange(i...)
-            }
-            if let gone {
-                // Removed, deleted or left: chat and settings close (docs/groups.md).
-                closeRoom()
-                if leaving.remove(gone.token) == nil && (gone.roomType == 2 || gone.roomType == 3) {
-                    Toast.show("Du bist nicht mehr in dieser Gruppe")
-                }
-            }
-            Notifications.setBadge(rooms.reduce(0) { $0 + Self.badgeCount($1) })
+            rt.notifiedRecordings = (rt.notifiedRecordings ?? []).union(items.map(\.id))
         case .messagesAdded(let token, let messages):
+            guard active else { return }
             media.adoptLocalPreviews(messages)
             if token == activeToken { countUnread(token, messages) }
             updateChat(token) { $0.messages = Self.merge($0.messages, messages) }
         case .messagesUpdated(let token, let messages):
+            guard active else { return }
             let byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
             updateChat(token) { c in
                 c.messages = c.messages.map { m in byId[m.msg.id].map { UiMessage(msg: $0) } ?? m }
             }
         case .readStatus(let token, let lastCommonRead):
+            guard active else { return }
             updateChat(token) { $0.lastCommonRead = max($0.lastCommonRead, lastCommonRead) }
-        case .connection(let online):
-            self.online = online
-        case .authFailed:
-            Task { await signOut(revoke: false) }
-        case .callChanged(let call):
-            CallController.shared.update(call)
-        case .callMissed(let token, let roomName, let callerName, let isGroup):
-            Notifications.missedCall(token: token, name: isGroup || callerName.isEmpty ? roomName : callerName)
-        case .outboxChanged(let token, let items):
-            updateChat(token) { $0.messages = Self.withPending($0.messages, items) }
-            announceFailures(token, items)
         case .participantsChanged(let token):
+            guard active else { return }
             participantsVersion[token, default: 0] += 1
-        case .recordingsChanged(let items):
-            recordings = items
-            // The first one after the start is the starting point; only later ids are new.
-            if let known = notifiedRecordings {
-                for n in items where !known.contains(n.id) { Notifications.recording(n) }
+        }
+    }
+
+    private func roomsChanged(_ rooms: [RoomView]) {
+        let gone = activeToken.flatMap { t in
+            rooms.contains { $0.token == t } ? nil : self.rooms.first { $0.token == t }
+        }
+        self.rooms = rooms
+        roomsEvents &+= 1
+        // Group settings from the chat menu of a group that is gone.
+        if let i = listPath.firstIndex(where: { if case .groupInfo(let t) = $0 { !rooms.contains { $0.token == t } } else { false } }) {
+            listPath.removeSubrange(i...)
+        }
+        if let gone {
+            // Removed, deleted or left: chat and settings close (docs/groups.md).
+            closeRoom()
+            if leaving.remove(gone.token) == nil && (gone.roomType == 2 || gone.roomType == 3) {
+                Toast.show("Du bist nicht mehr in dieser Gruppe")
             }
-            notifiedRecordings = (notifiedRecordings ?? []).union(items.map(\.id))
         }
     }
 
@@ -347,7 +717,7 @@ final class SessionStore {
         Task {
             do {
                 try await f(session)
-                Notifications.removeRecording(n.id)
+                if let id = self.activeId { Notifications.removeRecording(account: id, n.id) }
             } catch {
                 Log.call.error("recording notice \(n.id): \(error.localizedDescription, privacy: .public)")
                 Toast.show(CallController.message(error, fallback: "Hat nicht geklappt"))
@@ -391,13 +761,15 @@ final class SessionStore {
     }
 
     /// Notification for messages that finally failed while the user was not looking.
-    private func announceFailures(_ token: String, _ items: [PendingMessage]) {
+    private func announceFailures(_ rt: AccountRuntime, _ token: String, _ items: [PendingMessage]) {
         let fresh = items.filter { $0.state == .failed }.map(\.message.referenceId)
-            .filter { notifiedFailures.insert($0).inserted }
+            .filter { rt.notifiedFailures.insert($0).inserted }
         guard !fresh.isEmpty else { return }
-        let visible = activeToken == token && foreground
+        let id = rt.account.id
+        let visible = id == activeId && activeToken == token && foreground
         if !visible {
-            Notifications.sendFailed(token: token, room: room(token)?.name ?? "Unterhaltung")
+            let name = rt.rooms.first { $0.token == token }?.name ?? "Unterhaltung"
+            Notifications.sendFailed(origin(id), token: token, room: name)
         }
     }
 
@@ -591,7 +963,7 @@ final class SessionStore {
 
     /// Sends a failed message again (or a waiting one right now).
     func retry(_ msg: MessageView) {
-        notifiedFailures.remove(msg.referenceId)
+        activeId.flatMap { runtimes[$0] }?.notifiedFailures.remove(msg.referenceId)
         session?.retrySend(referenceId: msg.referenceId)
         BackgroundSender.shared.queued()
     }
@@ -637,17 +1009,6 @@ final class SessionStore {
     }
 
     // MARK: - Chat menu (docs/settings.md)
-
-    /// Unread messages a chat adds to the app badge: all at "Alle Nachrichten", at "Nur
-    /// Erwähnungen" only with a mention, none at "Aus" or when archived.
-    static func badgeCount(_ r: RoomView) -> Int {
-        guard !r.isArchived else { return 0 }
-        switch r.notificationLevel {
-        case 3: return 0
-        case 2: return r.unreadMention ? Int(r.unreadMessages) : 0
-        default: return Int(r.unreadMessages)
-        }
-    }
 
     var categoriesSupported: Bool { session?.categoriesSupported() ?? false }
 
@@ -766,13 +1127,20 @@ final class SessionStore {
     }
 }
 
-/// Receives core events on a Rust thread and forwards them to the main actor.
-private final class EventBridge: CoreListener, @unchecked Sendable {
+/// Receives one account's core events on a Rust thread and forwards them to the main actor.
+/// The events carry no account; only the listener knows whose they are.
+fileprivate final class EventBridge: CoreListener, @unchecked Sendable {
+    let account: String
     weak var store: SessionStore?
+
+    init(account: String) {
+        self.account = account
+    }
 
     func onEvent(event: CoreEvent) {
         Task { @MainActor [weak self] in
-            self?.store?.handle(event)
+            guard let self else { return }
+            self.store?.handle(event, from: self.account)
         }
     }
 }

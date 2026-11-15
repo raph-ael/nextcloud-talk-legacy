@@ -28,7 +28,8 @@ private extension View {
     }
 }
 
-/// Start page: own avatar, name and server (nothing to edit), the rows, "Abmelden".
+/// Start page: the active account's avatar, name and server (nothing to edit), the other
+/// accounts (docs/accounts.md), the rows, "Abmelden".
 struct SettingsView: View {
     @Bindable var store: SessionStore
     @State private var confirmLogout = false
@@ -55,6 +56,8 @@ struct SettingsView: View {
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
 
+            accounts
+
             Section {
                 row(.appearance, icon: "paintpalette", title: "Darstellung")
                 row(.notifications, icon: "bell", title: "Benachrichtigungen")
@@ -71,10 +74,39 @@ struct SettingsView: View {
             }
         }
         .settingsList("Einstellungen")
-        .confirmationDialog("Abmelden?", isPresented: $confirmLogout, titleVisibility: .visible) {
+        // An alert, not a popover: the contract wants "Abmelden" and "Abbrechen" both shown.
+        .alert("Abmelden?", isPresented: $confirmLogout) {
             Button("Abmelden", role: .destructive) { store.logout() }
+            Button("Abbrechen", role: .cancel) {}
         } message: {
-            Text("Ungesendete Nachrichten und der Offline-Speicher werden gelöscht.")
+            Text("\(store.user) (\(store.server.replacingOccurrences(of: "https://", with: ""))) wird auf diesem Gerät abgemeldet. Ungesendete Nachrichten und der Offline-Speicher dieses Kontos werden gelöscht.")
+        }
+    }
+
+    /// "Konten": the other accounts (a tap switches, the settings stay open) and
+    /// "Konto hinzufügen", also while the avatar still opens the settings directly.
+    private var accounts: some View {
+        let busy = CallController.shared.busy
+        return Section {
+            ForEach(store.accounts.filter { $0.id != store.activeId }) { a in
+                Button { store.switchTo(a.id) } label: {
+                    AccountRow(account: a, active: false, count: store.newChats(a.id), locked: busy)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("account:\(a.id)")
+                .listRowBackground(Talk.groupedRow)
+            }
+            if store.accounts.count < maxAccounts {
+                Button { store.adding = true } label: {
+                    SettingsLabel(icon: "plus", text: "Konto hinzufügen")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Konto hinzufügen")
+                .accessibilityIdentifier("settings-add-account")
+                .listRowBackground(Talk.groupedRow)
+            }
+        } header: {
+            SettingsHeader("Konten")
         }
     }
 

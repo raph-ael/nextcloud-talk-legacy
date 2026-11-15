@@ -5,8 +5,8 @@ import PushKit
 ///
 /// iOS terminates apps that receive a VoIP push without reporting a call to CallKit, so
 /// every push is reported at once – also one that cannot be decrypted (it ends at once).
-/// Order (docs/calls.md): `decryptPush` → `reportNewIncomingCall` → `handlePush` with the
-/// same UUID, so the core's `incoming` is this CallKit call.
+/// Order (docs/calls.md): `decryptPushFor` → `reportNewIncomingCall` → `handlePush` of that
+/// account with the same UUID, so the core's `incoming` is this CallKit call.
 @MainActor
 final class VoipPush: NSObject, PKPushRegistryDelegate {
     static let shared = VoipPush()
@@ -39,13 +39,12 @@ final class VoipPush: NSObject, PKPushRegistryDelegate {
         for type: PKPushType, completion: @escaping () -> Void
     ) {
         let subject = payload.dictionaryPayload["subject"] as? String
-        // Synchronous and without network: works before any session exists.
-        let message: PushMessage? = subject.flatMap { s in
-            PushKey.load().flatMap { try? decryptPush(deviceKeyPem: $0, subject: s) }
-        }
+        // Synchronous and without network: works before any session exists. The key that
+        // decrypts names the account (docs/accounts.md "Push").
+        let found = subject.flatMap { decryptPushFor(keys: DeviceKeys.decryptKeys(), subject: $0) }
         MainActor.assumeIsolated {
-            Log.push.info("voip push: \(Self.describe(message), privacy: .public)")
-            CallController.shared.reportPushed(message, completion: completion)
+            Log.push.info("voip push: \(Self.describe(found?.message), privacy: .public)")
+            CallController.shared.reportPushed(found?.message, account: found?.accountId, completion: completion)
         }
     }
 

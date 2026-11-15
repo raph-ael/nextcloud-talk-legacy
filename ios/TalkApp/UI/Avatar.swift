@@ -6,15 +6,19 @@ struct Avatar: View {
     var size: CGFloat
     var token: String? = nil
     var version: String = ""
+    /// Another account than the active one (call of an inactive account).
+    var account: String? = nil
 
     @Environment(\.colorScheme) private var scheme
     @State private var image: UIImage?
 
-    private var store: SessionStore { SessionStore.shared }
+    private var media: MediaCache {
+        account.map { SessionStore.shared.mediaCache(for: $0) } ?? SessionStore.shared.media
+    }
 
     var body: some View {
         let dark = scheme == .dark
-        let shown = image ?? token.flatMap { store.media.cachedAvatar($0, version, dark: dark) }
+        let shown = image ?? token.flatMap { media.cachedAvatar($0, version, dark: dark) }
         ZStack {
             if let shown {
                 Image(uiImage: shown).resizable().scaledToFill()
@@ -27,9 +31,9 @@ struct Avatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .task(id: "\(token ?? "")|\(version)|\(dark)") {
+        .task(id: "\(account ?? SessionStore.shared.activeId ?? "")|\(token ?? "")|\(version)|\(dark)") {
             guard let token else { return }
-            image = await store.media.avatar(token, version, dark: dark)
+            image = await media.avatar(token, version, dark: dark)
         }
         .accessibilityHidden(true)
     }

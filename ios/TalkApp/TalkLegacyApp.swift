@@ -5,7 +5,7 @@ import UserNotifications
 struct TalkLegacyApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.scenePhase) private var scenePhase
-    private var store: SessionStore { .shared }
+    @Bindable private var store = SessionStore.shared
     private var appearance: Appearance { .shared }
 
     init() {
@@ -22,9 +22,16 @@ struct TalkLegacyApp: App {
                 case .loading:
                     Talk.background.ignoresSafeArea()
                 case .loggedOut:
-                    LoginView { result in try store.login(result) }
+                    LoginView { result in try await store.login(result) }
                 case .ready:
                     RootView(store: store)
+                        // "Konto hinzufügen" (docs/accounts.md): the login screen over the app;
+                        // the other accounts keep running.
+                        .fullScreenCover(isPresented: $store.adding) {
+                            LoginView(adding: true, onCancel: { store.adding = false }) { result in
+                                try await store.login(result)
+                            }
+                        }
                 }
             }
             // Design and accent (docs/settings.md "Darstellung"); the windows get the same
@@ -149,7 +156,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// Swiped away during a call: leave it properly so the others do not wait for us.
     func applicationWillTerminate(_ application: UIApplication) {
-        guard let session = SessionStore.shared.session, session.currentCall() != nil else { return }
+        let calls = SessionStore.shared.allRuntimes.map(\.session).filter { $0.currentCall() != nil }
+        guard let session = calls.first else { return }
         let done = DispatchSemaphore(value: 0)
         Task.detached {
             await session.hangUpAndWait(timeoutMs: 2000)
@@ -158,19 +166,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ = done.wait(timeout: .now() + 2.5)
     }
 
-    /// In front: show the failure banner unless that chat is open.
+    /// In front: show the banner unless exactly this chat is open in the active account.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        let token = notification.request.content.userInfo["token"] as? String
-        let open = await MainActor.run { SessionStore.shared.activeToken }
-        return token != nil && token == open ? [] : [.banner, .sound]
+        let info = notification.request.content.userInfo
+        let token = info["token"] as? String
+        let account = info["account"] as? String
+        let open = await MainActor.run { () -> Bool in
+            let store = SessionStore.shared
+            guard let token, token == store.activeToken else { return false }
+            return store.runtime(account)?.account.id == store.activeId
+        }
+        return open ? [] : [.banner, .sound]
     }
 
+    /// A tap switches into the notification's account and opens the chat (not during a call).
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let token = response.notification.request.content.userInfo["token"] as? String else { return }
+        let info = response.notification.request.content.userInfo
+        guard let token = info["token"] as? String else { return }
+        let account = info["account"] as? String
         await MainActor.run {
             let store = SessionStore.shared
+            guard let id = store.runtime(account)?.account.id, store.switchTo(id) else { return }
             if store.activeToken != token {
                 store.closeRoom()
                 store.openRoom(token)

@@ -307,12 +307,15 @@ struct PersonAvatar: View {
     let name: String
     let userId: String
     let size: CGFloat
+    /// Another account than the active one (account menu, call of an inactive account).
+    var account: String? = nil
     @State private var image: UIImage?
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        let owner = account ?? SessionStore.shared.activeId ?? ""
         ZStack {
-            if let image = image ?? (userId.isEmpty ? nil : CallAvatars.shared.cached(userId, dark: scheme == .dark)) {
+            if let image = image ?? (userId.isEmpty ? nil : CallAvatars.shared.cached(userId, dark: scheme == .dark, account: owner)) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 Format.color(for: name)
@@ -323,9 +326,10 @@ struct PersonAvatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .task(id: "\(userId)|\(scheme == .dark)") {
+        .task(id: "\(owner)|\(userId)|\(scheme == .dark)") {
+            image = nil
             guard !userId.isEmpty else { return }
-            image = await CallAvatars.shared.image(userId, dark: scheme == .dark)
+            image = await CallAvatars.shared.image(userId, dark: scheme == .dark, account: owner)
         }
     }
 }

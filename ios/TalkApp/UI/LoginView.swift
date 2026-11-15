@@ -2,9 +2,13 @@ import SafariServices
 import SwiftUI
 
 /// Login via Nextcloud Login Flow v2: the user signs in (incl. 2FA) in a Safari sheet,
-/// the core polls in the background and returns an app password.
+/// the core polls in the background and returns an app password. "Konto hinzufügen"
+/// (docs/accounts.md) shows the same screen with its own title and "Abbrechen".
 struct LoginView: View {
-    let onLogin: (LoginResult) throws -> Void
+    var adding = false
+    var onCancel: (() -> Void)? = nil
+    /// Asks the server who signed in and stores the account; an error keeps the login open.
+    let onLogin: (LoginResult) async throws -> Void
 
     @State private var server = ""
     @State private var page: LoginPage?
@@ -20,8 +24,9 @@ struct LoginView: View {
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(.tint)
-            Text("Willkommen")
+            Text(adding ? "Konto hinzufügen" : "Willkommen")
                 .font(.largeTitle.bold())
+                .accessibilityAddTraits(.isHeader)
             Text("Melde dich mit deinem Nextcloud-Konto an.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -57,6 +62,18 @@ struct LoginView: View {
             Spacer()
         }
         .padding(24)
+        .overlay(alignment: .topLeading) {
+            if let onCancel {
+                Button("Abbrechen") {
+                    flow?.cancel()
+                    flowTask?.cancel()
+                    onCancel()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .accessibilityIdentifier("login-cancel")
+            }
+        }
         .sheet(item: $page, onDismiss: cancelIfPending) { page in
             SafariView(url: page.url).ignoresSafeArea()
         }
@@ -75,7 +92,7 @@ struct LoginView: View {
                 page = LoginPage(url: url)
                 let result = try await started.wait()
                 page = nil
-                try onLogin(result)
+                try await onLogin(result)
             } catch CoreError.Cancelled {
                 // User closed the browser sheet.
             } catch {

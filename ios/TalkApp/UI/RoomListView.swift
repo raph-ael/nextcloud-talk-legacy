@@ -10,6 +10,9 @@ struct RoomListView: View {
     /// Chat for which "Neue Kategorie …" asks the name.
     @State private var newCategoryFor: String?
     @State private var categoryName = ""
+    /// Account menu (two accounts and more) and what follows once it is closed.
+    @State private var accountMenu = false
+    @State private var afterMenu: AccountMenuAction?
 
     var body: some View {
         // Sections from the core (docs/categories.md): filtered, collapsed ones reduced.
@@ -56,14 +59,7 @@ struct RoomListView: View {
         .searchable(text: $query, prompt: "Suchen")
         .navigationTitle("Chats")
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                // Own avatar: opens the settings (docs/settings.md).
-                Button { store.listPath = [.settings] } label: {
-                    PersonAvatar(name: store.user, userId: store.userId, size: 32)
-                }
-                .accessibilityLabel("Einstellungen")
-                .accessibilityIdentifier("settings")
-            }
+            ToolbarItem(placement: .topBarLeading) { ownAvatar }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { newMessage = true } label: { Image(systemName: "square.and.pencil") }
                     .accessibilityLabel("Neue Nachricht")
@@ -71,6 +67,16 @@ struct RoomListView: View {
             }
         }
         .sheet(isPresented: $newMessage) { NewMessageSheet(store: store) }
+        .sheet(isPresented: $accountMenu, onDismiss: {
+            switch afterMenu {
+            case .add: store.adding = true
+            case .settings: store.listPath = [.settings]
+            case nil: break
+            }
+            afterMenu = nil
+        }) {
+            AccountMenu(store: store) { afterMenu = $0 }
+        }
         .alert("Neue Kategorie", isPresented: Binding(
             get: { newCategoryFor != nil },
             set: { if !$0 { newCategoryFor = nil } }
@@ -83,6 +89,25 @@ struct RoomListView: View {
             }
             .disabled(categoryName.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+    }
+
+    /// Own avatar (docs/settings.md, docs/accounts.md): one account opens the settings; from
+    /// two on the account menu, with the other accounts' chats with something new.
+    private var ownAvatar: some View {
+        let many = store.accounts.count > 1
+        let others = many ? store.otherNewChats : 0
+        return Button {
+            if many { accountMenu = true } else { store.listPath = [.settings] }
+        } label: {
+            PersonAvatar(name: store.user, userId: store.userId, size: 32)
+                .padding(.top, 4)
+                .padding(.trailing, 8)
+                .overlay(alignment: .topTrailing) {
+                    if others > 0 { CountBadge(count: others, small: true) }
+                }
+        }
+        .accessibilityLabel(many ? (others > 0 ? "Konten, Neues in \(others) Chats" : "Konten") : "Einstellungen")
+        .accessibilityIdentifier("settings")
     }
 
     /// A chat may stand in several sections, so the row ids carry the section.

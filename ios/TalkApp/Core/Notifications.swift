@@ -15,43 +15,63 @@ enum Notifications {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
     }
 
-    static func sendFailed(token: String, room: String) {
+    /// Where a notification belongs (docs/accounts.md): the account id goes into the id,
+    /// the thread and `userInfo`; `line` ("{Name} · {Server}", only from two accounts on)
+    /// becomes the subtitle.
+    struct Origin {
+        let account: String
+        let line: String?
+    }
+
+    private static func content(_ o: Origin, token: String, title: String, body: String) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
-        content.title = "Nachricht nicht gesendet"
-        content.body = room
+        content.title = title
+        content.body = body
+        if let line = o.line { content.subtitle = line }
+        content.userInfo = ["account": o.account, "token": token]
+        return content
+    }
+
+    static func sendFailed(_ o: Origin, token: String, room: String) {
+        let content = content(o, token: token, title: "Nachricht nicht gesendet", body: room)
         content.sound = .default
-        content.userInfo = ["token": token]
-        content.threadIdentifier = "send_failed.\(token)"
-        let request = UNNotificationRequest(identifier: "send_failed.\(token)", content: content, trigger: nil)
+        content.threadIdentifier = "\(o.account).send_failed.\(token)"
+        let request = UNNotificationRequest(identifier: "\(o.account).send_failed.\(token)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 
     /// A call that rang here unanswered, or came in during another call. Tap opens the chat.
-    static func missedCall(token: String, name: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "Verpasster Anruf"
-        content.body = name
+    static func missedCall(_ o: Origin, token: String, name: String) {
+        let content = content(o, token: token, title: "Verpasster Anruf", body: name)
         content.sound = .default
-        content.userInfo = ["token": token]
-        content.threadIdentifier = "missed_call.\(token)"
-        let id = "missed_call.\(token).\(Int(Date().timeIntervalSince1970))"
+        content.threadIdentifier = "\(o.account).missed_call.\(token)"
+        let id = "\(o.account).missed_call.\(token).\(Int(Date().timeIntervalSince1970))"
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
     /// A finished recording (transcript, summary) while the app runs: quiet, tap opens the chat.
-    static func recording(_ n: RecordingNotice) {
-        let content = UNMutableNotificationContent()
-        content.title = RecordingText.title(n)
-        content.body = n.roomName
+    static func recording(_ o: Origin, _ n: RecordingNotice) {
+        let content = content(o, token: n.token, title: RecordingText.title(n), body: n.roomName)
         content.sound = nil
         content.interruptionLevel = .passive
-        content.userInfo = ["token": n.token]
-        content.threadIdentifier = "recording.\(n.token)"
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "recording.\(n.id)", content: content, trigger: nil))
+        content.threadIdentifier = "\(o.account).recording.\(n.token)"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "\(o.account).recording.\(n.id)", content: content, trigger: nil))
     }
 
-    static func removeRecording(_ id: Int64) {
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["recording.\(id)"])
+    static func removeRecording(account: String, _ id: Int64) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["\(account).recording.\(id)"])
+    }
+
+    /// Sign-out: the account's notifications go, the others' stay.
+    static func removeAll(account: String, legacy: Bool) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { list in
+            let ids = list.filter { n in
+                let a = n.request.content.userInfo["account"] as? String
+                return a == account || (legacy && (a == nil || a == DeviceKeys.legacyId))
+            }.map(\.request.identifier)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
     }
 
     static func setBadge(_ count: Int) {

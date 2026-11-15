@@ -4,7 +4,8 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Decoded avatars and chat image previews (port of the caches in Android `SessionManager`).
-/// Synchronous lookups let re-shown rows draw their first frame without flashing.
+/// Synchronous lookups let re-shown rows draw their first frame without flashing. One per
+/// account (docs/accounts.md): tokens and file ids of different servers overlap.
 @MainActor
 final class MediaCache {
     private let avatars: NSCache<NSString, UIImage> = {
@@ -30,7 +31,11 @@ final class MediaCache {
     /// Longest edge a bubble shows, in pixels.
     static var bubbleEdge: CGFloat { 300 * UIScreen.main.scale }
 
-    private var session: TalkSession? { SessionStore.shared.session }
+    private let session: TalkSession?
+
+    init(session: TalkSession?) {
+        self.session = session
+    }
 
     func clear() {
         avatars.removeAllObjects()
