@@ -35,8 +35,13 @@ final class AccountsTests: XCTestCase {
         add(a)
     }
 
-    /// The server as shown: without `https://` (the demo servers keep their `http://`).
-    private func label(_ s: String) -> String { s.replacingOccurrences(of: "https://", with: "") }
+    /// The server as shown: without `https://` or `http://`.
+    private func label(_ s: String) -> String {
+        s.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
+    }
+
+    /// "Konten, Neues in {n} Chats", singular for one.
+    private func konten(_ n: Int) -> String { n == 1 ? "Konten, Neues in 1 Chat" : "Konten, Neues in \(n) Chats" }
 
     /// Somebody writes to the signed-in user of a demo server (`/demo/incoming`).
     private func incoming(_ server: String, token: String, text: String) {
@@ -101,13 +106,13 @@ final class AccountsTests: XCTestCase {
         // the run may have left something new on the server already.)
         let start = newChats(avatar.label)
         incoming(server2, token: "mira", text: "Hallo Jonas")
-        waitLabel(avatar, "Konten, Neues in \(max(start, 1)) Chats")
+        waitLabel(avatar, konten(max(start, 1)))
         let afterMira = max(start, 1)
         incoming(server2, token: "werkstatt", text: "Wer hat heute Zeit?")
         sleep(3)
-        XCTAssertEqual(avatar.label, "Konten, Neues in \(afterMira) Chats", "a chat on 'Nur Erwähnungen' counted without a mention")
+        XCTAssertEqual(avatar.label, konten(afterMira), "a chat on 'Nur Erwähnungen' counted without a mention")
         incoming(server2, token: "werkstatt", text: "@jonas bringst du den Ständer mit?")
-        waitLabel(avatar, "Konten, Neues in \(afterMira + 1) Chats")
+        waitLabel(avatar, konten(afterMira + 1))
         shot("avatar-zahl")
 
         // Account menu: rows in sign-in order, tick and number, add and settings.
@@ -265,7 +270,13 @@ final class AccountsTests: XCTestCase {
         if allow.waitForExistence(timeout: 10) { allow.tap() }
         back()
         incoming(server2, token: "mira", text: "Erste Nachricht")
-        waitLabel(avatar, "Konten, Neues in 1 Chats")
+        waitLabel(avatar, "Konten, Neues in 1 Chat")
+        avatar.tap()
+        let jonas = app.buttons["account:de000002"]
+        XCTAssertTrue(jonas.waitForExistence(timeout: 5))
+        XCTAssertEqual(jonas.label, "Jonas Richter, \(label(server2)), 1 Chat mit Neuem")
+        app.buttons["account:de000001"].tap()
+        XCTAssertTrue(jonas.waitForNonExistence(timeout: 5))
         sleep(2)
         let before = homeBadge(springboard)
         app.activate()

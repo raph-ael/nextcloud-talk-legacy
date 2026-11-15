@@ -106,7 +106,7 @@ struct RoomListView: View {
                     if others > 0 { CountBadge(count: others, small: true) }
                 }
         }
-        .accessibilityLabel(many ? (others > 0 ? "Konten, Neues in \(others) Chats" : "Konten") : "Einstellungen")
+        .accessibilityLabel(many ? (others > 0 ? "Konten, Neues in \(others) \(others == 1 ? "Chat" : "Chats")" : "Konten") : "Einstellungen")
         .accessibilityIdentifier("settings")
     }
 

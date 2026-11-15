@@ -44,7 +44,7 @@ struct SettingsView: View {
                         .foregroundStyle(Talk.onSurface)
                         .multilineTextAlignment(.center)
                         .padding(.top, 10)
-                    Text(store.server.replacingOccurrences(of: "https://", with: ""))
+                    Text(Account.label(store.server))
                         .font(.system(size: 14))
                         .foregroundStyle(Talk.muted)
                         .multilineTextAlignment(.center)
@@ -79,7 +79,7 @@ struct SettingsView: View {
             Button("Abmelden", role: .destructive) { store.logout() }
             Button("Abbrechen", role: .cancel) {}
         } message: {
-            Text("\(store.user) (\(store.server.replacingOccurrences(of: "https://", with: ""))) wird auf diesem Gerät abgemeldet. Ungesendete Nachrichten und der Offline-Speicher dieses Kontos werden gelöscht.")
+            Text("\(store.user) (\(Account.label(store.server))) wird auf diesem Gerät abgemeldet. Ungesendete Nachrichten und der Offline-Speicher dieses Kontos werden gelöscht.")
         }
     }
 

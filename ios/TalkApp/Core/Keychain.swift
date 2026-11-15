@@ -17,8 +17,15 @@ struct Account: Codable, Identifiable, Equatable, Hashable {
     /// earlier version (never moved, the outbox keeps absolute paths), else `accounts/<id>`.
     let dir: String
 
-    /// The address without `https://`, as in the head of the settings.
-    var serverLabel: String { server.replacingOccurrences(of: "https://", with: "") }
+    /// The address without `https://` or `http://`, wherever it is shown.
+    var serverLabel: String { Self.label(server) }
+
+    static func label(_ server: String) -> String {
+        for scheme in ["https://", "http://"] where server.hasPrefix(scheme) {
+            return String(server.dropFirst(scheme.count))
+        }
+        return server
+    }
 
     /// "{Name} · {Server}": the account line of notifications.
     var line: String { "\(name) · \(serverLabel)" }

@@ -482,6 +482,28 @@ final class SessionStore {
             Toast.show("Dieses Konto ist schon angemeldet")
             return
         }
+        // In the list but not started (its password could not be read in this run): it gets
+        // the new password and starts, with its folder and outbox; no second entry.
+        if !devRun, let stale = AccountList.load().first(where: { a in
+            runtimes[a.id] == nil
+                && (a.key == who.key || (a.key.isEmpty && a.server == result.server && a.userId == who.userId))
+        }) {
+            guard Keychain.savePassword(result.appPassword, for: stale.id) else {
+                throw CoreError.Server(detail: "Zugangsdaten konnten nicht gespeichert werden")
+            }
+            var a = stale
+            a.key = who.key
+            a.userId = who.userId
+            a.name = who.displayName
+            guard makeRuntime(a, password: result.appPassword) != nil else {
+                throw CoreError.Server(detail: "Konto konnte nicht gestartet werden")
+            }
+            accounts = AccountList.load().filter { runtimes[$0.id] != nil || $0.id == a.id }
+            update(a)
+            adding = false
+            if activeId == nil || !CallController.shared.busy { activate(a.id) }
+            return
+        }
         let id = Account.newId()
         let a = Account(id: id, server: result.server, loginName: result.loginName, userId: who.userId,
                         name: who.displayName, key: who.key, dir: "accounts/\(id)")

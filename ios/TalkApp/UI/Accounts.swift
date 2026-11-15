@@ -62,7 +62,7 @@ struct AccountRow: View {
         if active {
             parts.append("aktiv")
         } else if count > 0 {
-            parts.append("\(count) Chats mit Neuem")
+            parts.append(count == 1 ? "1 Chat mit Neuem" : "\(count) Chats mit Neuem")
         }
         if locked { parts.append("nicht verfügbar") }
         return parts.joined(separator: ", ")
