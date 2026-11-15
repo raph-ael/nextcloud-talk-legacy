@@ -55,6 +55,9 @@ const val MAX_ACCOUNTS = 5
 /** „99+“ above 99. */
 private fun count(n: Int) = if (n > 99) "99+" else n.toString()
 
+/** „1 Chat“, „3 Chats“ (docs/accounts.md „Barrierefreiheit“). */
+private fun chats(n: Int) = if (n == 1) "1 Chat" else "$n Chats"
+
 /**
  * Own avatar at the top left of the chat list (docs/accounts.md „Avatar oben links“): with
  * one account it opens the settings, from two on the account menu, with the number of
@@ -75,7 +78,7 @@ fun OwnAvatarButton(sessions: SessionManager, state: UiState, onSettings: () -> 
             .clearAndSetSemantics {
                 contentDescription = when {
                     !several -> "Einstellungen"
-                    others > 0 -> "Konten, Neues in $others Chats"
+                    others > 0 -> "Konten, Neues in ${chats(others)}"
                     else -> "Konten"
                 }
                 role = Role.Button
@@ -120,7 +123,7 @@ fun AccountRow(sessions: SessionManager, account: AccountView, active: Boolean, 
             .clearAndSetSemantics {
                 contentDescription = buildString {
                     append("${account.name}, ${account.server}")
-                    if (active) append(", aktiv") else if (account.chats > 0) append(", ${account.chats} Chats mit Neuem")
+                    if (active) append(", aktiv") else if (account.chats > 0) append(", ${chats(account.chats)} mit Neuem")
                     if (disabled) append(", nicht verfügbar")
                 }
                 role = Role.Button

@@ -146,8 +146,8 @@ data class UiState(
     val accounts: List<AccountView> = emptyList(),
 )
 
-/** Server address as shown: without `https://`. */
-fun shownServer(server: String) = server.removePrefix("https://").trimEnd('/')
+/** Server address as shown everywhere (docs/accounts.md): without scheme and trailing slash. */
+fun shownServer(server: String) = server.trim().removePrefix("https://").removePrefix("http://").trimEnd('/')
 
 /**
  * App-wide state holder: one runtime (a started [TalkSession] with its own listener) per
