@@ -81,6 +81,12 @@
   </screenshots>
 
   <releases>
+    <release version="0.4.1" date="2026-11-15" type="development">
+      <description>
+        <p>Wartungsversion ohne Änderungen an der Desktop-App.</p>
+        <p>Die Android-App ist jetzt für Push eingerichtet: Anrufe klingeln auch, wenn die App beendet ist.</p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-11-15" type="development">
       <description>
         <p>Mehrere Konten: mit mehreren Nextcloud-Konten gleichzeitig anmelden und über den eigenen Avatar zwischen ihnen wechseln.</p>
