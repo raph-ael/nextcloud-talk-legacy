@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -33,6 +34,10 @@ fun TalkApp(sessions: SessionManager) {
     val state by sessions.state.collectAsStateWithLifecycle()
     val call by sessions.calls.ui.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // Over the accounts: the settings stay open when switching from there (docs/accounts.md).
+    var settings by rememberSaveable { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
+    if (adding && state.session != SessionState.READY) adding = false
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     call?.let { c -> CallBar(c) { context.startActivity(Intent(context, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
     Box(Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {
@@ -40,12 +45,13 @@ fun TalkApp(sessions: SessionManager) {
             SessionState.LOADING -> Unit
             SessionState.LOGGED_OUT -> LoginScreen(sessions)
             SessionState.READY -> {
+                // Everything below belongs to one account: a switch starts it fresh, so no
+                // remembered state (avatars, drafts, scroll) crosses accounts (docs/accounts.md).
+                key(state.accountId) {
                 val active = state.activeToken
                 // „Neue Nachricht“ over the list, group settings over the chat (docs/groups.md).
                 var composing by rememberSaveable { mutableStateOf(false) }
                 var infoFor by rememberSaveable { mutableStateOf<String?>(null) }
-                // „Einstellungen“ over the list (docs/settings.md).
-                var settings by rememberSaveable { mutableStateOf(false) }
                 // Group settings belong to the open chat, or come over the list from the chat menu.
                 if (infoFor != null && active != null && infoFor != active) infoFor = null
                 BackHandler(enabled = active != null) { sessions.closeRoom() }
@@ -70,6 +76,7 @@ fun TalkApp(sessions: SessionManager) {
                             onCompose = { composing = true },
                             onSettings = { settings = true },
                             onGroupSettings = { infoFor = it },
+                            onAddAccount = { adding = true },
                         )
                     }
                 }
@@ -85,7 +92,7 @@ fun TalkApp(sessions: SessionManager) {
                     enter = slideInHorizontally { it },
                     exit = slideOutHorizontally { it },
                 ) {
-                    SettingsScreen(sessions, state, onBack = { settings = false })
+                    SettingsScreen(sessions, state, onBack = { settings = false }, onAddAccount = { adding = true })
                 }
                 if (settings && active != null) settings = false
                 val infoRoom = infoFor?.let { t -> state.rooms.find { it.token == t } }
@@ -100,6 +107,15 @@ fun TalkApp(sessions: SessionManager) {
                 }
                 // Opening a chat from the flow closes it underneath.
                 if (composing && active != null) composing = false
+                }
+                // „Konto hinzufügen“ over everything; the other accounts keep running.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = adding,
+                    enter = slideInHorizontally { it },
+                    exit = slideOutHorizontally { it },
+                ) {
+                    LoginScreen(sessions, adding = true, onCancel = { adding = false }, onDone = { adding = false })
+                }
             }
         }
     }

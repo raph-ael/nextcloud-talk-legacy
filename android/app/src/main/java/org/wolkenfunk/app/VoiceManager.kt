@@ -37,6 +37,8 @@ data class RecordingUi(
 )
 
 data class VoiceUi(
+    /** Account these drafts belong to (docs/accounts.md): a switch starts empty. */
+    val account: String? = null,
     val recording: RecordingUi? = null,
     /** Unsent recording per conversation (absent: not loaded yet). */
     val drafts: Map<String, VoiceDraft?> = emptyMap(),
@@ -136,20 +138,45 @@ class VoiceManager(
 
     /** Ends the recording as the chat's draft. Returns it (`null`: shorter than a second). */
     suspend fun stopToDraft(notice: String? = null): VoiceDraft? {
+        val taken = takeRecording() ?: return null
+        return finishDraft(taken, notice)
+    }
+
+    private class Taken(val rec: VoiceRecording, val cap: VoiceCapture?, val token: String, val account: String?)
+
+    /** Takes the running recording over (synchronously, before a switch resets the state). */
+    private fun takeRecording(): Taken? {
         val rec = recording ?: return null
         val token = _state.value.recording?.token ?: return null
-        val cap = capture
+        val taken = Taken(rec, capture, token, _state.value.account)
         recording = null
         capture = null
+        return taken
+    }
+
+    private suspend fun finishDraft(t: Taken, notice: String?): VoiceDraft? {
         val draft = withContext(Dispatchers.IO) {
-            cap?.stop()
-            val d = runCatching { rec.finish() }.getOrNull()
-            rec.close()
+            t.cap?.stop()
+            val d = runCatching { t.rec.finish() }.getOrNull()
+            t.rec.close()
             d
         }
-        _state.update { it.copy(recording = null, drafts = it.drafts + (token to draft)) }
+        // Stored in its own account by the core; shown only while that account is.
+        _state.update { if (it.account == t.account) it.copy(recording = null, drafts = it.drafts + (t.token to draft)) else it }
         if (notice != null && draft != null) toast(notice)
         return draft
+    }
+
+    /**
+     * Another account is shown (or none): a running recording ends as draft of its own
+     * account, playback stops and the drafts of the new account are loaded fresh.
+     */
+    fun switchAccount(account: String?) {
+        if (_state.value.account == account) return
+        takeRecording()?.let { t -> scope.launch { finishDraft(t, null) } }
+        player.stop()
+        infos.clear()
+        _state.value = VoiceUi(account = account)
     }
 
     /** Fire-and-forget [stopToDraft] (app paused, chat left). */
@@ -183,9 +210,11 @@ class VoiceManager(
     fun loadDraft(token: String) {
         if (_state.value.recording?.token == token) return
         val s = session() ?: return
+        val account = _state.value.account
         scope.launch {
             val d = withContext(Dispatchers.IO) { runCatching { s.voiceDraft(token) }.getOrNull() }
-            _state.update { it.copy(drafts = it.drafts + (token to d)) }
+            // Loaded late, after a switch: it belongs to the other account.
+            _state.update { if (it.account == account) it.copy(drafts = it.drafts + (token to d)) else it }
         }
     }
 
@@ -199,6 +228,7 @@ class VoiceManager(
 
     fun sendDraft(token: String, replyTo: MessageView?, onSent: () -> Unit = {}) {
         val s = session() ?: return
+        val account = _state.value.account
         _state.value.drafts[token]?.let { player.stop(draftKey(it)) }
         val name = "Sprachnachricht " + SimpleDateFormat("yyyy-MM-dd HH-mm-ss", Locale.ROOT).format(Date())
         scope.launch {
@@ -209,7 +239,7 @@ class VoiceManager(
                 toast("Senden nicht möglich: ${sent.exceptionOrNull()?.message}")
                 return@launch
             }
-            _state.update { it.copy(drafts = it.drafts + (token to null)) }
+            _state.update { if (it.account == account) it.copy(drafts = it.drafts + (token to null)) else it }
             OutboxWorker.schedule(context)
             onSent()
         }

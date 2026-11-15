@@ -32,7 +32,7 @@ class CallService : Service() {
             return START_NOT_STICKY
         }
         val id = if (ringing) CallNotifications.ID_INCOMING else CallNotifications.ID_ONGOING
-        val notification = if (ringing) CallNotifications.incoming(this, call!!) else CallNotifications.ongoing(this, call)
+        val notification = if (ringing) CallNotifications.incoming(this, call!!, controller.accountLabel()) else CallNotifications.ongoing(this, call)
         // Ringing needs no microphone yet; the call itself does.
         val mic = !ringing &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED

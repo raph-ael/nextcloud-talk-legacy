@@ -46,7 +46,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.talk_ffi.PushMessage
 import uniffi.talk_ffi.RecordingNotice
 import org.wolkenfunk.app.call.RecordingNotifications
-import uniffi.talk_ffi.decryptPush
+import uniffi.talk_ffi.decryptPushFor
+import uniffi.talk_ffi.PushKey
+import uniffi.talk_ffi.CallState
+import uniffi.talk_ffi.resolveAccount
+import uniffi.talk_ffi.revokeAppPassword
+import org.wolkenfunk.app.media.stagingDir
 import uniffi.talk_ffi.generatePushKey
 import uniffi.talk_ffi.ClientPlatform
 import uniffi.talk_ffi.CoreEvent
@@ -56,7 +61,6 @@ import uniffi.talk_ffi.FileAttachment
 import uniffi.talk_ffi.LoginFlow
 import uniffi.talk_ffi.MessageKind
 import uniffi.talk_ffi.MessageView
-import uniffi.talk_ffi.OutboxIdle
 import uniffi.talk_ffi.PendingMessage
 import uniffi.talk_ffi.PendingState
 import uniffi.talk_ffi.MemberView
@@ -111,9 +115,23 @@ data class UnreadLine(val token: String, val from: Long, val base: Int)
 fun countsUnread(m: UiMessage, from: Long): Boolean =
     m.status == null && m.msg.id > from && !m.msg.isOwn && m.msg.kind != MessageKind.SYSTEM
 
+/** An account for the account menu and the settings (docs/accounts.md). */
+data class AccountView(
+    val id: String,
+    val name: String,
+    /** Without `https://`, as in the head of the settings. */
+    val server: String,
+    val userId: String,
+    /** `badge().chats`: conversations with something new that counts. */
+    val chats: Int,
+)
+
 data class UiState(
     val session: SessionState = SessionState.LOADING,
+    /** Id of the account shown (docs/accounts.md); everything below belongs to it. */
+    val accountId: String = "",
     val server: String = "",
+    /** Name of the account (display name from the server, else the login name). */
     val user: String = "",
     /** Own Talk user id (for the own avatar); the login name until the server confirmed it. */
     val userId: String = "",
@@ -124,13 +142,20 @@ data class UiState(
     val online: Boolean = true,
     val activeToken: String? = null,
     val unreadLine: UnreadLine? = null,
+    /** All signed-in accounts in the order they signed in (the active one included). */
+    val accounts: List<AccountView> = emptyList(),
 )
 
+/** Server address as shown: without `https://`. */
+fun shownServer(server: String) = server.removePrefix("https://").trimEnd('/')
+
 /**
- * App-wide state holder: owns the Rust [TalkSession], turns core events into an
- * immutable [UiState] and exposes the user actions.
+ * App-wide state holder: one runtime (a started [TalkSession] with its own listener) per
+ * account, turns the active account's core events into an immutable [UiState] and exposes
+ * the user actions. Inactive accounts deliver badge, calls, `authFailed` and failed sends
+ * (docs/accounts.md „Im Hintergrund“).
  */
-class SessionManager(private val context: Context) : CoreListener {
+class SessionManager(private val context: Context) {
     private val store = AccountStore(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(UiState())
@@ -139,41 +164,64 @@ class SessionManager(private val context: Context) : CoreListener {
     /** The call in progress (also a ringing incoming one); `null`: none. */
     val call: StateFlow<CallView?> = _call
 
-    private var session: TalkSession? = null
+    /**
+     * One account: its session and what belongs to it alone. The listener knows the
+     * account; events from the core carry none.
+     */
+    private inner class Runtime(@Volatile var account: AccountEntry) : CoreListener {
+        val id: String get() = account.id
+        lateinit var session: TalkSession
+        /** Push registration of this process run (again on every start and token change). */
+        var pushJob: Job? = null
+        @Volatile var pushRegistered = false
+        /** Failed sends already announced by a notification. */
+        val notifiedFailures: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        /** Notice ids of the last core list; `null` until the first one (the baseline) arrived. */
+        var recordingsKnown: Set<Long>? = null
+        var recordings: List<RecordingNotice> = emptyList()
+        @Volatile var online = true
+        @Volatile var rooms: List<RoomView> = emptyList()
+        @Volatile var badge = 0
+        /** `resolveAccount` for the adopted account's key is in flight. */
+        var resolving = false
+
+        override fun onEvent(event: CoreEvent) = this@SessionManager.onEvent(this, event)
+    }
+
+    /** Running accounts in sign-in order; replaced as a whole on the main thread. */
+    @Volatile private var runtimes: Map<String, Runtime> = emptyMap()
+    /** The account the UI shows. */
+    @Volatile private var active: Runtime? = null
+    /** The account of the call in progress (control and media reports go there). */
+    @Volatile private var callOwner: Runtime? = null
+
+    private val session: TalkSession? get() = active?.session
     private var loginFlow: LoginFlow? = null
     private val avatars = LruCache<String, ImageBitmap>(64)
-    /** Chat image previews by file id, bounded by bytes. */
+    /** Chat image previews by account and file id, bounded by bytes. */
     private val previews = object : LruCache<String, ImageBitmap>(PREVIEW_CACHE_BYTES) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
     }
     /** Width/height of previews seen in this process, so bubbles keep their size on re-layout. */
     private val aspects = ConcurrentHashMap<String, Float>()
-    /** Decoded local images of pending sends, by reference id, until the server echo arrives. */
+    /** Decoded local images of pending sends, by account and reference id, until the server echo arrives. */
     private val localPreviews = ConcurrentHashMap<String, ImageBitmap>()
-    /** Failed sends already announced by a notification. */
-    private val notifiedFailures = ConcurrentHashMap.newKeySet<String>()
 
-    /** Voice messages: recording, drafts, playback. */
+    /** Voice messages: recording, drafts, playback (of the active account). */
     val voice = VoiceManager(context, scope, { session }, { _state.value })
 
     /** Calls: everything around the media (tones, audio, notifications, call screen). */
-    val calls = CallController(context, scope, CallActionsImpl()) {
+    val calls = CallController(context, scope, CallActionsImpl(), { callLabel() }) {
         voice.interrupt()
         voice.player.stop()
     }
 
     private val _recordings = MutableStateFlow<List<RecordingNotice>>(emptyList())
-    /** Finished call recordings (transcripts, summaries, failures) waiting for the user. */
+    /** Finished call recordings (transcripts, summaries, failures) of the active account. */
     val recordings: StateFlow<List<RecordingNotice>> = _recordings
     /** Notices with a share/dismiss request in flight (buttons disabled meanwhile). */
     private val _recordingsBusy = MutableStateFlow<Set<Long>>(emptySet())
     val recordingsBusy: StateFlow<Set<Long>> = _recordingsBusy
-    /** Notice ids of the last core list; `null` until the first one (the baseline) arrived. */
-    private var recordingsKnown: Set<Long>? = null
-
-    /** Push registration of this process run (again on every start and token change). */
-    private var pushJob: Job? = null
-    private var pushRegistered = false
 
     /** WebRTC for the core; one per process, handed to every session. */
     private val media = WebRtcMediaEngine(context, MediaReportsImpl(), calls)
@@ -182,25 +230,33 @@ class SessionManager(private val context: Context) : CoreListener {
     val callVideo: CallVideo get() = media
 
     init {
-        val account = store.load()
-        if (account == null) _state.update { it.copy(session = SessionState.LOGGED_OUT) }
-        else startSession(account)
+        store.migrate()
+        for (entry in store.accounts()) {
+            when (val pw = store.password(entry.id)) {
+                is Secret.Present -> startRuntime(entry, pw.value)
+                // Not readable now (keystore): nothing is deleted, the next start tries again.
+                Secret.Unreadable -> Log.w(TAG, "account ${entry.id} not readable, not started")
+                Secret.Missing -> Log.w(TAG, "account ${entry.id} without password, not started")
+            }
+        }
+        val first = store.activeId()?.let { runtimes[it] } ?: runtimes.values.firstOrNull()
+        if (first == null) _state.update { it.copy(session = SessionState.LOGGED_OUT) } else activate(first)
         // Network back: retry waiting messages right away instead of after the backoff.
         context.getSystemService(ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    session?.networkChanged()
+                    for (rt in runtimes.values) rt.session.networkChanged()
                     // Registration failed offline: try again now.
-                    scope.launch { if (!pushRegistered) registerPush() }
+                    scope.launch { for (rt in runtimes.values) if (!rt.pushRegistered) registerPush(rt) }
                 }
             },
         )
-        // Images prepared but never handed to the outbox (process died in between).
+        // Images prepared but never handed to an outbox (process died in between).
         scope.launch(Dispatchers.IO) {
             val cutoff = System.currentTimeMillis() - 3_600_000
-            File(context.noBackupFilesDir, "talk/staging").listFiles()
-                ?.filter { it.lastModified() < cutoff }
-                ?.forEach { it.delete() }
+            for (dir in listOf(stagingDir(context), File(context.noBackupFilesDir, "talk/staging"))) {
+                dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+            }
         }
         // Leaving the app with unsent messages: hand them to the background worker.
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -208,49 +264,141 @@ class SessionManager(private val context: Context) : CoreListener {
         })
     }
 
-    /** The running session, for the background worker (`null` when signed out). */
-    fun currentSession(): TalkSession? = session
+    /** All running sessions, for the background worker (empty when signed out). */
+    fun allSessions(): List<TalkSession> = runtimes.values.map { it.session }
 
     private fun scheduleOutboxIfNeeded() {
-        val s = session ?: return
-        if (s.outboxUnsent() > 0u) OutboxWorker.schedule(context)
+        if (runtimes.values.any { it.session.outboxUnsent() > 0u }) OutboxWorker.schedule(context)
     }
 
-    // --- session ------------------------------------------------------------------
+    // --- accounts (docs/accounts.md) ---------------------------------------------------
 
-    private fun startSession(account: StoredAccount) {
-        val dataDir = File(context.noBackupFilesDir, "talk").path
-        recordingsKnown = null
-        val s = TalkSession(account.server, account.loginName, account.appPassword, ClientPlatform.ANDROID, this, dataDir)
-        session = s
+    /** Starts the runtime of a stored account (main thread). */
+    private fun startRuntime(entry: AccountEntry, appPassword: String): Runtime {
+        val rt = Runtime(entry)
+        val s = TalkSession(entry.server, entry.loginName, appPassword, ClientPlatform.ANDROID, rt, entry.dir)
+        rt.session = s
         s.setMediaEngine(media)
-        _state.update {
-            // Cached conversation list: shown in the first frame, before any request.
-            it.copy(
-                session = SessionState.READY,
-                server = account.server,
-                user = account.loginName,
-                userId = s.userId(),
-                rooms = s.rooms(),
-            )
-        }
+        rt.rooms = s.rooms()
+        rt.badge = s.badge().chats.toInt()
+        refreshIdentity(rt)
+        runtimes = runtimes + (entry.id to rt)
         // Unsent messages of an earlier run continue in the background worker as well.
         scheduleOutboxIfNeeded()
         scope.launch {
             try {
                 s.start()
-                _state.update { it.copy(userId = s.userId()) }
-                onRecordings(s.recordingNotices())
-                registerPush()
+                if (rt.id !in runtimes) return@launch
+                refreshIdentity(rt)
+                resolveKey(rt)
+                onRecordings(rt, s.recordingNotices())
+                registerPush(rt)
             } catch (e: CoreException.Unauthorized) {
-                signOut(revoke = false)
+                expire(rt)
             } catch (e: CoreException) {
                 // Offline start: the core keeps retrying in the background.
             }
         }
+        return rt
     }
 
-    /** Login Flow v2: opens the browser, resolves once the user approved. */
+    /** User id and name from the session (cache, after `start()` current), stored when changed. */
+    private fun refreshIdentity(rt: Runtime) {
+        val a = rt.account
+        val fresh = a.copy(userId = rt.session.userId().ifEmpty { a.userId }, name = rt.session.displayName().ifEmpty { a.name })
+        if (fresh == a) return
+        rt.account = fresh
+        store.update(fresh)
+        if (rt.id in runtimes) publishAccounts()
+        if (active === rt) _state.update { if (it.accountId == rt.id) it.copy(user = fresh.name, userId = fresh.userId) else it }
+    }
+
+    /** The adopted account has no key yet: ask the server once it runs. */
+    private suspend fun resolveKey(rt: Runtime) {
+        if (rt.account.key.isNotEmpty() || rt.resolving) return
+        val pw = (store.password(rt.id) as? Secret.Present)?.value ?: return
+        val a = rt.account
+        rt.resolving = true
+        val identity = try {
+            runCatching { resolveAccount(a.server, a.loginName, pw, ClientPlatform.ANDROID) }.getOrNull()
+        } finally {
+            rt.resolving = false
+        }
+        if (identity == null || rt.id !in runtimes) return
+        rt.account = rt.account.copy(key = identity.key)
+        store.update(rt.account)
+    }
+
+    /** Shows [rt]: its chat list at once from its runtime, without a loading state. */
+    private fun activate(rt: Runtime) {
+        val old = active
+        if (old != null && old !== rt) {
+            _state.value.activeToken?.let { old.session.closeChat(it) }
+        }
+        voice.switchAccount(rt.id)
+        active = rt
+        store.setActive(rt.id)
+        val before = _state.value
+        _state.value = UiState(
+            session = SessionState.READY,
+            accountId = rt.id,
+            server = rt.account.server,
+            user = rt.account.name,
+            userId = rt.session.userId(),
+            rooms = rt.session.rooms(),
+            roomsRev = before.roomsRev + 1,
+            online = rt.online,
+            accounts = accountViews(),
+        )
+        _recordings.value = rt.recordings
+        _recordingsBusy.value = emptySet()
+    }
+
+    private fun accountViews(): List<AccountView> = runtimes.values.map {
+        AccountView(it.id, it.account.name, shownServer(it.account.server), it.account.userId, it.badge)
+    }
+
+    private fun publishAccounts() {
+        val views = accountViews()
+        _state.update { if (it.session == SessionState.READY) it.copy(accounts = views) else it }
+    }
+
+    /** „{Name} · {Server}“ of [rt] from two accounts on, else `null` (docs/accounts.md). */
+    private fun label(rt: Runtime?): String? =
+        if (rt == null || runtimes.size < 2) null else "${rt.account.name} · ${shownServer(rt.account.server)}"
+
+    /** Account line of the call in progress (ringing display), from two accounts on. */
+    fun callLabel(): String? = label(callOwner)
+
+    /** Account of the call in progress, for its room and avatars. */
+    fun callAccountId(): String? = callOwner?.id
+
+    /** The room of the call in its own account. */
+    fun callRoom(token: String): RoomView? = callOwner?.rooms?.find { it.token == token }
+
+    /** A call rings or runs: switching accounts is locked. */
+    fun inCall(): Boolean = _call.value?.let { it.state != CallState.ENDED } == true
+
+    /**
+     * Switches to account [id]. During a call only with [force] (accepting a call of that
+     * account); otherwise the toast „Während eines Anrufs nicht möglich“. `false`: not switched.
+     */
+    fun switchAccount(id: String, force: Boolean = false): Boolean {
+        val rt = runtimes[id] ?: return false
+        if (rt === active) return true
+        if (!force && inCall()) {
+            toast("Während eines Anrufs nicht möglich")
+            return false
+        }
+        activate(rt)
+        return true
+    }
+
+    /**
+     * Login Flow v2 (first account or „Konto hinzufügen“): opens the browser, resolves once
+     * the user approved and the server told who signed in. Throws when that fails; then
+     * nothing is stored.
+     */
     suspend fun login(server: String) {
         loginFlow?.cancel()
         val flow = LoginFlow.start(server, ClientPlatform.ANDROID)
@@ -260,9 +408,41 @@ class SessionManager(private val context: Context) : CoreListener {
         )
         try {
             val result = flow.wait()
-            val account = StoredAccount(result.server, result.loginName, result.appPassword)
-            store.save(account)
-            startSession(account)
+            val identity = resolveAccount(result.server, result.loginName, result.appPassword, ClientPlatform.ANDROID)
+            val known = store.accounts().find { it.key == identity.key }
+            when {
+                known != null && known.id in runtimes -> {
+                    // Already signed in: back to it, the fresh app password goes back.
+                    scope.launch {
+                        runCatching { revokeAppPassword(result.server, result.loginName, result.appPassword, ClientPlatform.ANDROID) }
+                    }
+                    switchAccount(known.id)
+                    toast("Dieses Konto ist schon angemeldet")
+                }
+                known != null -> {
+                    // Stored, but its password was not readable: it gets the fresh one.
+                    if (!store.replacePassword(known.id, result.appPassword)) throw CoreException.Server("store")
+                    val rt = startRuntime(known.copy(loginName = result.loginName), result.appPassword)
+                    publishAccounts()
+                    activate(rt)
+                }
+                else -> {
+                    val id = store.newId()
+                    val entry = AccountEntry(
+                        id = id,
+                        server = result.server,
+                        loginName = result.loginName,
+                        userId = identity.userId,
+                        name = identity.displayName,
+                        key = identity.key,
+                        dir = store.newDir(id),
+                    )
+                    if (!store.add(entry, result.appPassword)) throw CoreException.Server("store")
+                    val rt = startRuntime(entry, result.appPassword)
+                    publishAccounts()
+                    activate(rt)
+                }
+            }
             // Bring the app back after approving in the browser.
             context.startActivity(
                 Intent(context, MainActivity::class.java)
@@ -278,52 +458,94 @@ class SessionManager(private val context: Context) : CoreListener {
         loginFlow = null
     }
 
-    fun logout() = scope.launch { signOut(revoke = true) }
-
-    private suspend fun signOut(revoke: Boolean) {
-        val s = session ?: return
-        voice.cancel()
-        voice.player.stop()
-        s.hangUpAndWait(2000u)
-        pushJob?.cancel()
-        if (revoke && pushRegistered) runCatching { s.unregisterPush() }
-        pushRegistered = false
-        Push.deleteToken(context)
-        session = null
-        if (revoke) runCatching { s.logout() } else s.shutdown()
-        s.close()
-        store.clear()
-        // Unsent messages belong to this account: never deliver them under another one.
-        withContext(Dispatchers.IO) { File(context.noBackupFilesDir, "talk").deleteRecursively() }
-        OutboxWorker.cancel(context)
-        localPreviews.clear()
-        notifiedFailures.clear()
-        _recordings.value = emptyList()
-        recordingsKnown = null
-        RecordingNotifications.clear(context)
-        avatars.evictAll()
-        previews.evictAll()
-        _state.value = UiState(session = SessionState.LOGGED_OUT)
+    /** „Abmelden“: signs out the active account only. */
+    fun logout() {
+        val rt = active ?: return
+        scope.launch { signOut(rt, revoke = true) }
     }
 
-    // --- push -------------------------------------------------------------------------
+    /** The server rejected the account (`authFailed`): removed without asking, with a notice. */
+    private suspend fun expire(rt: Runtime) {
+        if (rt.id !in runtimes) return
+        val name = rt.account.name
+        val server = shownServer(rt.account.server)
+        signOut(rt, revoke = false)
+        if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            Toast.makeText(context, "$name ($server) wurde abgemeldet. Bitte neu anmelden.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     /**
-     * Registers this device at the server and the push proxy: on every start and with a
-     * new FCM token ([token]). Main thread; a running registration is not repeated.
+     * Signs out one account: push, `logout()` (with [revoke]), then its entry, secret, push
+     * key and data folder. The other accounts keep running, with their notifications and outbox.
      */
-    private fun registerPush(token: String? = null) {
-        val s = session ?: return
+    private suspend fun signOut(rt: Runtime, revoke: Boolean) {
+        if (rt.id !in runtimes) return
+        val s = rt.session
+        // The UI leaves the account first, so nothing calls into it any more.
+        runtimes = runtimes - rt.id
+        if (active === rt) {
+            voice.cancel()
+            voice.player.stop()
+            _state.value.activeToken?.let { s.closeChat(it) }
+            active = null
+            val next = runtimes.values.firstOrNull()
+            if (next != null) {
+                activate(next)
+            } else {
+                voice.switchAccount(null)
+                _state.value = UiState(session = SessionState.LOGGED_OUT)
+                _recordings.value = emptyList()
+            }
+        } else {
+            publishAccounts()
+        }
+        if (callOwner === rt) s.hangUpAndWait(2000u)
+        rt.pushJob?.cancel()
+        if (revoke && rt.pushRegistered) runCatching { s.unregisterPush() }
+        rt.pushRegistered = false
+        // The FCM token goes only with the last account.
+        if (runtimes.isEmpty()) Push.deleteToken(context)
+        if (revoke) runCatching { s.logout() } else s.shutdown()
+        s.close()
+        store.remove(rt.id)
+        // Unsent messages belong to this account: never deliver them under another one.
+        withContext(Dispatchers.IO) { File(rt.account.dir).deleteRecursively() }
+        if (runtimes.values.none { it.session.outboxUnsent() > 0u }) OutboxWorker.cancel(context)
+        val prefix = "${rt.id}|"
+        localPreviews.keys.removeAll { it.startsWith(prefix) }
+        aspects.keys.removeAll { it.startsWith(prefix) }
+        avatars.snapshot().keys.filter { it.startsWith(prefix) }.forEach { avatars.remove(it) }
+        previews.snapshot().keys.filter { it.startsWith(prefix) }.forEach { previews.remove(it) }
+        RecordingNotifications.clear(context, rt.id)
+        // With one account left, notifications lose their account line from now on.
+        publishAccounts()
+    }
+
+    // --- push (docs/accounts.md „Push“) -------------------------------------------------
+
+    /**
+     * Registers this device at the server and the push proxy for [rt], with its own device
+     * key: on every start and with a new FCM token ([token]). Main thread; a running
+     * registration is not repeated.
+     */
+    private fun registerPush(rt: Runtime, token: String? = null) {
+        if (rt.id !in runtimes) return
         if (!Push.enabled(context)) return
-        if (token == null && pushJob?.isActive == true) return
-        pushJob?.cancel()
-        pushJob = scope.launch {
+        if (token == null && rt.pushJob?.isActive == true) return
+        rt.pushJob?.cancel()
+        rt.pushJob = scope.launch {
             try {
                 val fcm = token ?: Push.token()
-                val key = store.pushKey() ?: generatePushKey().also { store.savePushKey(it) }
-                s.registerPush(fcm, Push.proxyUrl, key)
-                if (session === s) pushRegistered = true
-                Log.i(Push.TAG, "registered")
+                val key = when (val k = store.pushKey(rt.id)) {
+                    is Secret.Present -> k.value
+                    Secret.Missing -> generatePushKey().also { store.savePushKey(rt.id, it) }
+                    // Never replace a key that is only unreadable right now.
+                    Secret.Unreadable -> return@launch
+                }
+                rt.session.registerPush(fcm, Push.proxyUrl, key)
+                if (rt.id in runtimes) rt.pushRegistered = true
+                Log.i(Push.TAG, "registered ${rt.id}")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -332,29 +554,32 @@ class SessionManager(private val context: Context) : CoreListener {
         }
     }
 
-    /** FCM issued a new token (called on a background thread). */
+    /** FCM issued a new token (called on a background thread): every account registers it. */
     fun onPushToken(token: String) {
-        scope.launch { registerPush(token) }
+        scope.launch { for (rt in runtimes.values) registerPush(rt, token) }
     }
 
     /**
-     * A push arrived (FCM thread, process possibly just started). Returns once a call
-     * rings here, so the ringing foreground service runs before FCM's window closes.
+     * A push arrived (FCM thread, process possibly just started; all runtimes exist since
+     * the application started). The key that decrypts names the account. Returns once a
+     * call rings here, so the ringing foreground service runs before FCM's window closes.
      */
     suspend fun handlePush(subject: String) {
-        val key = store.pushKey()
-        if (key == null) {
+        val keys = store.accounts().mapNotNull { a ->
+            (store.pushKey(a.id) as? Secret.Present)?.let { PushKey(a.id, it.value) }
+        }
+        if (keys.isEmpty()) {
             Log.w(Push.TAG, "push without device key")
             return
         }
-        val message = try {
-            decryptPush(key, subject)
-        } catch (e: CoreException) {
-            Log.w(Push.TAG, "push not decryptable: ${e.message}")
+        val hit = decryptPushFor(keys, subject)
+        if (hit == null) {
+            Log.w(Push.TAG, "push for no account")
             return
         }
-        val s = withContext(Dispatchers.Main) { session } ?: return
-        when (message) {
+        val rt = runtimes[hit.accountId] ?: return
+        val s = rt.session
+        when (val message = hit.message) {
             is PushMessage.Call -> {
                 Log.i(Push.TAG, "call push")
                 if (!s.handlePush(message, null)) return
@@ -384,20 +609,25 @@ class SessionManager(private val context: Context) : CoreListener {
 
     // --- call recording (docs/calls.md "Aufnahme") ----------------------------------------
 
-    /** Main thread. */
-    private fun onRecordings(items: List<RecordingNotice>, fresh: Set<Long> = emptySet()) {
-        _recordings.value = items
-        _recordingsBusy.update { busy -> busy.filterTo(mutableSetOf()) { id -> items.any { it.id == id } } }
-        RecordingNotifications.update(context, items, fresh)
+    /** Main thread. Banners show the active account's notices, notifications come from all. */
+    private fun onRecordings(rt: Runtime, items: List<RecordingNotice>, fresh: Set<Long> = emptySet()) {
+        if (rt.id !in runtimes) return
+        rt.recordings = items
+        if (active === rt) {
+            _recordings.value = items
+            _recordingsBusy.update { busy -> busy.filterTo(mutableSetOf()) { id -> items.any { it.id == id } } }
+        }
+        RecordingNotifications.update(context, rt.id, label(rt), items, fresh)
     }
 
+    /** Recording in the call: goes to the call's account. */
     fun startRecording(video: Boolean) = recordingAction("Die Aufnahme konnte nicht gestartet werden") { it.startRecording(video) }
 
     fun stopRecording() = recordingAction("Die Aufnahme konnte nicht beendet werden") { it.stopRecording() }
 
     /** Answer to the consent dialog: join the call although it may be recorded. */
     fun consentToRecording() {
-        session?.consentToRecording()
+        (callOwner ?: active)?.session?.consentToRecording()
     }
 
     /** "In Chat teilen": posts the file into its conversation. */
@@ -407,7 +637,7 @@ class SessionManager(private val context: Context) : CoreListener {
     fun dismissRecording(id: Long) = noticeAction(id, "Verwerfen nicht möglich") { it.dismissRecording(id) }
 
     private fun recordingAction(fallback: String, block: suspend (TalkSession) -> Unit) {
-        val s = session ?: return
+        val s = (callOwner ?: active)?.session ?: return
         scope.launch {
             try {
                 block(s)
@@ -418,14 +648,14 @@ class SessionManager(private val context: Context) : CoreListener {
     }
 
     private fun noticeAction(id: Long, fallback: String, block: suspend (TalkSession) -> Unit) {
-        val s = session ?: return
+        val rt = active ?: return
         if (id in _recordingsBusy.value) return
         _recordingsBusy.update { it + id }
         scope.launch {
             try {
-                block(s)
+                block(rt.session)
                 // The core sends RecordingsChanged; drop the notice right away anyway.
-                onRecordings(_recordings.value.filter { it.id != id })
+                onRecordings(rt, rt.recordings.filter { it.id != id })
             } catch (e: CoreException) {
                 _recordingsBusy.update { it - id }
                 Toast.makeText(context, coreMessage(e, fallback), Toast.LENGTH_LONG).show()
@@ -447,12 +677,15 @@ class SessionManager(private val context: Context) : CoreListener {
         else -> "Anruf nicht möglich"
     }
 
+    /** Everything about the call goes to the runtime of the call, not the active one. */
     private inner class CallActionsImpl : CallActions {
         override fun accept(token: String) {
-            val s = session ?: return
+            val rt = callOwner ?: return
             scope.launch {
                 try {
-                    s.acceptCall(token)
+                    rt.session.acceptCall(token)
+                    // Accepted in another account: the app follows the call there.
+                    if (rt.id in runtimes) switchAccount(rt.id, force = true)
                 } catch (e: CoreException) {
                     Toast.makeText(context, callError(e), Toast.LENGTH_LONG).show()
                 }
@@ -460,56 +693,61 @@ class SessionManager(private val context: Context) : CoreListener {
         }
 
         override fun decline(token: String) {
-            session?.declineCall(token)
+            callOwner?.session?.declineCall(token)
         }
 
         override fun hangUp() {
-            session?.hangUp()
+            callOwner?.session?.hangUp()
         }
 
         override fun setMuted(muted: Boolean) {
-            session?.setCallMuted(muted)
+            callOwner?.session?.setCallMuted(muted)
         }
 
         override fun setCamera(on: Boolean) {
-            session?.setCameraEnabled(on)
+            callOwner?.session?.setCameraEnabled(on)
         }
     }
 
     private inner class MediaReportsImpl : MediaReports {
+        private val s: TalkSession? get() = callOwner?.session
+
         override fun localDescription(peerId: String, type: SdpType, sdp: String) {
-            session?.mediaLocalDescription(peerId, type, sdp)
+            s?.mediaLocalDescription(peerId, type, sdp)
         }
 
         override fun localCandidate(peerId: String, candidate: CallIceCandidate) {
-            session?.mediaLocalCandidate(peerId, candidate)
+            s?.mediaLocalCandidate(peerId, candidate)
         }
 
         override fun peerState(peerId: String, state: PeerState) {
-            session?.mediaPeerState(peerId, state)
+            s?.mediaPeerState(peerId, state)
         }
 
         override fun peerError(peerId: String, message: String) {
-            session?.mediaPeerError(peerId, message)
+            s?.mediaPeerError(peerId, message)
         }
 
         override fun audioLevel(peerId: String, level: Float) {
-            session?.mediaAudioLevel(peerId, level)
+            s?.mediaAudioLevel(peerId, level)
         }
 
         override fun cameraFailed(reason: String) {
-            session?.mediaCameraState(false)
+            s?.mediaCameraState(false)
             scope.launch(Dispatchers.Main) { Toast.makeText(context, reason, Toast.LENGTH_LONG).show() }
         }
     }
 
-    /** Avatar of a call participant (group tiles). */
-    suspend fun userAvatar(userId: String, dark: Boolean): ImageBitmap? {
-        val key = "user|$userId|$dark"
+    /** The runtime for avatars: [account] when given and running, else the active one. */
+    private fun runtimeFor(account: String?): Runtime? = account?.let { runtimes[it] } ?: active
+
+    /** Avatar of a user ([account]: of that account, e.g. the call's; else the active one). */
+    suspend fun userAvatar(userId: String, dark: Boolean, account: String? = null): ImageBitmap? {
+        val rt = runtimeFor(account) ?: return null
+        val key = "${rt.id}|user|$userId|$dark"
         avatars.get(key)?.let { return it }
-        val s = session ?: return null
         val bytes = try {
-            s.userAvatar(userId, dark)
+            rt.session.userAvatar(userId, dark)
         } catch (e: CoreException) {
             return null
         }
@@ -518,45 +756,76 @@ class SessionManager(private val context: Context) : CoreListener {
         return bitmap
     }
 
-    fun cachedUserAvatar(userId: String, dark: Boolean): ImageBitmap? = avatars.get("user|$userId|$dark")
+    fun cachedUserAvatar(userId: String, dark: Boolean, account: String? = null): ImageBitmap? =
+        runtimeFor(account)?.let { avatars.get("${it.id}|user|$userId|$dark") }
 
     // --- core events (called on a Rust thread) ---------------------------------------
 
-    override fun onEvent(event: CoreEvent) {
+    /**
+     * Events of one runtime. Only the active one fills the UI; inactive ones deliver badge,
+     * calls, `authFailed`, failed sends and recordings, the rest is dropped.
+     */
+    private fun onEvent(rt: Runtime, event: CoreEvent) {
+        val shown = active === rt
         when (event) {
-            is CoreEvent.RoomsChanged -> scope.launch { onRooms(event.rooms) }
-            is CoreEvent.ParticipantsChanged -> _participants.tryEmit(event.token)
-            is CoreEvent.MessagesAdded -> {
-                adoptLocalPreviews(event.messages)
-                trackUnreadLine(event.token, event.messages)
-                updateChat(event.token) { it.copy(messages = merge(it.messages, event.messages)) }
+            is CoreEvent.RoomsChanged -> scope.launch {
+                if (rt.id !in runtimes) return@launch
+                rt.rooms = event.rooms
+                // Started offline: name and (adopted account) key once the server answers.
+                refreshIdentity(rt)
+                if (rt.account.key.isEmpty()) scope.launch { resolveKey(rt) }
+                val badge = runCatching { rt.session.badge().chats.toInt() }.getOrDefault(rt.badge)
+                if (badge != rt.badge) {
+                    rt.badge = badge
+                    publishAccounts()
+                }
+                if (active === rt) onRooms(rt, event.rooms)
             }
-            is CoreEvent.MessagesUpdated -> updateChat(event.token) { c ->
+            is CoreEvent.ParticipantsChanged -> if (shown) _participants.tryEmit(event.token)
+            is CoreEvent.MessagesAdded -> if (shown) {
+                adoptLocalPreviews(rt.id, event.messages)
+                trackUnreadLine(rt.id, event.token, event.messages)
+                updateChat(rt.id, event.token) { it.copy(messages = merge(it.messages, event.messages)) }
+            }
+            is CoreEvent.MessagesUpdated -> updateChat(rt.id, event.token) { c ->
                 val byId = event.messages.associateBy { it.id }
                 c.copy(messages = c.messages.map { m -> byId[m.msg.id]?.let { UiMessage(it) } ?: m })
             }
-            is CoreEvent.ReadStatus -> updateChat(event.token) {
+            is CoreEvent.ReadStatus -> updateChat(rt.id, event.token) {
                 it.copy(lastCommonRead = maxOf(it.lastCommonRead, event.lastCommonRead))
             }
-            is CoreEvent.Connection -> _state.update { it.copy(online = event.online) }
-            CoreEvent.AuthFailed -> scope.launch { signOut(revoke = false) }
-            is CoreEvent.OutboxChanged -> {
-                updateChat(event.token) { c -> c.copy(messages = withPending(c.messages, event.items)) }
-                announceFailures(event.token, event.items)
+            is CoreEvent.Connection -> {
+                rt.online = event.online
+                _state.update { if (it.accountId == rt.id) it.copy(online = event.online) else it }
             }
-            is CoreEvent.CallChanged -> scope.launch {
-                _call.value = event.call
-                calls.onCall(event.call)
+            CoreEvent.AuthFailed -> scope.launch { expire(rt) }
+            is CoreEvent.OutboxChanged -> {
+                updateChat(rt.id, event.token) { c -> c.copy(messages = withPending(c.messages, event.items)) }
+                announceFailures(rt, event.token, event.items)
+            }
+            is CoreEvent.CallChanged -> {
+                // The owner is known before any media report of this call arrives.
+                if (event.call != null) callOwner = rt
+                scope.launch {
+                    if (event.call == null) {
+                        // Late end of an earlier call: another account already rings or calls.
+                        if (callOwner != null && callOwner !== rt) return@launch
+                        callOwner = null
+                    }
+                    _call.value = event.call
+                    calls.onCall(event.call)
+                }
             }
             is CoreEvent.CallMissed -> CallNotifications.showMissed(
-                context, event.token, if (event.isGroup) event.roomName else event.callerName.ifBlank { event.roomName },
+                context, rt.id, label(rt), event.token,
+                if (event.isGroup) event.roomName else event.callerName.ifBlank { event.roomName },
             )
             is CoreEvent.RecordingsChanged -> scope.launch {
                 val ids = event.items.map { it.id }.toSet()
                 // The first list after start is the baseline: banners yes, notifications no.
-                val fresh = recordingsKnown?.let { ids - it }.orEmpty()
-                recordingsKnown = ids
-                onRecordings(event.items, fresh)
+                val fresh = rt.recordingsKnown?.let { ids - it }.orEmpty()
+                rt.recordingsKnown = ids
+                onRecordings(rt, event.items, fresh)
             }
         }
     }
@@ -578,16 +847,16 @@ class SessionManager(private val context: Context) : CoreListener {
     )
 
     /** Notification for messages that finally failed while the user was not looking. */
-    private fun announceFailures(token: String, items: List<PendingMessage>) {
+    private fun announceFailures(rt: Runtime, token: String, items: List<PendingMessage>) {
         val failedNow = items.filter { it.state == PendingState.FAILED }.map { it.message.referenceId }
-        val fresh = failedNow.filter { notifiedFailures.add(it) }
+        val fresh = failedNow.filter { rt.notifiedFailures.add(it) }
         if (fresh.isEmpty()) return
         val st = _state.value
-        val visible = st.activeToken == token &&
+        val visible = st.accountId == rt.id && st.activeToken == token &&
             ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         if (!visible) {
-            val room = st.rooms.find { it.token == token }?.name ?: "Unterhaltung"
-            Notifications.sendFailed(context, token, room)
+            val room = rt.rooms.find { it.token == token }?.name ?: "Unterhaltung"
+            Notifications.sendFailed(context, rt.id, label(rt), token, room)
         }
     }
 
@@ -597,9 +866,9 @@ class SessionManager(private val context: Context) : CoreListener {
      * app is not in front; otherwise they are simply read, and the hidden snapshot is dropped
      * so they do not raise a line later.
      */
-    private fun trackUnreadLine(token: String, incoming: List<MessageView>) {
+    private fun trackUnreadLine(account: String, token: String, incoming: List<MessageView>) {
         val st = _state.value
-        if (st.activeToken != token) return
+        if (st.accountId != account || st.activeToken != token) return
         val chat = st.chats[token] ?: return
         if (!chat.synced) return
         val newest = chat.messages.lastOrNull { it.status == null }?.msg?.id ?: return
@@ -623,8 +892,10 @@ class SessionManager(private val context: Context) : CoreListener {
         if (_state.value.unreadLine != null) _state.update { it.copy(unreadLine = null) }
     }
 
-    private fun updateChat(token: String, f: (ChatState) -> ChatState) {
+    /** Changes a loaded chat of [account]; nothing when another account is shown meanwhile. */
+    private fun updateChat(account: String, token: String, f: (ChatState) -> ChatState) {
         _state.update { s ->
+            if (s.accountId != account) return@update s
             val chat = s.chats[token] ?: return@update s
             s.copy(chats = s.chats + (token to f(chat)))
         }
@@ -645,9 +916,10 @@ class SessionManager(private val context: Context) : CoreListener {
      * New room list. When the open chat disappeared (removed, group deleted, left) it closes;
      * „Du bist nicht mehr in dieser Gruppe“ only when we did not leave or delete it ourselves.
      */
-    private fun onRooms(rooms: List<RoomView>) {
+    private fun onRooms(rt: Runtime, rooms: List<RoomView>) {
         val before = _state.value
-        _state.update { it.copy(rooms = rooms, roomsRev = it.roomsRev + 1) }
+        if (before.accountId != rt.id) return
+        _state.update { if (it.accountId == rt.id) it.copy(rooms = rooms, roomsRev = it.roomsRev + 1) else it }
         val active = before.activeToken ?: return
         val gone = before.rooms.find { it.token == active } ?: return
         if (rooms.any { it.token == active }) return
@@ -767,7 +1039,8 @@ class SessionManager(private val context: Context) : CoreListener {
     // --- chat actions ----------------------------------------------------------------
 
     fun openRoom(token: String) {
-        val s = session ?: return
+        val rt = active ?: return
+        val s = rt.session
         val previous = _state.value.activeToken
         if (previous == token) return
         previous?.let { s.closeChat(it) }
@@ -798,7 +1071,7 @@ class SessionManager(private val context: Context) : CoreListener {
             try {
                 val page = s.openChat(token)
                 val room = _state.value.rooms.find { it.token == token }
-                updateChat(token) {
+                updateChat(rt.id, token) {
                     // Outdated cache, or a hole between what was shown and the newest page (more
                     // than a page arrived meanwhile): drop what was shown (unsent messages stay).
                     val shownNewest = it.messages.lastOrNull { m -> m.status == null }?.msg?.id
@@ -814,10 +1087,11 @@ class SessionManager(private val context: Context) : CoreListener {
                     )
                 }
                 // With a line the chat opens there; the screen marks read once at the bottom.
+                if (_state.value.accountId != rt.id) return@launch
                 val loaded = _state.value.chats[token]?.messages.orEmpty()
                 if (line == null || loaded.none { countsUnread(it, line.from) }) markVisibleRead(token)
             } catch (e: CoreException) {
-                updateChat(token) { it.copy(loading = false, synced = true) }
+                updateChat(rt.id, token) { it.copy(loading = false, synced = true) }
             }
         }
     }
@@ -829,15 +1103,16 @@ class SessionManager(private val context: Context) : CoreListener {
     }
 
     fun loadOlder(token: String) {
-        val s = session ?: return
+        val rt = active ?: return
+        val s = rt.session
         val chat = _state.value.chats[token] ?: return
         val before = chat.oldestId ?: return
         if (!chat.hasMore || chat.loadingOlder) return
-        updateChat(token) { it.copy(loadingOlder = true) }
+        updateChat(rt.id, token) { it.copy(loadingOlder = true) }
         scope.launch {
             try {
                 val page = s.loadOlder(token, before)
-                updateChat(token) {
+                updateChat(rt.id, token) {
                     it.copy(
                         messages = merge(it.messages, page.messages),
                         hasMore = page.hasMore,
@@ -846,7 +1121,7 @@ class SessionManager(private val context: Context) : CoreListener {
                     )
                 }
             } catch (e: CoreException) {
-                updateChat(token) { it.copy(loadingOlder = false) }
+                updateChat(rt.id, token) { it.copy(loadingOlder = false) }
             }
         }
     }
@@ -888,12 +1163,14 @@ class SessionManager(private val context: Context) : CoreListener {
      * the server message replaces it without flicker.
      */
     fun sendImage(token: String, image: PreparedImage, caption: String, replyTo: MessageView?) {
-        val s = session ?: return
+        val rt = active ?: return
+        val s = rt.session
         clearUnreadLine()
         val ref = newReferenceId()
+        val localKey = "${rt.id}|$ref"
         scope.launch {
             // Decode first so the pending bubble shows the photo from its first frame.
-            withContext(Dispatchers.IO) { decodePreview(image.file) }?.let { localPreviews[ref] = it }
+            withContext(Dispatchers.IO) { decodePreview(image.file) }?.let { localPreviews[localKey] = it }
             val queued = withContext(Dispatchers.IO) {
                 runCatching {
                     s.enqueueFile(
@@ -903,7 +1180,7 @@ class SessionManager(private val context: Context) : CoreListener {
                 }
             }
             if (queued.isFailure) {
-                localPreviews.remove(ref)
+                localPreviews.remove(localKey)
                 image.file.delete()
                 Toast.makeText(context, "Bild konnte nicht gespeichert werden", Toast.LENGTH_SHORT).show()
                 return@launch
@@ -933,30 +1210,29 @@ class SessionManager(private val context: Context) : CoreListener {
 
     /** Sends a failed message again (or a waiting one right now). */
     fun retry(token: String, msg: MessageView) {
-        notifiedFailures.remove(msg.referenceId)
-        session?.retrySend(msg.referenceId)
+        val rt = active ?: return
+        rt.notifiedFailures.remove(msg.referenceId)
+        rt.session.retrySend(msg.referenceId)
         OutboxWorker.schedule(context)
     }
 
     /** Drops a pending or failed message. */
     fun discard(msg: MessageView) {
-        localPreviews.remove(msg.referenceId)
-        session?.discard(msg.referenceId)
+        val rt = active ?: return
+        localPreviews.remove("${rt.id}|${msg.referenceId}")
+        rt.session.discard(msg.referenceId)
     }
 
     /** Hands the decoded local image to the server message so its bubble does not reload. */
-    private fun adoptLocalPreviews(messages: List<MessageView>) {
+    private fun adoptLocalPreviews(account: String, messages: List<MessageView>) {
         if (localPreviews.isEmpty()) return
         for (m in messages) {
-            val bitmap = localPreviews.remove(m.referenceId) ?: continue
+            val bitmap = localPreviews.remove("$account|${m.referenceId}") ?: continue
             val id = m.attachment?.id ?: continue
-            previews.put(id, bitmap)
-            aspects[id] = bitmap.width.toFloat() / bitmap.height
+            previews.put("$account|$id", bitmap)
+            aspects["$account|$id"] = bitmap.width.toFloat() / bitmap.height
         }
     }
-
-    /** For the background worker: waits until nothing is being sent actively. */
-    suspend fun waitOutboxIdle(): OutboxIdle? = session?.waitOutboxIdle()
 
     /** Marks the newest message read while the chat is visible and the app is in front. */
     fun markVisibleRead(token: String) {
@@ -985,16 +1261,19 @@ class SessionManager(private val context: Context) : CoreListener {
     }
 
     /** Already decoded avatar, for drawing the first frame without the initials flashing. */
-    fun cachedAvatar(token: String, version: String, dark: Boolean): ImageBitmap? =
-        avatars.get(avatarKey(token, version, dark))
+    fun cachedAvatar(token: String, version: String, dark: Boolean, account: String? = null): ImageBitmap? =
+        runtimeFor(account)?.let { avatars.get(avatarKey(it.id, token, version, dark)) }
 
-    /** Server-rendered conversation avatar; `null` for SVG avatars (initials are drawn instead). */
-    suspend fun avatar(token: String, version: String, dark: Boolean): ImageBitmap? {
-        val key = avatarKey(token, version, dark)
+    /**
+     * Server-rendered conversation avatar; `null` for SVG avatars (initials are drawn instead).
+     * [account]: of that account (e.g. the call's), else the active one.
+     */
+    suspend fun avatar(token: String, version: String, dark: Boolean, account: String? = null): ImageBitmap? {
+        val rt = runtimeFor(account) ?: return null
+        val key = avatarKey(rt.id, token, version, dark)
         avatars.get(key)?.let { return it }
-        val s = session ?: return null
         val bytes = try {
-            s.avatar(token, dark)
+            rt.session.avatar(token, dark)
         } catch (e: CoreException) {
             return null
         }
@@ -1003,38 +1282,40 @@ class SessionManager(private val context: Context) : CoreListener {
         return bitmap
     }
 
-    private fun avatarKey(token: String, version: String, dark: Boolean) = "$token|$version|$dark"
+    private fun avatarKey(account: String, token: String, version: String, dark: Boolean) = "$account|$token|$version|$dark"
 
     /** Already decoded chat image preview (synchronous, for the first frame). */
-    fun cachedPreview(fileId: String): ImageBitmap? = previews.get(fileId)
+    fun cachedPreview(fileId: String): ImageBitmap? = active?.let { previews.get("${it.id}|$fileId") }
 
     /** Known aspect ratio (width / height) of a file's preview, if it was loaded before. */
-    fun previewAspect(fileId: String): Float? = aspects[fileId]
+    fun previewAspect(fileId: String): Float? = active?.let { aspects["${it.id}|$fileId"] }
 
     /** Local image of a pending send, until the server message replaces it. */
-    fun localPreview(referenceId: String): ImageBitmap? = localPreviews[referenceId]
+    fun localPreview(referenceId: String): ImageBitmap? = active?.let { localPreviews["${it.id}|$referenceId"] }
 
     /** Decodes the outbox copy of a pending image (e.g. after an app restart). */
     suspend fun loadLocalPreview(referenceId: String, path: String?): ImageBitmap? {
-        localPreviews[referenceId]?.let { return it }
+        val key = "${active?.id ?: return null}|$referenceId"
+        localPreviews[key]?.let { return it }
         if (path == null) return null
         val bitmap = withContext(Dispatchers.IO) { decodePreview(File(path)) } ?: return null
-        localPreviews[referenceId] = bitmap
+        localPreviews[key] = bitmap
         return bitmap
     }
 
     /** Chat-sized preview of a shared image, from the server's preview endpoint. */
     suspend fun preview(fileId: String): ImageBitmap? {
-        previews.get(fileId)?.let { return it }
-        val s = session ?: return null
+        val rt = active ?: return null
+        val key = "${rt.id}|$fileId"
+        previews.get(key)?.let { return it }
         val bytes = try {
-            s.filePreview(fileId, PREVIEW_PX.toUInt(), PREVIEW_PX.toUInt())
+            rt.session.filePreview(fileId, PREVIEW_PX.toUInt(), PREVIEW_PX.toUInt())
         } catch (e: CoreException) {
             return null
         }
         val bitmap = withContext(Dispatchers.Default) { decodeBytes(bytes, previewEdge()) } ?: return null
-        previews.put(fileId, bitmap)
-        aspects[fileId] = bitmap.width.toFloat() / bitmap.height
+        previews.put(key, bitmap)
+        aspects[key] = bitmap.width.toFloat() / bitmap.height
         return bitmap
     }
 
@@ -1084,5 +1365,6 @@ class SessionManager(private val context: Context) : CoreListener {
         const val PREVIEW_CACHE_BYTES = 48 * 1024 * 1024
         /** How long a call push waits for the ringing to start. */
         const val RING_WAIT_MS = 3_000L
+        const val TAG = "TalkAccounts"
     }
 }

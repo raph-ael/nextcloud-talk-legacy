@@ -1,5 +1,6 @@
 package org.wolkenfunk.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,8 +42,12 @@ import kotlinx.coroutines.launch
 import org.wolkenfunk.app.SessionManager
 import uniffi.talk_ffi.CoreException
 
+/**
+ * Sign-in with Login Flow v2. [adding]: „Konto hinzufügen“ (docs/accounts.md) with a title of
+ * its own and „Abbrechen“ back; the other accounts keep running meanwhile.
+ */
 @Composable
-fun LoginScreen(sessions: SessionManager) {
+fun LoginScreen(sessions: SessionManager, adding: Boolean = false, onCancel: () -> Unit = {}, onDone: () -> Unit = {}) {
     var server by rememberSaveable { mutableStateOf("") }
     var waiting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -56,6 +61,7 @@ fun LoginScreen(sessions: SessionManager) {
         scope.launch {
             try {
                 sessions.login(server.trim())
+                onDone()
             } catch (e: CoreException.Cancelled) {
                 // closed by the user
             } catch (e: CoreException.Network) {
@@ -68,14 +74,25 @@ fun LoginScreen(sessions: SessionManager) {
         }
     }
 
-    Box(Modifier.fillMaxSize().systemBarsPadding().imePadding(), contentAlignment = Alignment.Center) {
+    BackHandler(enabled = adding) {
+        sessions.cancelLogin()
+        onCancel()
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .systemBarsPadding()
+            .imePadding(),
+        contentAlignment = Alignment.Center,
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Box(Modifier.size(72.dp).clip(RoundedCornerShape(20.dp)).background(colors.accent))
-            Text("Willkommen", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text(if (adding) "Konto hinzufügen" else "Willkommen", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             if (waiting) {
                 Text(
                     "Bestätige die Anmeldung im Browser und kehre dann hierher zurück.",
@@ -104,6 +121,7 @@ fun LoginScreen(sessions: SessionManager) {
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                 ) { Text("Anmelden", fontWeight = FontWeight.SemiBold) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) }
+                if (adding) TextButton(onClick = onCancel) { Text("Abbrechen") }
             }
         }
     }

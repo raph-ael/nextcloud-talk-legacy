@@ -13,8 +13,7 @@ import android.content.Intent
 class StartupReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         // Touching the application is enough; SessionManager does the rest.
-        (context.applicationContext as TalkApplication).sessions.currentSession()?.let {
-            if (it.outboxUnsent() > 0u) OutboxWorker.schedule(context)
-        }
+        val sessions = (context.applicationContext as TalkApplication).sessions.allSessions()
+        if (sessions.any { it.outboxUnsent() > 0u }) OutboxWorker.schedule(context)
     }
 }

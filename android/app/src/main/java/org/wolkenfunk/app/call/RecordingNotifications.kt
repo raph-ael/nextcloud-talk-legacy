@@ -27,6 +27,7 @@ object RecordingNotifications {
     private const val CHANNEL = "recordings"
     /** One id for all; the notice id goes into the tag. */
     private const val ID = 3000
+    /** Tag `recording:<account>:<notice id>`: notice ids of different servers overlap. */
     private const val TAG_PREFIX = "recording:"
 
     fun createChannel(context: Context) {
@@ -60,45 +61,42 @@ object RecordingNotifications {
      * notifications of notices that are gone (handled here or elsewhere).
      */
     @SuppressLint("MissingPermission") // checked by allowed()
-    fun update(context: Context, items: List<RecordingNotice>, fresh: Set<Long>) {
+    fun update(context: Context, account: String, label: String?, items: List<RecordingNotice>, fresh: Set<Long>) {
         val current = items.map { it.id }.toSet()
-        cancelWhere(context) { it !in current }
+        // Only this account's notifications: the others' lists are not known here.
+        cancelWhere(context, account) { it !in current }
         if (!allowed(context)) return
         val nm = NotificationManagerCompat.from(context)
         for (n in items) {
-            if (n.id in fresh) runCatching { nm.notify(TAG_PREFIX + n.id, ID, build(context, n)) }
+            if (n.id in fresh) runCatching { nm.notify(tag(account, n.id), ID, build(context, account, label, n)) }
         }
     }
 
-    fun clear(context: Context) = cancelWhere(context) { true }
+    fun clear(context: Context, account: String) = cancelWhere(context, account) { true }
 
-    private fun cancelWhere(context: Context, predicate: (Long) -> Boolean) {
+    private fun tag(account: String, id: Long) = "$TAG_PREFIX$account:$id"
+
+    private fun cancelWhere(context: Context, account: String, predicate: (Long) -> Boolean) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        val prefix = "$TAG_PREFIX$account:"
         for (sbn in runCatching { nm.activeNotifications }.getOrDefault(emptyArray())) {
-            val id = sbn.tag?.takeIf { sbn.id == ID && it.startsWith(TAG_PREFIX) }?.removePrefix(TAG_PREFIX)?.toLongOrNull() ?: continue
+            val id = sbn.tag?.takeIf { sbn.id == ID && it.startsWith(prefix) }?.removePrefix(prefix)?.toLongOrNull() ?: continue
             if (predicate(id)) nm.cancel(sbn.tag, ID)
         }
     }
 
-    private fun build(context: Context, n: RecordingNotice) =
+    private fun build(context: Context, account: String, label: String?, n: RecordingNotice) =
         NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_wolkenfunk)
             .setColor(Notifications.ACCENT)
             .setContentTitle(title(n))
             .setContentText(n.roomName)
+            .setSubText(label)
             .setWhen(n.timestamp * 1000)
             .setShowWhen(true)
             .setSilent(true)
             .setAutoCancel(true)
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    context, n.id.hashCode(),
-                    Intent(context, MainActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        .putExtra(Notifications.EXTRA_TOKEN, n.token),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                ),
-            )
+            .setContentIntent(Notifications.openChat(context, account, n.token, tag(account, n.id).hashCode()))
             .build()
 
     private fun allowed(context: Context) = Build.VERSION.SDK_INT < 33 ||

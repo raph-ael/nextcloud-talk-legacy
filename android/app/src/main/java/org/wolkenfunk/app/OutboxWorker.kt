@@ -13,6 +13,9 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.BackoffPolicy
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
 
@@ -28,19 +31,25 @@ import java.util.concurrent.TimeUnit
 class OutboxWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val sessions = (applicationContext as TalkApplication).sessions
-        val session = sessions.currentSession() ?: return Result.success() // signed out
-        if (session.outboxUnsent() == 0u) return Result.success()
-        if (session.outboxUploadBytes() >= FOREGROUND_BYTES.toULong()) {
+        // The outboxes of all accounts, with one shared time limit (docs/accounts.md).
+        val sessions = (applicationContext as TalkApplication).sessions.allSessions()
+        val busy = sessions.filter { runCatching { it.outboxUnsent() > 0u }.getOrDefault(false) }
+        if (busy.isEmpty()) return Result.success() // nothing left, or signed out
+        val bytes = busy.sumOf { runCatching { it.outboxUploadBytes().toLong() }.getOrDefault(0L) }
+        if (bytes >= FOREGROUND_BYTES) {
             // May be refused when started from the background (Android 12+): sending
             // continues anyway, just without the foreground guarantee.
             runCatching { setForeground(foregroundInfo()) }
         }
         // Workers get about ten minutes; stop a bit earlier and continue in a new run.
-        val idle = withTimeoutOrNull(TimeUnit.MINUTES.toMillis(9)) { sessions.waitOutboxIdle() }
-            ?: return Result.retry()
+        val idle = withTimeoutOrNull(TimeUnit.MINUTES.toMillis(9)) {
+            coroutineScope {
+                // A session signed out meanwhile counts as done.
+                busy.map { s -> async { runCatching { s.waitOutboxIdle() }.getOrNull() } }.awaitAll()
+            }
+        } ?: return Result.retry()
         // Only waiting items left: WorkManager runs us again once a network is there.
-        return if (idle.waiting > 0u) Result.retry() else Result.success()
+        return if (idle.any { (it?.waiting ?: 0u) > 0u }) Result.retry() else Result.success()
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo = foregroundInfo()

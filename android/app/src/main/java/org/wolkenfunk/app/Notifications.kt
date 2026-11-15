@@ -18,6 +18,8 @@ object Notifications {
     private const val CHANNEL_FAILED = "send_failed"
     const val ID_SENDING = 1001
     const val EXTRA_TOKEN = "org.wolkenfunk.app.TOKEN"
+    /** Account of the conversation in [EXTRA_TOKEN] (docs/accounts.md): a tap switches there. */
+    const val EXTRA_ACCOUNT = "org.wolkenfunk.app.ACCOUNT"
 
     /** Accent color of every notification (Wolkenfunk blue). */
     const val ACCENT = 0xFF2F7BF5.toInt()
@@ -46,10 +48,13 @@ object Notifications {
             .setProgress(0, 0, true)
             .setOngoing(true)
             .setSilent(true)
-            .setContentIntent(openApp(context, null))
+            .setContentIntent(openChat(context, null, null))
             .build()
 
-    fun sendFailed(context: Context, token: String, roomName: String) {
+    /**
+     * [label]: „{Name} · {Server}“ from two accounts on, as sub text (docs/accounts.md).
+     */
+    fun sendFailed(context: Context, account: String, label: String?, token: String, roomName: String) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
             android.os.Build.VERSION.SDK_INT >= 33
         ) {
@@ -60,19 +65,25 @@ object Notifications {
             .setColor(ACCENT)
             .setContentTitle("Nachricht nicht gesendet")
             .setContentText("An $roomName – tippen zum Öffnen")
+            .setSubText(label)
             .setAutoCancel(true)
-            .setContentIntent(openApp(context, token))
+            .setContentIntent(openChat(context, account, token))
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(token.hashCode(), n) }
+        runCatching { NotificationManagerCompat.from(context).notify(chatKey(account, token).hashCode(), n) }
     }
 
-    private fun openApp(context: Context, token: String?): PendingIntent {
+    /** Tokens of different servers overlap: ids and request codes carry the account. */
+    fun chatKey(account: String, token: String) = "$account|$token"
+
+    /** Opens the app; with an account and a token, switches there and opens the chat. */
+    fun openChat(context: Context, account: String?, token: String?, requestCode: Int? = null): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         if (token != null) intent.putExtra(EXTRA_TOKEN, token)
+        if (account != null) intent.putExtra(EXTRA_ACCOUNT, account)
         return PendingIntent.getActivity(
             context,
-            token?.hashCode() ?: 0,
+            requestCode ?: if (account != null && token != null) chatKey(account, token).hashCode() else 0,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

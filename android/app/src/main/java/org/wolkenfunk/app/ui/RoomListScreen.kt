@@ -93,8 +93,11 @@ fun RoomListScreen(
     onCompose: () -> Unit = {},
     onSettings: () -> Unit = {},
     onGroupSettings: (String) -> Unit = {},
+    onAddAccount: () -> Unit = {},
 ) {
     var searching by rememberSaveable { mutableStateOf(false) }
+    // Account menu at the own avatar, from two accounts on (docs/accounts.md).
+    var accountMenu by rememberSaveable { mutableStateOf(false) }
     // Chat menu after a long press (docs/settings.md); follows the live room.
     var menuFor by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -155,16 +158,7 @@ fun RoomListScreen(
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Suche schließen")
                         }
                     } else {
-                        Box(
-                            Modifier
-                                .padding(start = 12.dp, end = 8.dp)
-                                .clip(CircleShape)
-                                .clickable(onClick = onSettings)
-                                .clearAndSetSemantics {
-                                    contentDescription = "Einstellungen"
-                                    role = Role.Button
-                                },
-                        ) { UserAvatar(sessions, state.userId.ifEmpty { state.user }, state.userId, 32.dp) }
+                        OwnAvatarButton(sessions, state, onSettings = onSettings, onAccounts = { accountMenu = true })
                     }
                 },
                 actions = {
@@ -232,6 +226,10 @@ fun RoomListScreen(
             onDismiss = { menuFor = null },
             onGroupSettings = { menuFor = null; onGroupSettings(r.token) },
         )
+    }
+    if (accountMenu && state.accounts.size < 2) accountMenu = false
+    if (accountMenu) {
+        AccountMenu(sessions, state, onDismiss = { accountMenu = false }, onAdd = onAddAccount, onSettings = onSettings)
     }
 }
 

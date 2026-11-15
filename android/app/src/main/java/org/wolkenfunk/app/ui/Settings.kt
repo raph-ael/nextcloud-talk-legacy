@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
@@ -78,6 +79,7 @@ import org.wolkenfunk.app.SessionManager
 import org.wolkenfunk.app.TalkApplication
 import org.wolkenfunk.app.ThemeMode
 import org.wolkenfunk.app.UiState
+import org.wolkenfunk.app.shownServer
 
 private enum class SettingsPage { APPEARANCE, NOTIFICATIONS, ABOUT }
 
@@ -86,7 +88,7 @@ private enum class SettingsPage { APPEARANCE, NOTIFICATIONS, ABOUT }
  * slide in within it, the back key goes up one level.
  */
 @Composable
-fun SettingsScreen(sessions: SessionManager, state: UiState, onBack: () -> Unit) {
+fun SettingsScreen(sessions: SessionManager, state: UiState, onBack: () -> Unit, onAddAccount: () -> Unit) {
     var page by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
     BackHandler { if (page != null) page = null else onBack() }
     AnimatedContent(
@@ -101,7 +103,7 @@ fun SettingsScreen(sessions: SessionManager, state: UiState, onBack: () -> Unit)
         label = "settings",
     ) { p ->
         when (p) {
-            null -> SettingsHome(sessions, state, onBack, onOpen = { page = it })
+            null -> SettingsHome(sessions, state, onBack, onAddAccount, onOpen = { page = it })
             SettingsPage.APPEARANCE -> AppearancePage { page = null }
             SettingsPage.NOTIFICATIONS -> NotificationsPage { page = null }
             SettingsPage.ABOUT -> AboutPage { page = null }
@@ -128,8 +130,16 @@ private fun SettingsScaffold(title: String, onBack: () -> Unit, content: @Compos
 }
 
 @Composable
-private fun SettingsHome(sessions: SessionManager, state: UiState, onBack: () -> Unit, onOpen: (SettingsPage) -> Unit) {
+private fun SettingsHome(
+    sessions: SessionManager,
+    state: UiState,
+    onBack: () -> Unit,
+    onAddAccount: () -> Unit,
+    onOpen: (SettingsPage) -> Unit,
+) {
     val colors = LocalTalkColors.current
+    var confirmLogout by rememberSaveable { mutableStateOf(false) }
+    val call by sessions.call.collectAsStateWithLifecycle()
     SettingsScaffold("Einstellungen", onBack) {
         // Head: only shown, nothing to edit here.
         Column(
@@ -140,7 +150,7 @@ private fun SettingsHome(sessions: SessionManager, state: UiState, onBack: () ->
             Spacer(Modifier.height(12.dp))
             Text(state.user, fontSize = 20.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
             Text(
-                state.server.removePrefix("https://"),
+                shownServer(state.server),
                 color = colors.muted,
                 style = ListType.body,
                 textAlign = TextAlign.Center,
@@ -148,11 +158,33 @@ private fun SettingsHome(sessions: SessionManager, state: UiState, onBack: () ->
             )
         }
         SectionDivider()
+        // „Konten“ (docs/accounts.md): the other accounts, tapping switches, the settings stay.
+        SectionTitle("Konten", Modifier.semantics { heading() })
+        val locked = call != null && sessions.inCall()
+        for (a in state.accounts) {
+            if (a.id == state.accountId) continue
+            AccountRow(sessions, a, active = false, locked = locked) { pickAccount(sessions, state, a.id) {} }
+        }
+        if (state.accounts.size < MAX_ACCOUNTS) {
+            SettingRow(Icons.Filled.Add, "Konto hinzufügen", onClick = onAddAccount)
+        }
+        SectionDivider()
         NavRow(TalkIcons.Palette, "Darstellung") { onOpen(SettingsPage.APPEARANCE) }
         NavRow(Icons.Filled.Notifications, "Benachrichtigungen") { onOpen(SettingsPage.NOTIFICATIONS) }
         NavRow(Icons.Filled.Info, "Über Wolkenfunk") { onOpen(SettingsPage.ABOUT) }
         SectionDivider()
-        SettingRow(Icons.AutoMirrored.Filled.ExitToApp, "Abmelden", tint = colors.danger, onClick = { sessions.logout() })
+        SettingRow(Icons.AutoMirrored.Filled.ExitToApp, "Abmelden", tint = colors.danger, onClick = { confirmLogout = true })
+    }
+    if (confirmLogout) {
+        LogoutDialog(
+            state.user,
+            shownServer(state.server),
+            onConfirm = {
+                confirmLogout = false
+                sessions.logout()
+            },
+            onDismiss = { confirmLogout = false },
+        )
     }
 }
 

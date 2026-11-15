@@ -67,8 +67,9 @@ import java.io.ByteArrayOutputStream
 @Composable
 fun UserAvatar(sessions: SessionManager, name: String, userId: String, size: Dp) {
     val dark = isDarkTheme()
-    val image by produceState(if (userId.isEmpty()) null else sessions.cachedUserAvatar(userId, dark), userId, dark) {
-        if (value == null && userId.isNotEmpty()) value = sessions.userAvatar(userId, dark)
+    val account = LocalAvatarAccount.current
+    val image by produceState(if (userId.isEmpty()) null else sessions.cachedUserAvatar(userId, dark, account), userId, dark, account) {
+        if (value == null && userId.isNotEmpty()) value = sessions.userAvatar(userId, dark, account)
     }
     val img = image
     if (img != null) {

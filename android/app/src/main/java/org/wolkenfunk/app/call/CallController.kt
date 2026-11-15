@@ -48,6 +48,8 @@ class CallController(
     private val context: Context,
     private val scope: CoroutineScope,
     private val actions: CallActions,
+    /** „{Name} · {Server}“ of the call's account from two accounts on (docs/accounts.md). */
+    val accountLabel: () -> String?,
     /** Stops voice message playback and recording (rule 12). */
     private val stopVoice: () -> Unit,
 ) : CallAudioHost {
@@ -157,7 +159,7 @@ class CallController(
     }
 
     private fun ringInBackground(call: CallView) {
-        CallNotifications.showIncoming(context, call)
+        CallNotifications.showIncoming(context, call, accountLabel())
         if (!audioActive && !ringService) ringService = CallService.startRinging(context)
     }
 

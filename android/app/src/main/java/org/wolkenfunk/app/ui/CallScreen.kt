@@ -82,6 +82,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -168,11 +169,14 @@ fun CallScreen(
     onMinimize: () -> Unit,
 ) {
     val feeds by sessions.callVideo.remote.collectAsState()
+    // The call belongs to its own account, not necessarily the shown one (docs/accounts.md).
     val state by sessions.state.collectAsStateWithLifecycle()
-    val room = state.rooms.find { it.token == call.token }
+    val account = sessions.callAccountId()
+    // Read again on every list change of the shown account, and with every call update.
+    val room = state.roomsRev.let { sessions.callRoom(call.token) }
     val dark = isDarkTheme()
-    val avatar by produceState(room?.let { sessions.cachedAvatar(it.token, it.avatarVersion, dark) }, call.token, room?.avatarVersion) {
-        if (room != null) value = sessions.avatar(room.token, room.avatarVersion, dark)
+    val avatar by produceState(room?.let { sessions.cachedAvatar(it.token, it.avatarVersion, dark, account) }, call.token, room?.avatarVersion, account) {
+        if (room != null) value = sessions.avatar(room.token, room.avatarVersion, dark, account)
     }
     val title = if (call.isGroup) call.roomName else call.callerName.ifBlank { call.roomName }
 
@@ -184,6 +188,7 @@ fun CallScreen(
     }
     val stage = stageFeed != null && feedActive(stageFeed)
 
+    CompositionLocalProvider(LocalAvatarAccount provides account) {
     Box(Modifier.fillMaxSize().background(Color(0xFF1B1B1D))) {
         when {
             presenting(call) -> Unit // the presentation draws its own black stage
@@ -195,6 +200,7 @@ fun CallScreen(
         } else {
             InCall(call, title, room?.token, room?.avatarVersion.orEmpty(), routing, sessions, feeds, stage, onHangUp, onMute, onCamera, onSpeaker, onOutput, onMinimize)
         }
+    }
     }
 }
 
@@ -338,9 +344,14 @@ private fun Incoming(
 ) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Spacer(Modifier.height(64.dp))
+        // From two accounts on, the ringing names the account (docs/accounts.md).
+        val label = remember(call.id) { sessions.callLabel() }
         Header(
             title,
-            { StatusText(if (call.isGroup) "Gruppenanruf" else "Talk-Anruf") },
+            {
+                StatusText(if (call.isGroup) "Gruppenanruf" else "Talk-Anruf")
+                if (label != null) StatusText(label, Modifier.padding(top = 4.dp))
+            },
             token, version, sessions, showAvatar = true,
         )
         Spacer(Modifier.weight(1f))
@@ -894,8 +905,9 @@ private fun endText(reason: EndReason?): String = when (reason) {
 @Composable
 private fun Tile(p: CallParticipant, sessions: SessionManager, feed: VideoFeed?, modifier: Modifier = Modifier.aspectRatio(1f), compact: Boolean = false) {
     val dark = isDarkTheme()
-    val image by produceState(sessions.cachedUserAvatar(p.userId, dark), p.userId) {
-        if (value == null && p.userId.isNotEmpty()) value = sessions.userAvatar(p.userId, dark)
+    val account = LocalAvatarAccount.current
+    val image by produceState(sessions.cachedUserAvatar(p.userId, dark, account), p.userId, account) {
+        if (value == null && p.userId.isNotEmpty()) value = sessions.userAvatar(p.userId, dark, account)
     }
     val shape = RoundedCornerShape(if (compact) 12.dp else 16.dp)
     Box(

@@ -52,7 +52,7 @@ fun prepareImage(context: Context, source: Uri): PreparedImage {
     }
 
     // Not the cache: the system may clear it before the outbox has taken the file over.
-    val dir = File(context.noBackupFilesDir, "talk/staging").apply { mkdirs() }
+    val dir = stagingDir(context).apply { mkdirs() }
     val name = "IMG_${LocalDateTime.now().format(nameFmt)}.jpg"
     val file = File.createTempFile("img", ".jpg", dir)
     file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }
@@ -101,3 +101,9 @@ private fun ExifInterface.rotationDegrees(): Int = when (
 /** Aspect ratio (width / height) helper that tolerates unknown sizes. */
 fun aspectOf(width: Int, height: Int): Float =
     if (width > 0 && height > 0) (width.toFloat() / height).coerceIn(0.4f, 2.5f) else 1f
+
+/**
+ * Prepared images until the outbox takes them over: shared by all accounts, outside their
+ * data folders (signing out one account deletes its folder).
+ */
+fun stagingDir(context: Context): File = File(context.noBackupFilesDir, "staging")

@@ -9,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,6 +22,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.wolkenfunk.app.SessionManager
 
+/**
+ * Account whose avatars are drawn below (docs/accounts.md): `null` is the active one. The
+ * call screen draws the call's account, the account menu each row's own.
+ */
+val LocalAvatarAccount = staticCompositionLocalOf<String?> { null }
+
 /** Initials avatar; with [token] the server avatar is shown once loaded (PNG/JPEG only). */
 @Composable
 fun Avatar(
@@ -31,9 +38,10 @@ fun Avatar(
     sessions: SessionManager? = null,
 ) {
     val dark = isDarkTheme()
-    val cached = if (token != null) sessions?.cachedAvatar(token, version, dark) else null
-    val image by produceState(cached, token, version, dark) {
-        value = cached ?: if (token != null && sessions != null) sessions.avatar(token, version, dark) else null
+    val account = LocalAvatarAccount.current
+    val cached = if (token != null) sessions?.cachedAvatar(token, version, dark, account) else null
+    val image by produceState(cached, token, version, dark, account) {
+        value = cached ?: if (token != null && sessions != null) sessions.avatar(token, version, dark, account) else null
     }
     val img = image
     if (img != null) {

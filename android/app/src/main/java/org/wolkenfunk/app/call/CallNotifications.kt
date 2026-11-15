@@ -86,20 +86,24 @@ object CallNotifications {
         )
 
     @SuppressLint("MissingPermission") // checked by allowed()
-    fun showIncoming(context: Context, call: CallView) {
+    fun showIncoming(context: Context, call: CallView, label: String?) {
         if (!allowed(context)) return
-        runCatching { NotificationManagerCompat.from(context).notify(ID_INCOMING, incoming(context, call)) }
+        runCatching { NotificationManagerCompat.from(context).notify(ID_INCOMING, incoming(context, call, label)) }
             .onFailure { Log.e("TalkCall", "incoming notification", it) }
     }
 
-    /** Ringing notification (also the foreground notification while ringing in the background). */
-    fun incoming(context: Context, call: CallView): Notification {
+    /**
+     * Ringing notification (also the foreground notification while ringing in the background).
+     * [label]: the call's account from two accounts on (docs/accounts.md).
+     */
+    fun incoming(context: Context, call: CallView, label: String?): Notification {
         val full = callActivity(context, accept = false)
         return NotificationCompat.Builder(context, CHANNEL_INCOMING)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setColor(Notifications.ACCENT)
             .setContentTitle(person(call).name)
             .setContentText(if (call.isGroup) "Gruppenanruf" else "Talk-Anruf")
+            .setSubText(label)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -169,24 +173,20 @@ object CallNotifications {
     }
 
     @SuppressLint("MissingPermission") // checked by allowed()
-    fun showMissed(context: Context, token: String, name: String) {
+    fun showMissed(context: Context, account: String, label: String?, token: String, name: String) {
         if (!allowed(context)) return
-        val open = PendingIntent.getActivity(
-            context, token.hashCode(),
-            Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(Notifications.EXTRA_TOKEN, token),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val key = Notifications.chatKey(account, token)
+        val open = Notifications.openChat(context, account, token, ("missed|$key").hashCode())
         val n = NotificationCompat.Builder(context, CHANNEL_MISSED)
             .setSmallIcon(android.R.drawable.sym_call_missed)
             .setColor(Notifications.ACCENT)
             .setContentTitle("Verpasster Anruf")
             .setContentText(name)
+            .setSubText(label)
             .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
             .setAutoCancel(true)
             .setContentIntent(open)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(ID_MISSED_BASE + (token.hashCode() and 0xffff), n) }
+        runCatching { NotificationManagerCompat.from(context).notify(ID_MISSED_BASE + (key.hashCode() and 0xffff), n) }
     }
 }
