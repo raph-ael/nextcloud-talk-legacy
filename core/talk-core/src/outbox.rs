@@ -1056,6 +1056,7 @@ impl Store {
     }
 
     /// Loads all items; drops unreadable records and attachment files nobody refers to.
+    /// Attachments follow a data dir that moved as a whole.
     fn load(&self) -> Vec<OutboxItem> {
         let Some(dir) = &self.dir else { return Vec::new() };
         let mut items = Vec::new();
@@ -1081,6 +1082,21 @@ impl Store {
             }
         }
         if let Some(files) = self.files_dir() {
+            // The data dir may have moved since the record was written: iOS gives the app
+            // a new container path with every update, and records hold absolute paths.
+            // An attachment that is not where the record says but lies in our files dir
+            // under the same name is that attachment.
+            for item in &mut items {
+                let Some(f) = item.file.as_mut() else { continue };
+                let old = Path::new(&f.local);
+                if old.starts_with(&files) || old.is_file() {
+                    continue;
+                }
+                let Some(here) = old.file_name().map(|n| files.join(n)).filter(|p| p.is_file()) else { continue };
+                tracing::info!("outbox attachment of {} follows the moved data dir", item.reference_id);
+                f.local = here.to_string_lossy().into_owned();
+                self.save(item);
+            }
             if let Ok(entries) = std::fs::read_dir(&files) {
                 for e in entries.flatten() {
                     let p = e.path().to_string_lossy().into_owned();
@@ -1232,6 +1248,34 @@ mod tests {
             attempts: 2,
             failed: None,
         }
+    }
+
+    /// iOS: every app update moves the container, and with it the data dir.
+    #[test]
+    fn attachments_follow_a_moved_data_dir() {
+        let root = std::env::temp_dir().join(format!("outbox-test-{}", uuid::Uuid::new_v4()));
+        let (before, after) = (root.join("A1"), root.join("B2"));
+        let store = Store { dir: Some(before.join("outbox")) };
+        std::fs::create_dir_all(&before).unwrap();
+        let src = before.join("src.mp3");
+        std::fs::write(&src, b"abc").unwrap();
+        let local = store.adopt_file("r1", &src, "Aufnahme.mp3").unwrap();
+        store.save(&item("r1", 1, Some(local.to_string_lossy().into_owned())));
+        // A file outside the outbox that is gone stays as it is: the item fails as before.
+        store.save(&item("r2", 2, Some(before.join("weg.jpg").to_string_lossy().into_owned())));
+
+        std::fs::rename(&before, &after).unwrap();
+        let store = Store { dir: Some(after.join("outbox")) };
+        let loaded = store.load();
+        let moved = after.join("outbox/files/r1.mp3");
+        assert_eq!(loaded[0].file.as_ref().unwrap().local, moved.to_string_lossy());
+        assert_eq!(std::fs::read(&moved).unwrap(), b"abc");
+        assert!(loaded[1].file.as_ref().unwrap().local.ends_with("A1/weg.jpg"));
+        // The record was rewritten: the next start needs no repair, the file stays.
+        let again = store.load();
+        assert_eq!(again[0].file.as_ref().unwrap().local, moved.to_string_lossy());
+        assert!(moved.is_file());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
