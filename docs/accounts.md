@@ -52,6 +52,7 @@ Die Zahl ist die Summe von `badge().chats` der anderen Konten, also die Chats mi
 - Es erscheint der bisherige Anmeldebildschirm, mit dem Titel „Konto hinzufügen“ und einem Knopf „Abbrechen“, der zurückführt. Die anderen Konten laufen währenddessen weiter.
 - Nach der Anmeldung im Browser fragt die App mit `resolveAccount(server, loginName, appPassword)` nach, wer sich angemeldet hat. Erst danach wird das Konto gespeichert.
 - **Schon angemeldet:** Hat ein Konto der Liste denselben `key`, wechselt die App dorthin und zeigt den Toast „Dieses Konto ist schon angemeldet“. Das frische App-Passwort gibt sie mit `revokeAppPassword(...)` zurück.
+- **Schon in der Liste, aber nicht gestartet** (sein Geheimnis ließ sich in diesem Lauf nicht lesen, siehe „Lesefehler“): Der Eintrag bekommt das neue Geheimnis und startet. Ordner und Postausgang bleiben, es entsteht kein zweiter Eintrag.
 - **Sonst** wird das neue Konto gespeichert, gestartet und aktiv.
 - Scheitert `resolveAccount` (kein Netz), bleibt die Anmeldung offen und zeigt den Fehler. Es wird nichts gespeichert.
 
@@ -211,6 +212,7 @@ Die eigenen Kopien der Badge-Regel entfallen: Desktop `countsForBadge`, iOS `bad
 | Eigener Avatar, ein Konto | „Einstellungen“ |
 | Eigener Avatar, mehrere Konten | „Konten“, bei einer Zahl „Konten, Neues in {n} Chats“ |
 | Zeile im Kontomenü | „{Name}, {Server}“, dazu „aktiv“ bzw. „{n} Chats mit Neuem“ |
+| Bei genau einem Chat | Einzahl: „Konten, Neues in 1 Chat“ bzw. „1 Chat mit Neuem“ |
 | Ausgegraute Zeile während eines Anrufs | zusätzlich „nicht verfügbar“ |
 
 ## Test
