@@ -423,3 +423,42 @@ async fn notices_for_new_messages_and_missed_calls() {
     engine.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// "Als gelesen markieren" in a notification can start the app: the cached list is then
+/// older than the message the notification shows. The marker must still reach the server
+/// and the notification must be cleared.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mark_read_from_a_notification_after_a_cold_start() {
+    let server = serve_from(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures-b"))).await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = || Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let open = || {
+        let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+        (Engine::new(TalkClient::new(account(), Platform::Cli).unwrap(), sink.clone(), Some(dir.clone())), sink)
+    };
+    // A first run fills the cache; then the app is closed.
+    let (engine, _) = open();
+    engine.start().await.unwrap();
+    engine.shutdown();
+    drop(engine);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A message comes in (the push shows it), and the action starts the app: the engine
+    // exists, but has not asked the server for anything yet.
+    let r = reqwest::Client::new()
+        .post(format!("{server}/demo/incoming"))
+        .form(&[("token", "mira"), ("text", "Bist du schon da?")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+    let (engine, sink) = open();
+    assert_eq!(engine.rooms().iter().find(|r| r.token == "mira").unwrap().unread_messages, 0, "the cache knows nothing yet");
+    engine.mark_room_read("mira").await.unwrap();
+    assert_eq!(announced(&sink).2, ["mira"]);
+
+    // The server agrees: nothing unread any more.
+    let rooms = TalkClient::new(account(), Platform::Cli).unwrap().rooms(None, true).await.unwrap().rooms;
+    assert_eq!(rooms.iter().find(|r| r.token == "mira").unwrap().unread_messages, 0);
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -1122,6 +1122,12 @@ impl Engine {
     }
 
     pub async fn mark_read(&self, token: &str, message_id: i64) -> Result<()> {
+        self.mark_read_changed(token, message_id).await.map(|_| ())
+    }
+
+    /// [`Self::mark_read`]; says whether there was anything to mark (then the list
+    /// changed and the conversation's notification was cleared).
+    async fn mark_read_changed(&self, token: &str, message_id: i64) -> Result<bool> {
         let changed = {
             let mut st = self.state.lock().unwrap();
             match st.rooms.get_mut(token) {
@@ -1136,10 +1142,10 @@ impl Engine {
                 _ => None,
             }
         };
-        let Some((rooms, room)) = changed else { return Ok(()) };
+        let Some((rooms, room)) = changed else { return Ok(false) };
         self.sink.emit(Event::RoomsChanged { rooms });
         self.notices_local(&room, true);
-        self.guard(self.client.set_read_marker(token, message_id).await)
+        self.guard(self.client.set_read_marker(token, message_id).await).map(|_| true)
     }
 
     /// "Als gelesen markieren" from the chat list or a notification: read marker on the
@@ -1151,10 +1157,12 @@ impl Engine {
         };
         let room = self.client.room(token).await.unwrap_or(cached);
         let newest = room.last_message.as_ref().map_or(room.last_read_message, |m| m.id);
-        let done = self.mark_read(token, newest).await;
+        let marked = self.mark_read_changed(token, newest).await;
         // Whatever the list said before: the user is done with this conversation.
-        self.sink.emit(Event::NoticesCleared { tokens: vec![token.to_string()] });
-        done
+        if !matches!(marked, Ok(true)) {
+            self.sink.emit(Event::NoticesCleared { tokens: vec![token.to_string()] });
+        }
+        marked.map(|_| ())
     }
 
     /// Signs out on the server; call `shutdown` afterwards.
