@@ -77,7 +77,12 @@
             android:name=".call.CallActionReceiver"
             android:exported="false" />
 
-        <!-- Push (FCM, only in builds with a Firebase config): rings for incoming calls. -->
+        <!-- „Antworten“ and „Als gelesen markieren“ in message notifications. -->
+        <receiver
+            android:name=".MessageActionReceiver"
+            android:exported="false" />
+
+        <!-- Push (FCM, only in builds with a Firebase config): calls and new messages. -->
         <service
             android:name=".push.TalkMessagingService"
             android:exported="false">

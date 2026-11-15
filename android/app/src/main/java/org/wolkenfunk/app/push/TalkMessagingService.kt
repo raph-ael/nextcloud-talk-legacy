@@ -9,7 +9,8 @@ import org.wolkenfunk.app.TalkApplication
 
 /**
  * FCM entry point. The proxy sends data messages (`subject`, `signature`) with high
- * priority; such a message may start the ringing foreground service from the background.
+ * priority: calls, which may start the ringing foreground service from the background,
+ * chat messages and the deletion of what was read elsewhere (docs/notifications.md).
  * The application (and with it the session) is already up when this runs.
  */
 class TalkMessagingService : FirebaseMessagingService() {
@@ -33,6 +34,12 @@ class TalkMessagingService : FirebaseMessagingService() {
             withTimeoutOrNull(HANDLE_TIMEOUT_MS) { sessions.handlePush(subject) }
                 ?: Log.w(Push.TAG, "push not handled in time")
         }
+    }
+
+    /** FCM dropped waiting pushes: the accounts reload and report what is new themselves. */
+    override fun onDeletedMessages() {
+        Log.w(Push.TAG, "pushes lost")
+        sessions.onPushesLost()
     }
 
     private companion object {

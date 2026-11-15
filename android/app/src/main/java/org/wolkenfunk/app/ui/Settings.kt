@@ -2,7 +2,8 @@ package org.wolkenfunk.app.ui
 
 import android.content.Intent
 import android.net.Uri
-import android.provider.Settings
+import android.widget.Toast
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.slideInHorizontally
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -105,7 +108,7 @@ fun SettingsScreen(sessions: SessionManager, state: UiState, onBack: () -> Unit,
         when (p) {
             null -> SettingsHome(sessions, state, onBack, onAddAccount, onOpen = { page = it })
             SettingsPage.APPEARANCE -> AppearancePage { page = null }
-            SettingsPage.NOTIFICATIONS -> NotificationsPage { page = null }
+            SettingsPage.NOTIFICATIONS -> NotificationsPage(sessions) { page = null }
             SettingsPage.ABOUT -> AboutPage { page = null }
         }
     }
@@ -170,7 +173,9 @@ private fun SettingsHome(
         }
         SectionDivider()
         NavRow(TalkIcons.Palette, "Darstellung") { onOpen(SettingsPage.APPEARANCE) }
-        NavRow(Icons.Filled.Notifications, "Benachrichtigungen") { onOpen(SettingsPage.NOTIFICATIONS) }
+        NavRow(Icons.Filled.Notifications, "Benachrichtigungen", if (notificationsEnabled()) null else "Aus") {
+            onOpen(SettingsPage.NOTIFICATIONS)
+        }
         NavRow(Icons.Filled.Info, "Über Wolkenfunk") { onOpen(SettingsPage.ABOUT) }
         SectionDivider()
         SettingRow(Icons.AutoMirrored.Filled.ExitToApp, "Abmelden", tint = colors.danger, onClick = { confirmLogout = true })
@@ -188,9 +193,12 @@ private fun SettingsHome(
     }
 }
 
-/** A row of the start page: muted icon, title, arrow; read as a button with its title. */
+/**
+ * A row of the start page: muted icon, title, arrow; read as a button with its title.
+ * [value]: a state in front of the arrow („Aus“), read as „{Titel}, aus“.
+ */
 @Composable
-private fun NavRow(icon: ImageVector, title: String, onClick: () -> Unit) {
+private fun NavRow(icon: ImageVector, title: String, value: String? = null, onClick: () -> Unit) {
     val colors = LocalTalkColors.current
     Row(
         Modifier
@@ -198,7 +206,7 @@ private fun NavRow(icon: ImageVector, title: String, onClick: () -> Unit) {
             .heightIn(min = 56.dp)
             .clickable(onClick = onClick)
             .clearAndSetSemantics {
-                contentDescription = title
+                contentDescription = if (value != null) "$title, ${value.lowercase()}" else title
                 role = Role.Button
             }
             .padding(horizontal = 24.dp, vertical = 8.dp),
@@ -207,6 +215,7 @@ private fun NavRow(icon: ImageVector, title: String, onClick: () -> Unit) {
         Icon(icon, null, tint = colors.muted, modifier = Modifier.size(24.dp))
         Spacer(Modifier.width(24.dp))
         Text(title, style = ListType.title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (value != null) Text(value, style = ListType.body, color = colors.muted, modifier = Modifier.padding(end = 8.dp))
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = colors.muted)
     }
 }
@@ -319,20 +328,50 @@ private fun PreviewBubble(text: String, own: Boolean) {
 // --- Benachrichtigungen ----------------------------------------------------------------
 
 @Composable
-private fun NotificationsPage(onBack: () -> Unit) {
+private fun NotificationsPage(sessions: SessionManager, onBack: () -> Unit) {
     val context = LocalContext.current
+    val colors = LocalTalkColors.current
+    val scope = rememberCoroutineScope()
+    val enable = rememberNotificationEnabler()
+    var testing by remember { mutableStateOf(false) }
     SettingsScaffold("Benachrichtigungen", onBack) {
-        SettingRow(Icons.Filled.Notifications, "Systemeinstellungen öffnen", onClick = {
-            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            runCatching { context.startActivity(intent) }
-        })
+        if (!notificationsEnabled()) {
+            Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp)) {
+                Text("Benachrichtigungen sind ausgeschaltet", style = ListType.title)
+                Text(
+                    "Neue Nachrichten und Anrufe bemerkst du dann nur bei geöffneter App.",
+                    style = ListType.body,
+                    color = colors.muted,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                Button(onClick = enable) { Text("Einschalten") }
+            }
+            SectionDivider()
+        }
+        SettingRow(Icons.Filled.Notifications, "Systemeinstellungen öffnen", onClick = { openNotificationSettings(context) })
         Text(
             "Für einzelne Chats: Chat in der Liste lange gedrückt halten.",
             style = ListType.body,
-            color = LocalTalkColors.current.muted,
+            color = colors.muted,
             modifier = Modifier.fillMaxWidth().padding(start = 72.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
         )
+        if (sessions.pushAvailable()) {
+            SettingRow(TalkIcons.Send, "Push testen", onClick = {
+                if (!testing) {
+                    testing = true
+                    scope.launch {
+                        val ok = sessions.testPush()
+                        testing = false
+                        val text = if (ok) "Test angefordert. Die Benachrichtigung sollte in wenigen Sekunden erscheinen."
+                        else "Der Server hat den Test nicht angenommen."
+                        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                    }
+                }
+            })
+        } else {
+            // A build without Firebase config or proxy address: the row only says so.
+            SettingRow(TalkIcons.Send, "Diese App-Version hat keinen Push")
+        }
     }
 }
 

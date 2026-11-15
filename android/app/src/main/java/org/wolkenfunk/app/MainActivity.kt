@@ -61,16 +61,19 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * A notification about a conversation (e.g. a failed send) opens that conversation, in
-     * its account (docs/accounts.md). During a call the switch is refused with a toast.
+     * A notification about a conversation (a new message, a failed send) opens that
+     * conversation, in its account (docs/accounts.md). During a call the switch is refused
+     * with a toast.
      */
     private fun openFromIntent(intent: Intent?) {
-        val token = intent?.getStringExtra(Notifications.EXTRA_TOKEN) ?: return
-        val account = intent.getStringExtra(Notifications.EXTRA_ACCOUNT)
-        intent.removeExtra(Notifications.EXTRA_TOKEN)
-        intent.removeExtra(Notifications.EXTRA_ACCOUNT)
+        val account = intent?.getStringExtra(Notifications.EXTRA_ACCOUNT)
+        val token = intent?.getStringExtra(Notifications.EXTRA_TOKEN)
+        intent?.removeExtra(Notifications.EXTRA_TOKEN)
+        intent?.removeExtra(Notifications.EXTRA_ACCOUNT)
         // Signed out meanwhile, or the switch is locked: never open it in another account.
         if (account != null && !sessions.switchAccount(account)) return
+        // Only an account (the closed group of its message notifications): its chat list.
+        if (token == null || intent == null) return
         sessions.openRoom(token)
         // Debug builds only (adb tests): `--ez org.wolkenfunk.app.CALL_SILENT true` starts a
         // silent call in that conversation; nobody is rung.

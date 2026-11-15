@@ -75,6 +75,17 @@ object Notifications {
     /** Tokens of different servers overlap: ids and request codes carry the account. */
     fun chatKey(account: String, token: String) = "$account|$token"
 
+    /** Opens the app in [account], at whatever is shown there. */
+    fun openAccount(context: Context, account: String): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(EXTRA_ACCOUNT, account)
+        return PendingIntent.getActivity(
+            context, "account|$account".hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
     /** Opens the app; with an account and a token, switches there and opens the chat. */
     fun openChat(context: Context, account: String?, token: String?, requestCode: Int? = null): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)

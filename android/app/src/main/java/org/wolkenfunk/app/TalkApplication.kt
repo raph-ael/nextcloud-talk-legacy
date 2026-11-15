@@ -16,6 +16,7 @@ class TalkApplication : Application() {
         Notifications.createChannels(this)
         org.wolkenfunk.app.call.CallNotifications.createChannels(this)
         org.wolkenfunk.app.call.RecordingNotifications.createChannel(this)
+        MessageNotifications.createChannel(this)
         appearance = AppearanceStore(this)
         sessions = SessionManager(this)
     }

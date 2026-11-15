@@ -11,7 +11,8 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * FCM access. Push is on only when the build has a Firebase config (google-services.json)
- * and a push proxy URL; otherwise calls ring only while the app runs (notify_push).
+ * and a push proxy URL; otherwise calls ring and messages are announced only while the app
+ * runs (notify_push and the core's `messageNotices`).
  */
 object Push {
     const val TAG = "TalkPush"

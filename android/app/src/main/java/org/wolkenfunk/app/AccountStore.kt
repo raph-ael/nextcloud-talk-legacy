@@ -32,6 +32,9 @@ data class AccountEntry(
     val dir: String,
 )
 
+/** An app password that could not be handed back when its account signed out (no network). */
+data class PendingRevoke(val server: String, val loginName: String, val appPassword: String)
+
 /** Reading a secret: present, surely absent, or not readable (keystore error). */
 sealed interface Secret {
     data class Present(val value: String) : Secret
@@ -161,6 +164,47 @@ class AccountStore(private val context: Context) {
         prefs.edit().putString(pushKeyKey(id), encrypt(pem)).commit()
     }
 
+    /**
+     * App passwords still to hand back (docs/notifications.md „Abmelden ohne Netz“), encrypted
+     * like the others. Not readable right now: empty, and nothing is overwritten.
+     */
+    fun pendingRevokes(): List<PendingRevoke> {
+        val raw = (read(KEY_REVOKE) as? Secret.Present)?.value ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                arr.getJSONObject(i).let { PendingRevoke(it.getString("server"), it.getString("loginName"), it.getString("appPassword")) }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun addPendingRevoke(p: PendingRevoke) {
+        if (read(KEY_REVOKE) == Secret.Unreadable) return
+        writeRevokes(pendingRevokes().filter { it != p } + p)
+    }
+
+    fun dropPendingRevoke(p: PendingRevoke) {
+        if (read(KEY_REVOKE) == Secret.Unreadable) return
+        writeRevokes(pendingRevokes().filter { it != p })
+    }
+
+    @SuppressLint("ApplySharedPref")
+    private fun writeRevokes(list: List<PendingRevoke>) {
+        val edit = prefs.edit()
+        if (list.isEmpty()) {
+            edit.remove(KEY_REVOKE)
+        } else {
+            val arr = JSONArray()
+            list.forEach { arr.put(JSONObject().put("server", it.server).put("loginName", it.loginName).put("appPassword", it.appPassword)) }
+            val sealed = runCatching { encrypt(arr.toString()) }.getOrElse {
+                Log.e(TAG, "revoke list not written", it)
+                return
+            }
+            edit.putString(KEY_REVOKE, sealed)
+        }
+        edit.commit()
+    }
+
     /** Data folder for a new account: `accounts/<id>/` next to the old `talk/`. */
     fun newDir(id: String): String = File(context.noBackupFilesDir, "accounts/$id").path
 
@@ -230,6 +274,7 @@ class AccountStore(private val context: Context) {
         const val IV_SIZE = 12
         const val KEY_ACCOUNTS = "accounts"
         const val KEY_ACTIVE = "active"
+        const val KEY_REVOKE = "revoke"
         /** The single account of earlier versions. */
         val LEGACY = listOf("server", "login", "secret", "push_key")
 

@@ -38,6 +38,7 @@ fun TalkApp(sessions: SessionManager) {
     var settings by rememberSaveable { mutableStateOf(false) }
     var adding by rememberSaveable { mutableStateOf(false) }
     if (adding && state.session != SessionState.READY) adding = false
+    AskNotificationsAtStart(signedIn = state.session == SessionState.READY)
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     call?.let { c -> CallBar(c) { context.startActivity(Intent(context, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
     Box(Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {

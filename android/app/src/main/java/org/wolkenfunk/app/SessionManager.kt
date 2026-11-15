@@ -74,6 +74,15 @@ import uniffi.talk_ffi.SectionView
 import uniffi.talk_ffi.SendError
 import uniffi.talk_ffi.TalkSession
 import uniffi.talk_ffi.newReferenceId
+import uniffi.talk_ffi.pushChatParts
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Shader
+import androidx.compose.ui.graphics.asAndroidBitmap
+import org.wolkenfunk.app.ui.withAttachment
 
 enum class SessionState { LOADING, LOGGED_OUT, READY }
 enum class SendStatus { SENDING, WAITING, FAILED }
@@ -184,6 +193,8 @@ class SessionManager(private val context: Context) {
         @Volatile var badge = 0
         /** `resolveAccount` for the adopted account's key is in flight. */
         var resolving = false
+        /** FCM lost pushes: the core's `messageNotices` count although push is on. */
+        @Volatile var catchUp = false
 
         override fun onEvent(event: CoreEvent) = this@SessionManager.onEvent(this, event)
     }
@@ -247,10 +258,15 @@ class SessionManager(private val context: Context) {
                 override fun onAvailable(network: Network) {
                     for (rt in runtimes.values) rt.session.networkChanged()
                     // Registration failed offline: try again now.
-                    scope.launch { for (rt in runtimes.values) if (!rt.pushRegistered) registerPush(rt) }
+                    scope.launch {
+                        for (rt in runtimes.values) if (!rt.pushRegistered) registerPush(rt)
+                        retryRevokes()
+                    }
                 }
             },
         )
+        // App passwords of accounts signed out without a network go back now.
+        retryRevokes()
         // Images prepared but never handed to an outbox (process died in between).
         scope.launch(Dispatchers.IO) {
             val cutoff = System.currentTimeMillis() - 3_600_000
@@ -261,6 +277,12 @@ class SessionManager(private val context: Context) {
         // Leaving the app with unsent messages: hand them to the background worker.
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) = scheduleOutboxIfNeeded()
+
+            // Back in front with a chat open: the user sees it, its notification goes.
+            override fun onResume(owner: LifecycleOwner) {
+                val st = _state.value
+                st.activeToken?.let { MessageNotifications.cancel(context, st.accountId, it) }
+            }
         })
     }
 
@@ -482,6 +504,7 @@ class SessionManager(private val context: Context) {
     private suspend fun signOut(rt: Runtime, revoke: Boolean) {
         if (rt.id !in runtimes) return
         val s = rt.session
+        val password = if (revoke) (store.password(rt.id) as? Secret.Present)?.value else null
         // The UI leaves the account first, so nothing calls into it any more.
         runtimes = runtimes - rt.id
         if (active === rt) {
@@ -506,7 +529,21 @@ class SessionManager(private val context: Context) {
         rt.pushRegistered = false
         // The FCM token goes only with the last account.
         if (runtimes.isEmpty()) Push.deleteToken(context)
-        if (revoke) runCatching { s.logout() } else s.shutdown()
+        if (revoke) {
+            val gone = try {
+                s.logout()
+                true
+            } catch (e: CoreException.Unauthorized) {
+                true
+            } catch (e: Exception) {
+                false
+            }
+            // Not handed back (no network): the server would keep pushing to an account that
+            // is gone here. Remembered and made up for at the next start (docs/notifications.md).
+            if (!gone && password != null) store.addPendingRevoke(PendingRevoke(rt.account.server, rt.account.loginName, password))
+        } else {
+            s.shutdown()
+        }
         s.close()
         store.remove(rt.id)
         // Unsent messages belong to this account: never deliver them under another one.
@@ -518,6 +555,7 @@ class SessionManager(private val context: Context) {
         avatars.snapshot().keys.filter { it.startsWith(prefix) }.forEach { avatars.remove(it) }
         previews.snapshot().keys.filter { it.startsWith(prefix) }.forEach { previews.remove(it) }
         RecordingNotifications.clear(context, rt.id)
+        MessageNotifications.clear(context, rt.id, forget = true)
         // With one account left, notifications lose their account line from now on.
         publishAccounts()
     }
@@ -587,9 +625,187 @@ class SessionManager(private val context: Context) {
                 // The incoming call is handled on the main thread right after the state is set.
                 withContext(Dispatchers.Main) { }
             }
-            is PushMessage.Delete, PushMessage.DeleteAll -> s.handlePush(message, null)
-            // Chat pushes are not forwarded by the proxy yet; the app has no message notifications.
-            is PushMessage.Chat, is PushMessage.Other -> Unit
+            // Read elsewhere: the notifications with these ids go, in this account only.
+            is PushMessage.Delete -> {
+                MessageNotifications.removeIds(context, rt.id, message.notificationIds)
+                s.handlePush(message, null)
+            }
+            PushMessage.DeleteAll -> {
+                MessageNotifications.clear(context, rt.id)
+                s.handlePush(message, null)
+            }
+            is PushMessage.Chat -> showPushed(rt, message)
+            is PushMessage.Other -> MessageNotifications.showOther(context, rt.id, label(rt), message.subject)
+        }
+    }
+
+    /** FCM dropped pushes (too many waiting, or offline for weeks): every account reloads. */
+    fun onPushesLost() {
+        scope.launch {
+            for (rt in runtimes.values) launch {
+                rt.catchUp = true
+                try {
+                    runCatching { rt.session.refreshRooms() }
+                } finally {
+                    rt.catchUp = false
+                }
+            }
+        }
+    }
+
+    // --- message notifications (docs/notifications.md) ------------------------------------
+
+    /** Exactly this chat is open in the active account and the app is in front. */
+    private fun chatInFront(rt: Runtime, token: String): Boolean {
+        val st = _state.value
+        return st.accountId == rt.id && st.activeToken == token &&
+            ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+    }
+
+    /**
+     * The notification for a chat push, from the push alone and without network: title from
+     * the chat list, sender and text from the push, the picture from the avatar cache.
+     */
+    private suspend fun showPushed(rt: Runtime, push: PushMessage.Chat) {
+        if (chatInFront(rt, push.token)) return
+        val room = rt.rooms.find { it.token == push.token }
+        val parts = pushChatParts(push.subject, room?.name.orEmpty())
+        // A chat the list does not know yet: the first line („Bob in Projekt“) as it is.
+        val title = room?.name ?: parts.sender.ifBlank { "Wolkenfunk" }
+        MessageNotifications.show(
+            context, rt.id, label(rt), push.token,
+            title = title,
+            isGroup = room != null && isGroup(room),
+            canReply = room?.readOnly != true,
+            sender = parts.sender,
+            text = parts.text,
+            nid = push.notificationId,
+            avatar = noticeAvatar(rt, room),
+        )
+    }
+
+    /**
+     * `messageNotices` of the core. With push the server announces, so they count only
+     * without push in this build and after FCM lost pushes; what came in before the start
+     * is never shown (the app is in front then anyway).
+     */
+    private fun onNotices(rt: Runtime, event: CoreEvent.MessageNotices) {
+        if (event.sinceStart) return
+        if (Push.enabled(context) && !rt.catchUp) return
+        scope.launch {
+            for (item in event.items) {
+                if (rt.id !in runtimes || chatInFront(rt, item.token)) continue
+                val room = rt.rooms.find { it.token == item.token }
+                val avatar = noticeAvatar(rt, room)
+                // Read while the picture loaded.
+                if (rt.rooms.find { it.token == item.token }?.unreadMessages == 0L) continue
+                val m = item.message
+                MessageNotifications.show(
+                    context, rt.id, label(rt), item.token,
+                    title = item.roomName,
+                    isGroup = item.isGroup,
+                    canReply = room?.readOnly != true,
+                    sender = if (m != null && !m.isSystem) m.author else "",
+                    text = m?.let { withAttachment(it.text, it.attachment) }.orEmpty(),
+                    nid = 0,
+                    avatar = avatar,
+                )
+            }
+        }
+    }
+
+    private fun isGroup(room: RoomView) = room.roomType.toInt() !in setOf(1, 5, 6)
+
+    /** Round picture of the chat: from memory, else the core's cache (a short wait at most). */
+    private suspend fun noticeAvatar(rt: Runtime, room: RoomView?): Bitmap? {
+        room ?: return null
+        val dark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        val image = withTimeoutOrNull(AVATAR_WAIT_MS) { avatar(room.token, room.avatarVersion, dark, rt.id) } ?: return null
+        return withContext(Dispatchers.Default) { runCatching { round(image.asAndroidBitmap()) }.getOrNull() }
+    }
+
+    private fun round(src: Bitmap): Bitmap {
+        val size = minOf(src.width, src.height)
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val soft = if (src.config == Bitmap.Config.HARDWARE) src.copy(Bitmap.Config.ARGB_8888, false) else src
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = BitmapShader(soft, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
+        Canvas(out).drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        return out
+    }
+
+    /**
+     * „Antworten“ in a notification: at once into the outbox of the notification's account,
+     * which does not become the active one. The notification is set again in any case,
+     * else its progress circle keeps turning.
+     */
+    fun replyFromNotification(account: String, token: String, text: String) {
+        val rt = runtimes[account]
+        if (rt == null) {
+            MessageNotifications.cancel(context, account, token)
+            return
+        }
+        val body = text.trim()
+        if (body.isNotEmpty()) {
+            rt.session.enqueueText(token, body, null, newReferenceId())
+            OutboxWorker.schedule(context)
+        }
+        MessageNotifications.replied(context, account, token, body)
+    }
+
+    /** „Als gelesen markieren“ in a notification; [done] once the server answered. */
+    fun markReadFromNotification(account: String, token: String, done: () -> Unit) {
+        MessageNotifications.cancel(context, account, token)
+        val rt = runtimes[account] ?: return done()
+        scope.launch {
+            try {
+                val error = withTimeoutOrNull(ACTION_WAIT_MS) { rt.session.markRoomRead(token) }
+                if (error != null) toast(error)
+            } finally {
+                done()
+            }
+        }
+    }
+
+    /** This build has push (Firebase config and proxy address). */
+    fun pushAvailable(): Boolean = Push.enabled(context)
+
+    /** „Push testen“ in the active account; `false`: the server did not take it. */
+    suspend fun testPush(): Boolean {
+        val s = session ?: return false
+        return try {
+            s.testPush()
+            true
+        } catch (e: CoreException) {
+            false
+        }
+    }
+
+    // --- sign-out without network -------------------------------------------------------
+
+    private var revoking = false
+
+    /** Hands back the app passwords of accounts that were signed out without a network. */
+    private fun retryRevokes() {
+        if (revoking) return
+        val pending = store.pendingRevokes()
+        if (pending.isEmpty()) return
+        revoking = true
+        scope.launch {
+            try {
+                for (p in pending) {
+                    val gone = try {
+                        revokeAppPassword(p.server, p.loginName, p.appPassword, ClientPlatform.ANDROID)
+                        true
+                    } catch (e: CoreException.Unauthorized) {
+                        true
+                    } catch (e: Exception) {
+                        false
+                    }
+                    if (gone) store.dropPendingRevoke(p)
+                }
+            } finally {
+                revoking = false
+            }
         }
     }
 
@@ -780,6 +996,9 @@ class SessionManager(private val context: Context) {
                     publishAccounts()
                 }
                 if (active === rt) onRooms(rt, event.rooms)
+                // Read elsewhere without a deletion from the server reaching us.
+                val read = event.rooms.filter { it.unreadMessages == 0L }.mapTo(HashSet()) { it.token }
+                launch(Dispatchers.Default) { MessageNotifications.reconcile(context, rt.id, read) }
             }
             is CoreEvent.ParticipantsChanged -> if (shown) _participants.tryEmit(event.token)
             is CoreEvent.MessagesAdded -> if (shown) {
@@ -827,8 +1046,11 @@ class SessionManager(private val context: Context) {
                 rt.recordingsKnown = ids
                 onRecordings(rt, event.items, fresh)
             }
-            // Message notifications come with the notifications block (docs/notifications.md).
-            is CoreEvent.MessageNotices, is CoreEvent.NoticesCleared -> Unit
+            is CoreEvent.MessageNotices -> onNotices(rt, event)
+            // Read, archived or gone: after the notices before it (they wait on the main thread).
+            is CoreEvent.NoticesCleared -> scope.launch {
+                for (token in event.tokens) MessageNotifications.cancel(context, rt.id, token)
+            }
         }
     }
 
@@ -1044,6 +1266,7 @@ class SessionManager(private val context: Context) {
         val rt = active ?: return
         val s = rt.session
         val previous = _state.value.activeToken
+        MessageNotifications.cancel(context, rt.id, token)
         if (previous == token) return
         previous?.let { s.closeChat(it) }
         // Cached messages and unsent ones (both survive restarts): shown in the first frame.
@@ -1367,6 +1590,10 @@ class SessionManager(private val context: Context) {
         const val PREVIEW_CACHE_BYTES = 48 * 1024 * 1024
         /** How long a call push waits for the ringing to start. */
         const val RING_WAIT_MS = 3_000L
+        /** A notification waits this long for the chat's picture (the core's cache answers at once). */
+        const val AVATAR_WAIT_MS = 1_000L
+        /** A broadcast receiver has about ten seconds. */
+        const val ACTION_WAIT_MS = 8_000L
         const val TAG = "TalkAccounts"
     }
 }
