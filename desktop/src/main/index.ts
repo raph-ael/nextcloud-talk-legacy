@@ -18,7 +18,7 @@ import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged, unreadChanged } from './system'
-import { autostartAvailable, setAutostart, startedAtLogin } from './autostart'
+import { autostartAvailable, autostartOn, setAutostart, startedAtLogin } from './autostart'
 import { installScreenShare } from './screen'
 import { checkForUpdatesNow, installAutoUpdate, updatesActive } from './update'
 import {
@@ -1545,7 +1545,15 @@ function registerIpc(): void {
   ipcMain.handle('talk:setAppearance', (_e, theme: Theme, accent: string) => setAppearance(theme, accent))
   ipcMain.handle('talk:closeToTray', () => settings.closeToTray)
   ipcMain.handle('talk:setCloseToTray', (_e, on: boolean) => setCloseToTray(!!on))
-  ipcMain.handle('talk:openAtLogin', () => (autostartAvailable() ? settings.openAtLogin : null))
+  ipcMain.handle('talk:openAtLogin', () => {
+    if (!autostartAvailable()) return null
+    const on = autostartOn(settings.openAtLogin)
+    if (on !== settings.openAtLogin) {
+      settings.openAtLogin = on
+      saveSettings()
+    }
+    return on
+  })
   ipcMain.handle('talk:setOpenAtLogin', (_e, on: boolean) => {
     settings.openAtLogin = !!on
     saveSettings()

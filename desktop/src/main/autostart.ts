@@ -26,6 +26,15 @@ function command(): string[] {
   return [program, ...(app.isPackaged ? [] : [app.getAppPath()]), HIDDEN]
 }
 
+/**
+ * What the switch shows. On macOS the system's answer counts: the login item can be removed
+ * in the system settings („Anmeldeobjekte“), and then the stored setting would be wrong.
+ */
+export function autostartOn(stored: boolean): boolean {
+  if (process.platform !== 'darwin') return stored
+  return app.getLoginItemSettings().openAtLogin
+}
+
 export function setAutostart(on: boolean): void {
   if (process.platform === 'linux') {
     setLinuxEntry(on)
