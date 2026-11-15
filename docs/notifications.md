@@ -131,7 +131,7 @@ Beide gehen an das Konto der Benachrichtigung, ohne es aktiv zu machen.
 - **Windows:** dazu ein Zähler am Taskleistensymbol (`setOverlayIcon`): 1 bis 9, darüber „9+“. Ohne Ungelesenes ist er weg.
 - Beide Bildsätze erzeugt `design/icon/build-icons.py`.
 - **„Beim Anmelden starten“** unter „Allgemein“, standardmäßig aus, Untertitel „Wolkenfunk startet im Hintergrund, damit Nachrichten und Anrufe ankommen“.
-  - Windows und macOS: `setLoginItemSettings`.
+  - Windows und macOS: `setLoginItemSettings`. Auf macOS zeigt der Schalter den Stand des Systems: Wer das Anmeldeobjekt in den Systemeinstellungen entfernt, sieht ihn aus.
   - Linux: ein Eintrag in `~/.config/autostart`, beim AppImage mit `$APPIMAGE` als Programm. Im Flatpak fehlt der Schalter.
   - Ein so gestarteter Lauf zeigt kein Fenster, wo das System das zulässt. Ohne Tray-Dienst (GNOME ohne AppIndicator) bleibt er unsichtbar, bis man die App normal startet oder eine Benachrichtigung anklickt, wie bei „Beim Schließen im Hintergrund weiterlaufen“.
   - Auf macOS steht der Schalter als einziger auf der Seite „Allgemein“.
