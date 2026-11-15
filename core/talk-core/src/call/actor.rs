@@ -129,6 +129,8 @@ pub(crate) struct Shared {
 
 pub(crate) struct Ctx {
     pub client: TalkClient,
+    /// Ends the call's published state and frees the process-wide slot.
+    pub live: super::slot::Live,
     pub sink: Arc<dyn EventSink>,
     pub media: Arc<std::sync::RwLock<Option<Arc<dyn MediaEngine>>>>,
     pub shared: Arc<Shared>,
@@ -265,6 +267,7 @@ struct Reconnect {
 
 pub(crate) struct Actor {
     client: TalkClient,
+    live: super::slot::Live,
     sink: Arc<dyn EventSink>,
     media: Arc<dyn MediaEngine>,
     media_slot: Arc<std::sync::RwLock<Option<Arc<dyn MediaEngine>>>>,
@@ -393,6 +396,7 @@ impl Actor {
         let media = ctx.media.read().unwrap().clone().unwrap_or_else(|| Arc::new(NoMedia));
         Self {
             client: ctx.client,
+            live: ctx.live,
             sink: ctx.sink,
             media,
             media_slot: ctx.media,
@@ -2429,9 +2433,8 @@ impl Actor {
             let _ = tokio::time::timeout(LEAVE_TIMEOUT, client.leave_room(&token)).await;
         }
         self.ws = None;
-        *self.shared.tx.lock().unwrap() = None;
-        *self.shared.view.lock().unwrap() = None;
-        self.sink.emit(Event::CallChanged { call: None });
+        // Clears the call and reports `None`; the slot is free once this task is gone.
+        self.live.end();
     }
 }
 

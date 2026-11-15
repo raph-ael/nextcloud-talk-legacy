@@ -4,6 +4,12 @@
 //!
 //!     cargo run -p talk-demo -- --listen 0.0.0.0:8099
 //!
+//! Several accounts (docs/accounts.md): run a second instance with another user, and let
+//! somebody write to the signed-in user with the test hook:
+//!
+//!     cargo run -p talk-demo -- --listen 0.0.0.0:8098 --fixtures core/talk-demo/fixtures-b
+//!     curl -d token=mira -d text=Hallo http://127.0.0.1:8098/demo/incoming
+//!
 //! Calls and signaling are out of scope. Unknown endpoints are logged as
 //! "nicht implementiert" and answered with an empty OCS success.
 
@@ -50,6 +56,7 @@ pub fn router(app: App) -> Router {
         .route("/index.php/login/v2", post(files::login_start))
         .route("/index.php/login/v2/flow/{token}", get(files::login_page))
         .route("/index.php/login/v2/poll", post(files::login_poll))
+        .route("/demo/incoming", post(api::demo_incoming))
         .route("/ocs/v2.php/cloud/capabilities", get(api::capabilities))
         .route("/ocs/v2.php/cloud/user", get(api::cloud_user))
         .route("/ocs/v2.php/core/getapppassword", get(api::get_app_password))
@@ -100,7 +107,10 @@ pub fn router(app: App) -> Router {
 /// Any Basic auth is fine; without one, 401 like Nextcloud (the clients then sign out).
 async fn auth(req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    let public = path == "/" || path == "/status.php" || path.starts_with("/index.php/login/v2");
+    let public = path == "/"
+        || path == "/status.php"
+        || path.starts_with("/index.php/login/v2")
+        || path.starts_with("/demo/");
     let has_auth = req
         .headers()
         .get(header::AUTHORIZATION)

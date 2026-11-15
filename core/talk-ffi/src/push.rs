@@ -57,6 +57,29 @@ pub fn decrypt_push(device_key_pem: String, subject: String) -> Result<PushMessa
     Ok(core::push::decrypt(&device_key_pem, &subject)?.into())
 }
 
+/// The device key of one account, for [`decrypt_push_for`].
+#[derive(uniffi::Record, Clone)]
+pub struct PushKey {
+    pub account_id: String,
+    pub key_pem: String,
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct AccountPush {
+    pub account_id: String,
+    pub message: PushMessage,
+}
+
+/// Several accounts: every account has its own device key, and the key that decrypts a
+/// push names its account. `None` when no key fits (the account was removed meanwhile).
+/// Synchronous and without network like [`decrypt_push`].
+#[uniffi::export]
+pub fn decrypt_push_for(keys: Vec<PushKey>, subject: String) -> Option<AccountPush> {
+    let keys: Vec<(String, String)> = keys.into_iter().map(|k| (k.account_id, k.key_pem)).collect();
+    let (account_id, message) = core::push::decrypt_for(&keys, &subject)?;
+    Some(AccountPush { account_id, message: message.into() })
+}
+
 /// Caller name from a call push subject ("Bob möchte mit dir sprechen" → "Bob").
 #[uniffi::export]
 pub fn push_caller_name(subject: String) -> String {
@@ -89,8 +112,8 @@ impl TalkSession {
     /// CallKit), a delete re-checks a ringing call. A call that is already over still
     /// rings once and ends at once (`missed`), so a reported CallKit call gets its end.
     /// Returns `false` when nothing rings for it (already rung or declined here, or
-    /// another call in progress): unless `currentCall()` is this token, end the reported
-    /// CallKit call yourself.
+    /// another call in progress, also in another account): unless `currentCall()` is this
+    /// token, end the reported CallKit call yourself.
     pub async fn handle_push(&self, message: PushMessage, call_id: Option<String>) -> bool {
         self.engine.handle_push(message.into(), call_id).await
     }

@@ -1,0 +1,10 @@
+{
+  "me": "jonas",
+  "people": [
+    { "id": "jonas", "name": "Jonas Richter", "avatar": "../fixtures/avatars/jonas.png" },
+    { "id": "mira", "name": "Mira Lange", "avatar": "../fixtures/avatars/mira.png" },
+    { "id": "clara", "name": "Clara Vogel", "avatar": "../fixtures/avatars/clara.png" },
+    { "id": "tobias", "name": "Tobias Krüger", "avatar": "../fixtures/avatars/tobias.png" },
+    { "id": "emil", "name": "Emil Lange", "avatar": "../fixtures/avatars/emil.png" }
+  ]
+}

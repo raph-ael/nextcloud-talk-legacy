@@ -86,7 +86,11 @@ impl EventSink for Sink {
 }
 
 async fn serve() -> String {
-    let app = crate::app_from(fixtures()).unwrap();
+    serve_from(fixtures()).await
+}
+
+async fn serve_from(dir: &Path) -> String {
+    let app = crate::app_from(dir).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, crate::router(app)).await.unwrap() });
@@ -227,5 +231,86 @@ async fn engine_and_login_flow() {
     let info = engine.audio_info(&local).await.unwrap();
     assert!(info.duration_ms > 3000, "voice message decodes ({} ms)", info.duration_ms);
     engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Two accounts on two servers (docs/accounts.md): they are told apart, and a message
+/// for one of them shows in its badge only, by the rules for muted chats.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_accounts_and_their_badges() {
+    let a = serve().await;
+    let b = serve_from(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures-b"))).await;
+
+    let who_a = talk_core::resolve_account(&a, "demo", "demo", Platform::Cli).await.unwrap();
+    let who_b = talk_core::resolve_account(&b, "demo", "demo", Platform::Cli).await.unwrap();
+    assert_eq!((who_a.user_id.as_str(), who_b.user_id.as_str()), ("mira", "jonas"));
+    assert_eq!(who_b.display_name, "Jonas Richter");
+    assert_ne!(who_a.key, who_b.key);
+    // The same login again is the same account, however the address was typed.
+    let again = talk_core::resolve_account(&format!("{}/", b.to_uppercase().replace("HTTP", "http")), "x", "y", Platform::Cli)
+        .await
+        .unwrap();
+    assert_eq!(again.key, who_b.key);
+    talk_core::revoke_app_password(&b, "demo", "demo", Platform::Cli).await.unwrap();
+
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let engine = |server: &str, name: &str| {
+        let account = Account { server: server.into(), user: "demo".into(), app_password: "demo".into() };
+        let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+        Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink, Some(dir.join(name)))
+    };
+    let (ea, eb) = (engine(&a, "a"), engine(&b, "b"));
+    // Before the server answered, the login name stands in for the name.
+    assert_eq!(eb.display_name(), "demo");
+    ea.start().await.unwrap();
+    eb.start().await.unwrap();
+    assert_eq!(eb.display_name(), "Jonas Richter");
+
+    // Account A: only the group with a mention counts, the other unread groups are at
+    // "Nur Erwähnungen" by default.
+    let badge_a = ea.badge();
+    assert_eq!((badge_a.chats, badge_a.messages), (1, 2));
+    assert_eq!(eb.badge(), talk_core::BadgeView::default());
+
+    let incoming = |token: &'static str, text: &'static str| {
+        let url = format!("{b}/demo/incoming");
+        async move {
+            let r = reqwest::Client::new().post(url).form(&[("token", token), ("text", text)]).send().await.unwrap();
+            assert_eq!(r.status(), 201, "{token}");
+        }
+    };
+    // "Nur Erwähnungen": a plain message does not count, a mention does.
+    incoming("werkstatt", "Wer kommt am Donnerstag?").await;
+    eb.refresh_rooms(true).await.unwrap();
+    assert_eq!(eb.badge().chats, 0);
+    incoming("werkstatt", "@jonas bringst du den Ständer mit?").await;
+    // One-to-one and "Alle Nachrichten" always count.
+    incoming("mira", "Bist du schon da?").await;
+    incoming("garten", "Die Leiter steht am Tor.").await;
+    eb.refresh_rooms(true).await.unwrap();
+    let badge_b = eb.badge();
+    assert_eq!((badge_b.chats, badge_b.messages), (3, 4));
+    // Nothing of it reaches the other account, although both have a chat "garten".
+    ea.refresh_rooms(true).await.unwrap();
+    assert_eq!(ea.badge(), badge_a);
+    assert_ne!(
+        ea.rooms().iter().find(|r| r.token == "garten").unwrap().name,
+        eb.rooms().iter().find(|r| r.token == "garten").unwrap().name
+    );
+
+    // The name is known at once the next time, from the cache.
+    eb.shutdown();
+    drop(eb);
+    assert_eq!(engine(&b, "b").display_name(), "Jonas Richter");
+
+    // Only members can write, and not the user themselves.
+    let bad = reqwest::Client::new()
+        .post(format!("{b}/demo/incoming"))
+        .form(&[("token", "mira"), ("text", "x"), ("from", "jonas")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+    ea.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -106,6 +106,34 @@ pub fn decrypt(private_pem: &str, subject_b64: &str) -> Result<PushMessage> {
     Ok(classify(p))
 }
 
+/// Which account a push is for. Every account has its own device key, and the push
+/// itself does not name its account: the key that decrypts it does. `keys` are
+/// `(account id, private key PEM)`; returns the account id and the message, or `None`
+/// when no key fits (an account that was removed meanwhile).
+/// Synchronous and without network like [`decrypt`].
+pub fn decrypt_for(keys: &[(String, String)], subject_b64: &str) -> Option<(String, PushMessage)> {
+    let data = base64::engine::general_purpose::STANDARD.decode(subject_b64.trim()).ok()?;
+    let keys: Vec<(&str, RsaPrivateKey)> = keys
+        .iter()
+        .filter_map(|(id, pem)| Some((id.as_str(), RsaPrivateKey::from_pkcs8_pem(pem).ok()?)))
+        .collect();
+    let message = |raw: Vec<u8>| serde_json::from_slice::<Plain>(&raw).ok().map(classify);
+    // OAEP first, over all keys: it rejects a wrong key for certain. PKCS#1 v1.5 (old
+    // servers) can accept garbage from a wrong key once in a long while, so it comes
+    // last, and in both cases only a payload that parses counts.
+    for (id, key) in &keys {
+        if let Some(m) = key.decrypt(Oaep::new::<sha1::Sha1>(), &data).ok().and_then(message) {
+            return Some((id.to_string(), m));
+        }
+    }
+    for (id, key) in &keys {
+        if let Some(m) = key.decrypt(Pkcs1v15Encrypt, &data).ok().and_then(message) {
+            return Some((id.to_string(), m));
+        }
+    }
+    None
+}
+
 fn classify(p: Plain) -> PushMessage {
     if p.delete_all {
         return PushMessage::DeleteAll;
@@ -166,6 +194,28 @@ mod tests {
         }
         .unwrap();
         base64::engine::general_purpose::STANDARD.encode(data)
+    }
+
+    #[test]
+    fn the_key_that_fits_names_the_account() {
+        let keys: Vec<(String, String)> =
+            ["a", "b", "c"].iter().map(|id| (id.to_string(), generate_key().unwrap())).collect();
+        let call = r#"{"nid":7,"app":"spreed","subject":"Bob möchte mit dir sprechen","type":"call","id":"tok"}"#;
+        for oaep in [true, false] {
+            let push = encrypt(&public_key_pem(&keys[1].1).unwrap(), call, oaep);
+            let (account, message) = decrypt_for(&keys, &push).unwrap();
+            assert_eq!(account, "b");
+            assert!(matches!(message, PushMessage::Call { ref token, notification_id: 7, .. } if token == "tok"));
+            // The account is gone: nobody can read it.
+            assert!(decrypt_for(&[keys[0].clone(), keys[2].clone()], &push).is_none());
+        }
+        assert!(decrypt_for(&keys, "bm9wZQ==").is_none());
+        assert!(decrypt_for(&[], "bm9wZQ==").is_none());
+        // A broken key in the list does not hide the others.
+        let mut with_broken = vec![("x".to_string(), "kein Schlüssel".to_string())];
+        with_broken.extend(keys.clone());
+        let push = encrypt(&public_key_pem(&keys[2].1).unwrap(), call, true);
+        assert_eq!(decrypt_for(&with_broken, &push).unwrap().0, "c");
     }
 
     #[test]

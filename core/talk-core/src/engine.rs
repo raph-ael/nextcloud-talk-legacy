@@ -277,6 +277,8 @@ pub struct Engine {
     pub(crate) client: TalkClient,
     pub(crate) sink: Arc<dyn EventSink>,
     me: RwLock<String>,
+    /// How the server calls the user ("Anna Beispiel"); the user id until it is known.
+    display_name: RwLock<String>,
     /// `me` came from the server (the login name may differ from the user id).
     me_resolved: AtomicBool,
     online: AtomicBool,
@@ -316,6 +318,7 @@ impl Engine {
         Arc::new_cyclic(|weak| Self {
             client,
             sink,
+            display_name: RwLock::new(cache.meta("display_name").filter(|n| !n.is_empty()).unwrap_or_else(|| me.clone())),
             me: RwLock::new(me),
             me_resolved: AtomicBool::new(false),
             online: AtomicBool::new(true),
@@ -372,7 +375,7 @@ impl Engine {
         }
         let user = match self.guard(user) {
             Ok(u) => {
-                self.set_user(u.id);
+                self.set_user(u);
                 Ok(())
             }
             Err(Error::Unauthorized) => return Err(Error::Unauthorized),
@@ -435,15 +438,20 @@ impl Engine {
             return Ok(());
         }
         let user = self.guard(self.client.current_user().await)?;
-        self.set_user(user.id);
+        self.set_user(user);
         Ok(())
     }
 
-    fn set_user(&self, id: String) {
-        if *self.me.read().unwrap() != id {
-            *self.me.write().unwrap() = id.clone();
+    fn set_user(&self, user: crate::client::CurrentUser) {
+        let name = if user.display_name.is_empty() { user.id.clone() } else { user.display_name };
+        if *self.display_name.read().unwrap() != name {
+            *self.display_name.write().unwrap() = name.clone();
+            self.cache.set_meta("display_name", name);
         }
-        self.cache.set_meta("user_id", id);
+        if *self.me.read().unwrap() != user.id {
+            *self.me.write().unwrap() = user.id.clone();
+        }
+        self.cache.set_meta("user_id", user.id);
         self.me_resolved.store(true, Ordering::Relaxed);
     }
 
@@ -463,7 +471,8 @@ impl Engine {
     /// (automated tests in shared rooms). Fails if another call is in progress.
     /// `call_id`: optional id for the new call (iOS: the CallKit UUID); generated if `None`.
     pub async fn start_call(&self, token: &str, silent: bool, call_id: Option<String>) -> Result<()> {
-        if self.calls.busy() {
+        // One call per process: also busy while another account rings or talks.
+        if self.calls.busy_anywhere() {
             return Err(Error::Call {
                 code: "busy".into(),
                 message: "Es läuft bereits ein Anruf".into(),
@@ -613,6 +622,18 @@ impl Engine {
 
     pub fn user_id(&self) -> String {
         self.me.read().unwrap().clone()
+    }
+
+    /// The user's name as the server shows it, for the account list. From the cache at
+    /// once, up to date after [`Self::start`]; the user id while nothing else is known.
+    pub fn display_name(&self) -> String {
+        self.display_name.read().unwrap().clone()
+    }
+
+    /// What this account adds to badges: the app badge sums it over all accounts, the
+    /// account switcher shows it per account (docs/accounts.md).
+    pub fn badge(&self) -> crate::accounts::BadgeView {
+        crate::accounts::badge(&self.rooms())
     }
 
     pub fn rooms(&self) -> Vec<RoomView> {

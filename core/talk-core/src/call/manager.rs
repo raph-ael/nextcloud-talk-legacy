@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::actor::{Actor, Cmd, Ctx, Shared};
+use super::slot::{CallSlot, Holder, Live};
 use super::{CallDirection, CallRecording, CallState, CallView, MediaEngine, MediaReport};
 use crate::client::TalkClient;
 use crate::engine::{Event, EventSink};
@@ -27,12 +28,29 @@ pub(crate) struct RoomInfo {
     pub has_call: bool,
 }
 
-#[derive(Default)]
 pub(crate) struct CallManager {
     media: Arc<RwLock<Option<Arc<dyn MediaEngine>>>>,
     shared: Arc<Shared>,
     /// "token#notification id" → when it rang here (see [`RING_DEDUP`]).
     rung: Mutex<HashMap<String, Instant>>,
+    /// One call per process, across all accounts.
+    slot: Arc<CallSlot>,
+    /// This engine in the slot.
+    owner: u64,
+}
+
+impl Default for CallManager {
+    fn default() -> Self {
+        Self::with_slot(CallSlot::global())
+    }
+}
+
+/// What a call somewhere in this process means for a new incoming one here.
+enum Busy {
+    /// The very same call rings or runs under another account (two accounts of one
+    /// server in the same conversation): stay silent, it is not missed.
+    SameCall,
+    Other,
 }
 
 fn call_error(code: &str, message: &str) -> Error {
@@ -51,8 +69,49 @@ impl CallManager {
         self.shared.view.lock().unwrap().clone()
     }
 
+    pub(crate) fn with_slot(slot: Arc<CallSlot>) -> Self {
+        Self {
+            media: Default::default(),
+            shared: Default::default(),
+            rung: Default::default(),
+            slot,
+            owner: CallSlot::next_owner(),
+        }
+    }
+
+    /// This engine has a call (ringing counts).
     pub(crate) fn busy(&self) -> bool {
         self.shared.tx.lock().unwrap().is_some()
+    }
+
+    /// Some engine of this process has a call: a second one cannot start or ring.
+    pub(crate) fn busy_anywhere(&self) -> bool {
+        self.busy() || self.slot.holder().is_some()
+    }
+
+    /// The call in the slot is this engine's own call in `token`.
+    pub(crate) fn holds(&self, token: &str) -> bool {
+        self.slot.holder().is_some_and(|h| h.owner == self.owner && h.token == token)
+    }
+
+    fn busy_for(&self, client: &TalkClient, token: &str) -> Option<Busy> {
+        let h = self.slot.holder()?;
+        let same = h.owner != self.owner
+            && h.token == token
+            && h.server == crate::accounts::server_key(&client.account().server);
+        Some(if same { Busy::SameCall } else { Busy::Other })
+    }
+
+    fn ring_key(token: &str, notification_id: i64) -> String {
+        format!("{token}#{notification_id}")
+    }
+
+    /// This notification was handled here already (rang, was missed or was left to
+    /// another account), see [`RING_DEDUP`].
+    pub(crate) fn has_rung(&self, token: &str, notification_id: i64) -> bool {
+        let mut rung = self.rung.lock().unwrap();
+        rung.retain(|k, t| t.elapsed() < if k.ends_with("#0") { RING_DEDUP_UNKEYED } else { RING_DEDUP });
+        rung.contains_key(&Self::ring_key(token, notification_id))
     }
 
     fn send(&self, cmd: Cmd) -> bool {
@@ -75,17 +134,27 @@ impl CallManager {
         if view.state != CallState::Incoming && self.media.read().unwrap().is_none() {
             return Err(call_error("no-media-engine", "setMediaEngine was not called"));
         }
+        let busy = || call_error("busy", "Es läuft bereits ein Anruf");
+        let guard = self
+            .slot
+            .acquire(Holder {
+                owner: self.owner,
+                server: crate::accounts::server_key(&client.account().server),
+                token: view.token.clone(),
+            })
+            .ok_or_else(busy)?;
         let (tx, rx) = mpsc::unbounded_channel();
         {
             let mut slot = self.shared.tx.lock().unwrap();
             if slot.is_some() {
-                return Err(call_error("busy", "Es läuft bereits ein Anruf"));
+                return Err(busy());
             }
             *slot = Some(tx.clone());
         }
         *self.shared.view.lock().unwrap() = Some(view.clone());
         let ctx = Ctx {
             client,
+            live: Live::new(self.shared.clone(), sink.clone(), guard),
             sink,
             media: self.media.clone(),
             shared: self.shared.clone(),
@@ -130,8 +199,9 @@ impl CallManager {
         self.launch(client, sink, me, view, silent, runtime)
     }
 
-    /// An incoming call was detected. Returns `false` when it does not ring (another
-    /// call in progress, or it rang/was declined here a moment ago).
+    /// An incoming call was detected. Returns `false` when it does not ring: it rang or
+    /// was declined here a moment ago, or a call is in progress in this process. Then it
+    /// is reported as missed, unless it is the call another account is already in.
     pub(crate) fn ring(
         &self,
         client: TalkClient,
@@ -144,14 +214,22 @@ impl CallManager {
         runtime: &tokio::runtime::Handle,
     ) -> bool {
         {
-            let key = format!("{}#{notification_id}", room.token);
-            let mut rung = self.rung.lock().unwrap();
-            rung.retain(|k, t| t.elapsed() < if k.ends_with("#0") { RING_DEDUP_UNKEYED } else { RING_DEDUP });
-            if rung.contains_key(&key) {
+            if self.has_rung(&room.token, notification_id) {
                 return false;
             }
-            rung.insert(key, Instant::now());
-            if self.busy() {
+            self.rung
+                .lock()
+                .unwrap()
+                .insert(Self::ring_key(&room.token, notification_id), Instant::now());
+            let busy = match self.busy_for(&client, &room.token) {
+                None if self.busy() => Some(Busy::Other),
+                b => b,
+            };
+            if let Some(Busy::SameCall) = busy {
+                tracing::info!(token = %room.token, "incoming call rings under another account already");
+                return false;
+            }
+            if busy.is_some() {
                 // In a call already: no second ring, but tell the user (like Signal's
                 // "missed call" while busy).
                 tracing::info!(token = %room.token, "incoming call while busy: missed");
@@ -253,5 +331,135 @@ impl CallManager {
 
     pub(crate) fn force_rejoin(&self) {
         self.send(Cmd::ForceRejoin);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{Account, Platform};
+
+    /// Nothing listens there: every request fails at once, a ringing call keeps ringing.
+    const SERVER: &str = "http://127.0.0.1:9";
+    const OTHER_SERVER: &str = "http://127.0.0.1:10";
+
+    /// Records call events, and whether the slot was still taken when each arrived.
+    struct Seen {
+        slot: Arc<CallSlot>,
+        events: Mutex<Vec<String>>,
+    }
+
+    impl Seen {
+        fn new(slot: &Arc<CallSlot>) -> Arc<Self> {
+            Arc::new(Self { slot: slot.clone(), events: Mutex::default() })
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    impl EventSink for Seen {
+        fn emit(&self, event: Event) {
+            let held = self.slot.holder().is_some();
+            let line = match event {
+                Event::CallChanged { call: Some(c) } => format!("{:?}", c.state),
+                Event::CallChanged { call: None } => format!("none held={held}"),
+                Event::CallMissed { token, .. } => format!("missed {token}"),
+                _ => return,
+            };
+            self.events.lock().unwrap().push(line);
+        }
+    }
+
+    fn client(server: &str) -> TalkClient {
+        let account = Account { server: server.into(), user: "u".into(), app_password: "p".into() };
+        TalkClient::new(account, Platform::Cli).unwrap()
+    }
+
+    fn room(token: &str) -> RoomInfo {
+        RoomInfo { token: token.into(), name: "Raum".into(), is_group: false, has_call: true }
+    }
+
+    fn ring(m: &CallManager, server: &str, sink: &Arc<Seen>, token: &str, notification: i64) -> bool {
+        let rt = tokio::runtime::Handle::current();
+        m.ring(client(server), sink.clone(), "me".into(), room(token), "Bob".into(), notification, None, &rt)
+    }
+
+    async fn until_free(slot: &CallSlot) {
+        for _ in 0..500 {
+            if slot.holder().is_none() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the call slot was not freed");
+    }
+
+    #[tokio::test]
+    async fn one_call_across_accounts() {
+        let slot = Arc::new(CallSlot::default());
+        let (a, b, c) = (
+            CallManager::with_slot(slot.clone()),
+            CallManager::with_slot(slot.clone()),
+            CallManager::with_slot(slot.clone()),
+        );
+        let (sa, sb, sc) = (Seen::new(&slot), Seen::new(&slot), Seen::new(&slot));
+
+        // Account A rings: it holds the slot, the others are busy without a call of their own.
+        assert!(ring(&a, SERVER, &sa, "t1", 1));
+        assert!(a.busy() && a.holds("t1"));
+        assert!(!b.busy() && b.busy_anywhere() && !b.holds("t1"));
+
+        // Another call for account B meanwhile: no ring, reported as missed, once.
+        assert!(!ring(&b, SERVER, &sb, "t2", 5));
+        assert!(!ring(&b, SERVER, &sb, "t2", 5));
+        assert_eq!(sb.events(), ["missed t2"]);
+
+        // The same call for account B (both are in the conversation): silent, and
+        // remembered, so it does not ring later when A declines.
+        assert!(!ring(&b, SERVER, &sb, "t1", 6));
+        assert_eq!(sb.events(), ["missed t2"]);
+        assert!(b.has_rung("t1", 6));
+
+        // The same token on another server is a different call.
+        assert!(!ring(&c, OTHER_SERVER, &sc, "t1", 7));
+        assert_eq!(sc.events(), ["missed t1"]);
+
+        // B signing out does not wait for A's call.
+        tokio::time::timeout(Duration::from_millis(200), b.hang_up_and_wait(Duration::from_secs(5)))
+            .await
+            .expect("waited for another account's call");
+        assert!(a.busy());
+
+        // A declines: its last event arrives while the slot is still taken, then B can ring.
+        a.decline("t1");
+        until_free(&slot).await;
+        assert!(!a.busy() && a.current().is_none());
+        assert_eq!(sa.events().last().map(String::as_str), Some("none held=true"));
+        assert!(!ring(&b, SERVER, &sb, "t1", 6), "the call A declined rang for B");
+        assert!(ring(&b, SERVER, &sb, "t3", 8));
+        assert!(b.busy() && a.busy_anywhere() && !a.busy());
+        b.decline("t3");
+        until_free(&slot).await;
+        assert_eq!(sb.events().last().map(String::as_str), Some("none held=true"));
+    }
+
+    #[test]
+    fn a_dropped_call_frees_the_slot() {
+        let slot = Arc::new(CallSlot::default());
+        let sink = Seen::new(&slot);
+        let shared = Arc::new(Shared::default());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        *shared.tx.lock().unwrap() = Some(tx);
+        let guard = slot
+            .acquire(Holder { owner: 1, server: "s".into(), token: "t".into() })
+            .unwrap();
+        assert!(slot.acquire(Holder { owner: 2, server: "s".into(), token: "u".into() }).is_none());
+        // The call task goes away without its teardown (panic, runtime shut down).
+        drop(Live::new(shared.clone(), sink.clone(), guard));
+        assert!(slot.holder().is_none());
+        assert!(shared.tx.lock().unwrap().is_none());
+        assert_eq!(sink.events(), ["none held=true"]);
     }
 }

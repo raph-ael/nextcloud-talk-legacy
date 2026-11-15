@@ -11,7 +11,9 @@
 //! - [`call`]: audio calls over the HPB (signaling, call state machine; media via [`MediaEngine`])
 //!
 //! - [`push`]: push notifications (device key, registration, decryption)
+//! - [`accounts`]: several accounts side by side (identity, badge)
 
+pub mod accounts;
 pub mod call;
 pub mod categories;
 pub(crate) mod cache;
@@ -25,6 +27,7 @@ pub mod outbox;
 pub mod push;
 pub mod voice;
 
+pub use accounts::{AccountIdentity, BadgeView, account_key, resolve_account, revoke_app_password, server_key};
 pub use call::{
     CallDirection, CallParticipant, CallRecording, CallScreen, CallState, CallView, EndReason, IceCandidate, MediaEngine,
     RecordingNotice, RecordingNoticeKind,

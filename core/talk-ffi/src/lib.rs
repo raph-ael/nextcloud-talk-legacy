@@ -70,6 +70,49 @@ impl LoginFlow {
     }
 }
 
+/// Who a fresh login belongs to (docs/accounts.md).
+#[derive(uniffi::Record)]
+pub struct AccountIdentity {
+    pub user_id: String,
+    pub display_name: String,
+    /// The same for the same user on the same server, whatever the login name was: equal
+    /// to the key of an account in the list means "already signed in".
+    pub key: String,
+}
+
+/// Asks the server who signed in, before the account is stored and started.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn resolve_account(
+    server: String,
+    login_name: String,
+    app_password: String,
+    platform: ClientPlatform,
+) -> Result<AccountIdentity, CoreError> {
+    let a = core::resolve_account(&server, &login_name, &app_password, platform.into()).await?;
+    Ok(AccountIdentity { user_id: a.user_id, display_name: a.display_name, key: a.key })
+}
+
+/// Hands an app password back without a session, e.g. after a login that turned out to
+/// be an account which is signed in already.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn revoke_app_password(
+    server: String,
+    login_name: String,
+    app_password: String,
+    platform: ClientPlatform,
+) -> Result<(), CoreError> {
+    Ok(core::revoke_app_password(&server, &login_name, &app_password, platform.into()).await?)
+}
+
+/// What an account adds to badges (docs/settings.md, docs/accounts.md).
+#[derive(uniffi::Record)]
+pub struct BadgeView {
+    /// Conversations with something new that counts.
+    pub chats: u32,
+    /// Unread messages in those conversations.
+    pub messages: u32,
+}
+
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum CoreError {
     #[error("unauthorized")]
@@ -778,6 +821,19 @@ impl TalkSession {
 
     pub fn user_id(&self) -> String {
         self.engine.user_id()
+    }
+
+    /// The user's name as the server shows it, for the account list. From the cache at
+    /// once, up to date after `start()`; the user id while nothing else is known.
+    pub fn display_name(&self) -> String {
+        self.engine.display_name()
+    }
+
+    /// What this account adds to badges: muted and archived chats do not count, "Nur
+    /// Erwähnungen" only with a mention. Read it after every `RoomsChanged`.
+    pub fn badge(&self) -> BadgeView {
+        let b = self.engine.badge();
+        BadgeView { chats: b.chats, messages: b.messages }
     }
 
     /// Current conversation list (sorted).

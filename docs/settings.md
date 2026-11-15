@@ -6,7 +6,7 @@ Darin liegt „Darstellung“ mit Design und Akzentfarbe. Dazu kommt ein Menü a
 
 ## Einstieg
 
-- Ein Klick oder Tippen auf den **eigenen Avatar** oben links in der Chatliste öffnet die Einstellungen direkt. Das gilt auf allen Plattformen.
+- Ein Klick oder Tippen auf den **eigenen Avatar** oben links in der Chatliste öffnet die Einstellungen direkt. Das gilt auf allen Plattformen. Ab zwei Konten öffnet er stattdessen das Kontomenü, das auch zu den Einstellungen führt (`docs/accounts.md`).
 - **Desktop:**
   - Das „⋯“-Menü enthält nur noch „Einstellungen“ und „Kategorien verwalten“ (nur bei `categoriesSupported`). Kontoinfo und „Abmelden“ ziehen in die Einstellungen.
   - Der Kurzbefehl ist Strg+, bzw. ⌘,.
@@ -30,7 +30,9 @@ Darin liegt „Darstellung“ mit Design und Akzentfarbe. Dazu kommt ein Menü a
    | Benachrichtigungen | nur Android und iOS | Glocke |
    | Chats | nur Desktop, nur bei `categoriesSupported` | Sprechblase |
    | Über Wolkenfunk | alle | Info-Kreis |
-3. **Ganz unten** steht **„Abmelden“** in `danger`, mit der bisherigen Bestätigung der Plattform.
+3. **Ganz unten** steht **„Abmelden“** in `danger`. Es meldet das aktive Konto ab und fragt auf allen Plattformen nach; Text und Ablauf stehen in `docs/accounts.md`.
+
+Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Konto hinzufügen“ (`docs/accounts.md`).
 
 ### „Allgemein“ (Desktop)
 
@@ -198,6 +200,8 @@ Es öffnet sich am Desktop per Rechtsklick auf einen Chat in der Liste, mit der 
 | 3 „Aus“ | kleine durchgestrichene Glocke in `muted` hinter dem Namen, Zahl grau | zählt nicht mit |
 
 Das „@“-Schild bei einer Erwähnung bleibt immer in `accent`.
+
+Was für den Badge zählt, rechnet der Kern: `badge()` liefert `{chats, messages}` nach der rechten Spalte. Mit mehreren Konten ist der Badge die Summe über alle (`docs/accounts.md`).
 
 ## Kern-Vertrag
 

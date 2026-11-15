@@ -452,6 +452,33 @@ pub async fn chat_post(AxState(app): S, Path(token): Path<String>, p: Params) ->
     ocs_with_headers(StatusCode::CREATED, data, &chat_headers(None, r.common_read()))
 }
 
+/// Test hook, not part of Nextcloud: somebody else writes into a conversation, so the
+/// signed-in user gets something unread (several accounts: the badge of the account you
+/// are not in, docs/accounts.md). `token`, `text` ("@id" mentions) and optionally `from`
+/// (a member; default: the first other member).
+pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
+    let mut st = app.st.lock().unwrap();
+    let token = p.str("token").unwrap_or_default();
+    let text = p.str("text").unwrap_or_default();
+    if text.trim().is_empty() {
+        return bad_request("text");
+    }
+    let Some(room) = st.room(&token) else { return not_found() };
+    let from = p
+        .str("from")
+        .or_else(|| room.members.iter().find(|m| m.person != st.me).map(|m| m.person.clone()))
+        .unwrap_or_default();
+    if from == st.me || !room.is_member(&from) {
+        return bad_request("from");
+    }
+    let (text, params) = st.mentions(&text);
+    let mut m = st.new_msg(&from, text);
+    m.params = params;
+    let Some(id) = st.push_msg(&token, m) else { return not_found() };
+    let r = st.room(&token).unwrap();
+    ocs_status(StatusCode::CREATED, st.msg_json(r, r.msg(id).unwrap(), true))
+}
+
 pub async fn read_marker(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {
     let mut st = app.st.lock().unwrap();
     let Some(r) = st.room_mut(&token) else { return not_found() };

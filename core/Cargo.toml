@@ -45,3 +45,11 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# RSA is unusably slow without optimisation: a push is decrypted inside the PushKit
+# callback, with several accounts once per device key.
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

@@ -54,16 +54,19 @@ impl Engine {
             }
         };
         self.update_recording_notices(&list);
-        if self.calls.busy() {
-            return;
-        }
+        // A call somewhere in this process (any account): nothing else rings, but a call
+        // that comes in meanwhile is reported as missed, once (`ring_token` decides).
+        let busy = self.calls.busy_anywhere();
         for n in call_notifications(&list) {
+            if self.calls.holds(&n.token) || self.calls.has_rung(&n.token, n.id) {
+                continue;
+            }
             // Only calls that still ring (the notification stays after a missed call).
             match self.client.ring_state(&n.token).await {
                 Ok(RingState::Ringing) => {}
                 _ => continue,
             }
-            if self.ring_token(&n.token, &n.caller, n.id, None, true).await {
+            if self.ring_token(&n.token, &n.caller, n.id, None, true).await && !busy {
                 return;
             }
         }

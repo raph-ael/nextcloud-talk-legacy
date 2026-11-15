@@ -87,6 +87,26 @@ pub async fn start_login(server: String) -> Result<LoginFlow> {
     })
 }
 
+/// Asks the server who signed in, before the account is stored and started:
+/// `{ userId, displayName, key }`. `key` is the same for the same user on the same server,
+/// whatever the login name was (docs/accounts.md).
+#[napi(ts_return_type = "Promise<{ userId: string; displayName: string; key: string }>")]
+pub async fn resolve_account(server: String, login_name: String, app_password: String) -> Result<Value> {
+    let a = core::resolve_account(&server, &login_name, &app_password, core::Platform::Desktop)
+        .await
+        .map_err(to_napi)?;
+    json(&a)
+}
+
+/// Hands an app password back without a session, e.g. after a login that turned out to
+/// be an account which is signed in already.
+#[napi]
+pub async fn revoke_app_password(server: String, login_name: String, app_password: String) -> Result<()> {
+    core::revoke_app_password(&server, &login_name, &app_password, core::Platform::Desktop)
+        .await
+        .map_err(to_napi)
+}
+
 #[napi]
 impl LoginFlow {
     #[napi(getter)]
@@ -245,6 +265,20 @@ impl TalkSession {
     #[napi(getter)]
     pub fn user_id(&self) -> String {
         self.engine.user_id()
+    }
+
+    /// The user's name as the server shows it, for the account list. From the cache at
+    /// once, up to date after `start()`; the user id while nothing else is known.
+    #[napi(getter)]
+    pub fn display_name(&self) -> String {
+        self.engine.display_name()
+    }
+
+    /// What this account adds to badges: `{ chats, messages }`. Muted and archived chats
+    /// do not count, "Nur Erwähnungen" only with a mention.
+    #[napi(ts_return_type = "{ chats: number; messages: number }")]
+    pub fn badge(&self) -> Result<Value> {
+        json(&self.engine.badge())
     }
 
     #[napi(ts_return_type = "any[]")]

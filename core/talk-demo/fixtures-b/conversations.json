@@ -1,0 +1,59 @@
+{
+  "_hinweis": "Zweiter Demo-Server für Tests mit mehreren Konten (docs/accounts.md): ein anderer Benutzer auf einem anderen Server, zu Beginn ohne Ungelesenes. Format wie in ../fixtures/conversations.json. Der Token \"garten\" gibt es absichtlich auf beiden Servern mit anderem Namen und Bild: Was nur nach Token zwischenspeichert, zeigt hier das Falsche.",
+  "categories": [
+    { "id": "3", "name": "Verein", "rooms": ["garten", "werkstatt"] }
+  ],
+  "rooms": [
+    {
+      "token": "garten",
+      "type": "group",
+      "name": "Kleingartenverein",
+      "description": "Parzellen, Termine und Wasseruhr",
+      "avatar": "../fixtures/avatars/sommerfest.png",
+      "owner": "clara",
+      "members": ["clara", "jonas", "emil"],
+      "notify": 1,
+      "messages": [
+        { "at": "-9 18:00", "from": "clara", "system": "conversation_created" },
+        { "at": "-9 18:01", "from": "clara", "system": "user_added", "user": "jonas" },
+        { "at": "-3 19:12", "from": "clara", "text": "Die Wasseruhr wird am Samstag abgelesen. Bitte die Parzellen offen lassen." },
+        { "at": "-3 19:40", "from": "jonas", "text": "Alles klar, ich bin ab zehn da." },
+        { "at": "-1 08:15", "from": "emil", "text": "Ich bringe die Leiter mit." }
+      ]
+    },
+    {
+      "token": "mira",
+      "type": "one-to-one",
+      "with": "mira",
+      "messages": [
+        { "at": "-2 17:30", "from": "mira", "text": "Kommst du am Wochenende zum Beet?" },
+        { "at": "-2 17:42", "from": "jonas", "text": "Ja, Samstag gegen elf. Ich bringe Erde mit." },
+        { "at": "-2 17:43", "from": "mira", "text": "Perfekt 🌱" }
+      ]
+    },
+    {
+      "token": "werkstatt",
+      "type": "group",
+      "name": "Fahrradwerkstatt",
+      "description": "Offene Werkstatt, jeden Donnerstag",
+      "owner": "tobias",
+      "members": ["tobias", "jonas", "clara"],
+      "notify": 2,
+      "messages": [
+        { "at": "-7 16:00", "from": "tobias", "system": "conversation_created" },
+        { "at": "-7 16:02", "from": "tobias", "system": "user_added", "user": "jonas" },
+        { "at": "-5 20:10", "from": "tobias", "text": "Donnerstag ist die Werkstatt wieder offen. Wer hat den Montageständer?" },
+        { "at": "-5 20:31", "from": "jonas", "text": "Der steht bei mir im Keller, ich bringe ihn mit." }
+      ]
+    },
+    {
+      "token": "clara",
+      "type": "one-to-one",
+      "with": "clara",
+      "messages": [
+        { "at": "-6 12:05", "from": "clara", "text": "Danke fürs Gießen letzte Woche!" },
+        { "at": "-6 12:20", "from": "jonas", "text": "Gern geschehen." }
+      ]
+    }
+  ]
+}

@@ -279,6 +279,7 @@ mod incoming;
 mod manager;
 mod proto;
 mod recording;
+mod slot;
 pub use recording::{RecordingNotice, RecordingNoticeKind};
 pub(crate) use recording::Recordings;
 pub(crate) use manager::{CallManager, RoomInfo};

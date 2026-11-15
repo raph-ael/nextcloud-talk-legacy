@@ -74,8 +74,15 @@ Anrufansicht. Neue Anrufe sind sofort möglich.
 
 **Ein Anruf gleichzeitig:**
 - Ein zweiter eingehender Anruf während eines Anrufs klingelt nicht. Der Kern meldet ihn
-  später als verpassten Anruf.
+  als verpassten Anruf, einmal, egal ob er per Push, notify_push oder Raumliste ankommt.
 - `startCall` während eines Anrufs schlägt fehl (`Call { code: "busy" }`).
+- Das gilt **über alle Konten des Prozesses** (`docs/accounts.md`): Klingelt oder läuft ein
+  Anruf in einem Konto, sind alle anderen besetzt.
+  - Sind zwei Konten desselben Servers im selben Raum, klingelt der Anruf nur im ersten.
+    Das zweite bleibt still und meldet ihn auch nicht als verpasst.
+  - `CallChanged { call: None }` kommt, bevor ein anderes Konto klingeln oder anrufen kann.
+  - Geht die Anruf-Aufgabe verloren (Absturz), räumt der Kern trotzdem auf: `CallChanged
+    { call: None }`, und der nächste Anruf ist möglich.
 
 ## Events
 
