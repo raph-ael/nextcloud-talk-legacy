@@ -81,6 +81,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.4.0" date="2026-11-15" type="development">
+      <description>
+        <p>Mehrere Konten: mit mehreren Nextcloud-Konten gleichzeitig anmelden und über den eigenen Avatar zwischen ihnen wechseln.</p>
+        <p>Konten im Hintergrund melden sich weiter: mit einer Zahl am Avatar, mit Benachrichtigungen und mit klingelnden Anrufen. Ein Klick wechselt ins passende Konto.</p>
+        <p>„Abmelden“ fragt jetzt nach und meldet nur das aktive Konto ab.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-14" type="development">
       <description>
         <p>Neuer Bereich „Einstellungen“ mit Darstellung: Design hell, dunkel oder wie das System, dazu zehn Akzentfarben.</p>
