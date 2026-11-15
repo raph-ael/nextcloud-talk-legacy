@@ -102,7 +102,8 @@ for name in "${!APKS[@]}"; do
     || { echo "$apk is not org.wolkenfunk.app $VERSION ($CODE): $badging" >&2; exit 1; }
   if [ "$WITHOUT_PUSH" != 1 ]; then
     # The Firebase config made it into the APK ...
-    "$BUILD_TOOLS/aapt2" dump resources "$apk" | grep -q 'string/google_app_id' \
+    # (grep -c reads to the end: with -q it would close the pipe and fail under pipefail)
+    "$BUILD_TOOLS/aapt2" dump resources "$apk" | grep -c 'string/google_app_id' >/dev/null \
       || { echo "$apk has no Firebase config (google-services.json not applied): no push" >&2; exit 1; }
   fi
 done
