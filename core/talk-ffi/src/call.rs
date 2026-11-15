@@ -410,6 +410,28 @@ impl TalkSession {
         self.engine.decline_call(&token);
     }
 
+    /// `decline_call`, and waits (at most `timeout_ms`) until the call has ended for the
+    /// caller too (1:1). Hold background time for it where the system suspends the app
+    /// right after a decline.
+    pub async fn decline_call_and_wait(&self, token: String, timeout_ms: u32) {
+        self.engine
+            .decline_call_and_wait(&token, std::time::Duration::from_millis(timeout_ms.into()))
+            .await;
+    }
+
+    /// The system stopped ringing without an answer, or refused to show the call: it ends
+    /// here as `missed` (with `CallMissed`), the caller keeps ringing.
+    pub fn miss_call(&self, token: String) {
+        self.engine.miss_call(&token);
+    }
+
+    /// `miss_call`, and waits (at most `timeout_ms`) until the call is gone here.
+    pub async fn miss_call_and_wait(&self, token: String, timeout_ms: u32) {
+        self.engine
+            .miss_call_and_wait(&token, std::time::Duration::from_millis(timeout_ms.into()))
+            .await;
+    }
+
     /// Avatar of a call participant (`CallParticipant.user_id`).
     pub async fn user_avatar(&self, user_id: String, dark: bool) -> Result<Vec<u8>, CoreError> {
         Ok(self.engine.user_avatar(&user_id, dark).await?.0)

@@ -101,6 +101,9 @@ enum Leave {
 pub(crate) enum Cmd {
     Accept,
     Decline,
+    /// Ringing ended on this device without an answer (the system gave up or refused to
+    /// show the call): missed, and nothing ends for the caller.
+    Miss,
     HangUp,
     Mute(bool),
     Camera(bool),
@@ -125,6 +128,24 @@ pub(crate) enum Cmd {
 pub(crate) struct Shared {
     pub view: Mutex<Option<CallView>>,
     pub tx: Mutex<Option<mpsc::UnboundedSender<Cmd>>>,
+    /// Declines that still end the call for the caller (see `decline_for_caller`).
+    pub declining: std::sync::atomic::AtomicUsize,
+}
+
+/// Counts a running decline in [`Shared::declining`] until it is dropped.
+struct Declining(Arc<Shared>);
+
+impl Declining {
+    fn new(shared: &Arc<Shared>) -> Self {
+        shared.declining.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(shared.clone())
+    }
+}
+
+impl Drop for Declining {
+    fn drop(&mut self) {
+        self.0.declining.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 pub(crate) struct Ctx {
@@ -500,6 +521,7 @@ impl Actor {
             tokio::select! {
                 cmd = self.rx.recv() => match cmd {
                     None | Some(Cmd::HangUp) | Some(Cmd::Decline) => return Err(EndReason::Declined),
+                    Some(Cmd::Miss) => return Err(EndReason::Missed),
                     Some(Cmd::Accept) => {
                         // The caller may have given up a moment ago: joining then would
                         // start a new call and ring them back.
@@ -1072,7 +1094,7 @@ impl Actor {
                     return Some(EndReason::Declined);
                 }
             }
-            Cmd::Accept | Cmd::RecheckRing => {}
+            Cmd::Accept | Cmd::Miss | Cmd::RecheckRing => {}
             Cmd::Mute(m) => {
                 self.muted = m;
                 self.view.muted = m;
@@ -2384,7 +2406,10 @@ impl Actor {
             let token = self.token();
             let me = self.me.clone();
             let id = self.view.id.clone();
+            // Counted before the call is gone, so `decline_and_wait` sees it in time.
+            let declining = Declining::new(&self.shared);
             tokio::spawn(async move {
+                let _declining = declining;
                 match tokio::time::timeout(DECLINE_TIMEOUT, decline_for_caller(&client, &token, &me)).await {
                     Ok(Ok(true)) => tracing::info!(call = %id, "declined: call ended for the caller"),
                     Ok(Ok(false)) => tracing::info!(call = %id, "declined: nothing to end"),

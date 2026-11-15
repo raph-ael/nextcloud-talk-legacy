@@ -281,6 +281,39 @@ impl CallManager {
         }
     }
 
+    /// Declines and waits until the call has ended for the caller too (1:1), or
+    /// `timeout` passed. Also waits for a decline that is already on its way.
+    pub(crate) async fn decline_and_wait(&self, token: &str, timeout: Duration) {
+        self.decline(token);
+        let deadline = Instant::now() + timeout;
+        while (self.busy() || self.declining()) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    fn declining(&self) -> bool {
+        self.shared.declining.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+
+    /// The incoming call of `token` stopped ringing here without an answer: it ends as
+    /// missed, and nothing changes for the caller. Returns whether such a call rang.
+    pub(crate) fn miss(&self, token: &str) -> bool {
+        self.current()
+            .is_some_and(|v| v.token == token && v.state == CallState::Incoming)
+            && self.send(Cmd::Miss)
+    }
+
+    /// [`Self::miss`], and waits until the call is gone here (or `timeout` passed).
+    pub(crate) async fn miss_and_wait(&self, token: &str, timeout: Duration) {
+        if !self.miss(token) {
+            return;
+        }
+        let deadline = Instant::now() + timeout;
+        while self.busy() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     pub(crate) fn hang_up(&self) {
         self.send(Cmd::HangUp);
     }
@@ -443,6 +476,35 @@ mod tests {
         b.decline("t3");
         until_free(&slot).await;
         assert_eq!(sb.events().last().map(String::as_str), Some("none held=true"));
+    }
+
+    #[tokio::test]
+    async fn miss_and_decline_wait_until_the_call_is_gone() {
+        let slot = Arc::new(CallSlot::default());
+        let a = CallManager::with_slot(slot.clone());
+        let sa = Seen::new(&slot);
+
+        // The system stopped ringing: missed, reported once, and the slot is free on return.
+        assert!(ring(&a, SERVER, &sa, "t1", 1));
+        assert!(!a.miss("other"), "a call in another conversation was missed");
+        a.miss_and_wait("t1", Duration::from_secs(5)).await;
+        assert!(!a.busy() && slot.holder().is_none());
+        assert_eq!(sa.events(), ["Incoming", "missed t1", "Ended", "none held=true"]);
+        assert!(!a.miss("t1"), "a call that is over was missed again");
+
+        // Declining: back only when the request for the caller is through (here it fails
+        // at once, nothing listens).
+        assert!(ring(&a, SERVER, &sa, "t2", 2));
+        tokio::time::timeout(Duration::from_secs(5), a.decline_and_wait("t2", Duration::from_secs(20)))
+            .await
+            .expect("the decline did not finish");
+        assert!(!a.busy() && !a.declining() && slot.holder().is_none());
+        assert!(!sa.events().contains(&"missed t2".to_string()));
+
+        // No call: returns at once.
+        tokio::time::timeout(Duration::from_millis(200), a.decline_and_wait("t2", Duration::from_secs(5)))
+            .await
+            .expect("waited without a call");
     }
 
     #[test]

@@ -600,6 +600,24 @@ impl Engine {
         self.calls.decline(token);
     }
 
+    /// [`Self::decline_call`], and waits (at most `timeout`) until the call has ended for
+    /// the caller as well (1:1). For platforms that are suspended right after a decline.
+    pub async fn decline_call_and_wait(&self, token: &str, timeout: Duration) {
+        self.calls.decline_and_wait(token, timeout).await;
+    }
+
+    /// The incoming call of `token` stopped ringing on this device without an answer (the
+    /// system ended it or refused to show it): it ends as `missed` with `CallMissed`, and
+    /// the caller keeps ringing. No-op when no such call rings here.
+    pub fn miss_call(&self, token: &str) {
+        self.calls.miss(token);
+    }
+
+    /// [`Self::miss_call`], and waits (at most `timeout`) until the call is gone here.
+    pub async fn miss_call_and_wait(&self, token: &str, timeout: Duration) {
+        self.calls.miss_and_wait(token, timeout).await;
+    }
+
     /// Leaves the current call (or stops dialing). No-op without a call.
     pub fn hang_up(&self) {
         self.calls.hang_up();

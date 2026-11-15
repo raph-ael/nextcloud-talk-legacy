@@ -72,6 +72,16 @@ Anrufansicht. Neue Anrufe sind sofort möglich.
 **Ablehnen:** siehe `declined` oben: Bei 1:1 endet der Anruf auch beim Anrufer
 („Abgelehnt“), bei Gruppen hört nur hier das Klingeln auf.
 
+**Wenn das System die App nach dem Ablehnen anhält** (iOS nach dem Ende in CallKit): Der
+Kern beendet den Anruf für den Anrufer erst nach `ended(declined)`, in einer eigenen
+Anfrage. Die Plattform hält deshalb Hintergrundzeit, bis `declineCallAndWait` zurück ist.
+Sonst sieht der Anrufer nach 60 s „Keine Antwort“.
+
+**Wenn das System das Klingeln selbst beendet oder verweigert** (Zeitlimit von CallKit,
+Fokus, Sperre): Das ist kein Ablehnen. Die Plattform ruft `missCall`, bevor sie angehalten
+wird. Ohne den Aufruf bleibt der Anruf im Kern auf `incoming`, bis die App wieder läuft,
+und so lange sind alle Konten besetzt.
+
 **Ein Anruf gleichzeitig:**
 - Ein zweiter eingehender Anruf während eines Anrufs klingelt nicht. Der Kern meldet ihn
   als verpassten Anruf, einmal, egal ob er per Push, notify_push oder Raumliste ankommt.
@@ -120,6 +130,9 @@ Klingeln funktioniert auch ohne `setMediaEngine`. Annehmen ohne MediaEngine ende
 | `startCall(token, silent, callId?)` | anrufen bzw. laufendem Anruf beitreten; `silent=true`: niemand wird angeklingelt (nur Tests) |
 | `acceptCall(token)` | eingehenden Anruf annehmen |
 | `declineCall(token)` | Klingeln hier beenden |
+| `declineCallAndWait(token, timeoutMs)` | wie `declineCall`, kehrt aber erst zurück, wenn der Anruf bei 1:1 auch beim Anrufer beendet ist (oder die Zeit um ist); nur Android/iOS |
+| `missCall(token)` | das System hat das Klingeln ohne Antwort beendet oder den Anruf gar nicht gezeigt: Ende als `missed` mit `CallMissed`, beim Anrufer klingelt es weiter; nur Android/iOS |
+| `missCallAndWait(token, timeoutMs)` | wie `missCall`, kehrt zurück, sobald der Anruf hier weg ist |
 | `hangUp()` | auflegen / Wählen abbrechen |
 | `hangUpAndWait(timeoutMs)` | auflegen und warten, bis der Server es weiß (vor dem Beenden der App; `shutdown` legt nur best effort auf) |
 | `setCallMuted(bool)` | stumm |
