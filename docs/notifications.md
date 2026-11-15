@@ -60,12 +60,14 @@ Der Kern merkt sich pro Chat die zuletzt gemeldete Nachricht und speichert das. 
 | Text, Gruppe | „{Autor}: {Nachricht}“, auf Android der Autor als `Person` im `MessagingStyle` |
 | Anhang | die Bezeichnungen der Chatliste: „🎤 Sprachnachricht“, „📷 Foto“, „🎬 Video“, „📎 {Name}“ |
 | ohne lesbaren Text | „Neue Nachricht“ |
-| Kontozeile | ab zwei Konten „{Name} · {Server}“, wie in `docs/accounts.md` |
+| Kontozeile | ab zwei Konten „{Name} · {Server}“, wie in `docs/accounts.md`. Android zeichnet `setSubText` im `MessagingStyle` nicht: Dort steht sie zusätzlich im Gesprächstitel, „{Chat} – {Name} · {Server}“ (`setConversationTitle`, mit `setGroupConversation` passend zum Chat). |
 | Ton | der Standardton des Systems |
 
 Bei Push kommt der Text aus dem Push selbst, ohne Netz: `pushChatParts(subject, roomName)` liefert Absender und Text. Den Titel bestimmt die App trotzdem aus der Chatliste, denn der Server schreibt bei Gruppen „Bob in Projekt“ in die erste Zeile, in der Sprache des Benutzers. Kennt die App den Chat noch nicht, nimmt sie die erste Zeile.
 
 Reaktionen und Erinnerungen kommen ebenfalls als Nachrichten-Push. Sie haben keinen Zeilenumbruch und stehen dann ganz im Text.
+
+Ein Push, der nicht zu Talk gehört (auch der von „Push testen“), erscheint als einfache Benachrichtigung: Titel „Wolkenfunk“, Text aus dem Push, ohne Chat. Antippen öffnet die App.
 
 ## Eine Benachrichtigung pro Chat
 
@@ -83,6 +85,9 @@ Reaktionen und Erinnerungen kommen ebenfalls als Nachrichten-Push. Sie haben kei
 
 - Der Server meldet „gelesen“: Android und iOS entfernen die Benachrichtigungen mit diesen IDs, nur im Konto des Push. Dafür merkt sich jede Benachrichtigung alle ihre IDs.
 - `noticesCleared { tokens }` aus dem Kern: Der Chat ist gelesen, archiviert oder weg. Alle Plattformen entfernen seine Benachrichtigung.
+  - Es kommt auch für Benachrichtigungen aus einem früheren Lauf: wenn der Chat beim letzten Mal Ungelesenes hatte und jetzt keines mehr, und immer, wenn hier gelesen, geantwortet oder „Als gelesen markieren“ gewählt wurde.
+  - Es kann für denselben Chat mehrfach kommen. Das Entfernen muss das vertragen.
+- **Android** gleicht zusätzlich bei jedem `roomsChanged` ab: Die Benachrichtigung eines Chats ohne Ungelesenes verschwindet, wenn sie älter als 15 Sekunden ist. Die Frist schützt eine frische Benachrichtigung vor einer Chatliste, die vor ihr abgerufen wurde.
 - Der Benutzer öffnet den Chat.
 - **iOS** gleicht zusätzlich bei jedem Wechsel in den Vordergrund ab: Benachrichtigungen von Chats ohne Ungelesenes verschwinden, der Zähler wird neu gesetzt. Löschungen kommen dort nicht zuverlässig an.
 
@@ -99,7 +104,7 @@ Wechselt ins Konto und öffnet den Chat (`docs/accounts.md`). Während eines Anr
 | Aktion | Wirkung |
 |---|---|
 | „Antworten“ | Der Text geht sofort in den Postausgang (`enqueueText`), auch bei beendeter App. Danach zeigt die Benachrichtigung die eigene Antwort bzw. verschwindet, sobald der Chat als gelesen gilt. Die App muss sie in jedem Fall neu setzen, sonst dreht der Ladekreis weiter. |
-| „Als gelesen markieren“ | `markRoomRead(token)`, die Benachrichtigung verschwindet. |
+| „Als gelesen markieren“ | `markRoomRead(token)`, die Benachrichtigung verschwindet. Der Kern fragt dafür die neueste Nachricht beim Server ab, weil die Chatliste nach einem Kaltstart älter sein kann als die Benachrichtigung. |
 
 Beide gehen an das Konto der Benachrichtigung, ohne es aktiv zu machen.
 

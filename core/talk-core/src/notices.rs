@@ -125,8 +125,13 @@ impl Notices {
             if announce {
                 self.shown.insert(room.token.clone());
                 scan.notify.push(room.token.clone());
-            } else if (room.unread_messages == 0 || room.is_archived) && self.shown.remove(&room.token) {
-                scan.cleared.push(room.token.clone());
+            } else if room.unread_messages == 0 || room.is_archived {
+                // Announced in this run, or it had unread messages when last seen (also
+                // in an earlier run: the notification may have outlived the process).
+                let was_unread = before.is_some_and(|b| b.unread > 0) && room.unread_messages == 0;
+                if self.shown.remove(&room.token) || was_unread {
+                    scan.cleared.push(room.token.clone());
+                }
             }
             let kept = Mark { stamp: now.stamp.max(before.map_or(0, |b| b.stamp)), unread: now.unread };
             if before != Some(kept) {
@@ -153,10 +158,16 @@ impl Notices {
     /// A conversation changed here (read, sent, archived): nothing to announce, but its
     /// notification may be obsolete. The stamp stays, so a message that arrived in an open
     /// chat is still announced by the next list (the platform decides whether to show it).
-    pub(crate) fn local(&mut self, room: &Room) -> Scan {
+    /// `read_here`: the user read or answered it in this app. Then it is cleared whatever
+    /// the core knows: a notification from a push may be older than this process, e.g.
+    /// when "Antworten" in the notification started the app.
+    pub(crate) fn local(&mut self, room: &Room, read_here: bool) -> Scan {
         let mut scan = Scan::default();
-        if (room.unread_messages == 0 || room.is_archived) && self.shown.remove(&room.token) {
-            scan.cleared.push(room.token.clone());
+        if room.unread_messages == 0 || room.is_archived {
+            let was_unread = self.marks.get(&room.token).is_some_and(|m| m.unread > 0) && room.unread_messages == 0;
+            if self.shown.remove(&room.token) || was_unread || read_here {
+                scan.cleared.push(room.token.clone());
+            }
         }
         if let Some(mark) = self.marks.get_mut(&room.token)
             && mark.unread != room.unread_messages
@@ -295,6 +306,28 @@ mod tests {
         assert_eq!(n.server(&[left], false, own, false).notify, ["g"]);
     }
 
+    /// The notification may be older than this process (a push while the app was closed).
+    #[test]
+    fn clears_what_an_earlier_run_left_unread() {
+        // Last run: one unread message, stored.
+        let mut last = started(&[room("a", 1, Some((1, "bob")), 0)]);
+        last.server(&[room("a", 1, Some((2, "bob")), 1)], false, own, false);
+        let stored = last.store();
+
+        // Read elsewhere while the app was closed: the first list of the new run clears it.
+        let mut next = Notices::load(Some(stored.clone()), &[]);
+        assert_eq!(next.server(&[room("a", 1, Some((2, "bob")), 0)], true, own, false).cleared, ["a"]);
+        // ... once.
+        assert!(next.server(&[room("a", 1, Some((2, "bob")), 0)], true, own, false).cleared.is_empty());
+
+        // "Antworten" in the notification started the app and the answer went out before
+        // the first list came: reading or answering here always clears.
+        let mut replied = Notices::load(Some(stored), &[]);
+        assert_eq!(replied.local(&room("a", 1, Some((3, "me")), 0), true).cleared, ["a"]);
+        let mut unknown = Notices::load(None, &[]);
+        assert_eq!(unknown.local(&room("neu", 1, Some((3, "me")), 0), true).cleared, ["neu"]);
+    }
+
     #[test]
     fn reading_archiving_and_leaving_clear() {
         let before = [room("a", 1, Some((1, "bob")), 0), room("b", 1, Some((1, "bob")), 0), room("c", 1, Some((1, "bob")), 0)];
@@ -302,10 +335,11 @@ mod tests {
         let news: Vec<Room> = before.iter().map(|r| room(&r.token, 1, Some((2, "bob")), 1)).collect();
         assert_eq!(n.server(&news, true, own, false).notify.len(), 3);
 
-        // Read here: cleared at once, and only once.
+        // Read here: cleared at once, and only once (unless the user did it again).
         let read = room("a", 1, Some((2, "bob")), 0);
-        assert_eq!(n.local(&read).cleared, ["a"]);
-        assert!(n.local(&read).cleared.is_empty());
+        assert_eq!(n.local(&read, false).cleared, ["a"]);
+        assert!(n.local(&read, false).cleared.is_empty());
+        assert_eq!(n.local(&read, true).cleared, ["a"]);
         // Read elsewhere: the next list says so. Left: gone from the complete list.
         let scan = n.server(&[room("b", 1, Some((2, "bob")), 0)], true, own, false);
         let mut cleared = scan.cleared.clone();
@@ -313,7 +347,7 @@ mod tests {
         assert_eq!(cleared, ["b", "c"]);
         // A message that arrives while its chat is open is still announced by the list.
         let mut open = room("b", 1, Some((3, "bob")), 0);
-        assert!(n.local(&open).cleared.is_empty());
+        assert!(n.local(&open, false).cleared.is_empty());
         open.unread_messages = 1;
         assert_eq!(n.server(&[open], false, own, false).notify, ["b"]);
     }

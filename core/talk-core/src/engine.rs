@@ -570,7 +570,7 @@ impl Engine {
         };
         let (rooms, changed) = rooms;
         self.sink.emit(Event::RoomsChanged { rooms });
-        self.notices_local(&changed);
+        self.notices_local(&changed, false);
         Ok(true)
     }
 
@@ -770,9 +770,10 @@ impl Engine {
         }
     }
 
-    /// A conversation changed here (read, sent, archived): its notification may be obsolete.
-    fn notices_local(&self, room: &Room) {
-        let scan = self.notices.lock().unwrap().local(room);
+    /// A conversation changed here (read, sent, archived): its notification may be
+    /// obsolete. `read_here`: the user read or answered it in this app.
+    fn notices_local(&self, room: &Room, read_here: bool) {
+        let scan = self.notices.lock().unwrap().local(room, read_here);
         self.after_scan(scan);
     }
 
@@ -1002,7 +1003,7 @@ impl Engine {
         };
         self.sink.emit(Event::RoomsChanged { rooms });
         if let Some(room) = changed {
-            self.notices_local(&room);
+            self.notices_local(&room, true);
         }
     }
 
@@ -1137,17 +1138,23 @@ impl Engine {
         };
         let Some((rooms, room)) = changed else { return Ok(()) };
         self.sink.emit(Event::RoomsChanged { rooms });
-        self.notices_local(&room);
+        self.notices_local(&room, true);
         self.guard(self.client.set_read_marker(token, message_id).await)
     }
 
-    /// "Als gelesen markieren" from the chat list: read marker on the newest message.
+    /// "Als gelesen markieren" from the chat list or a notification: read marker on the
+    /// newest message. The newest message is asked from the server: the notification may
+    /// show one the cached list does not know yet (a push that started the app).
     pub async fn mark_room_read(&self, token: &str) -> Result<()> {
-        let Some(room) = self.state_room(token) else {
+        let Some(cached) = self.state_room(token) else {
             return Err(Error::NotFound);
         };
+        let room = self.client.room(token).await.unwrap_or(cached);
         let newest = room.last_message.as_ref().map_or(room.last_read_message, |m| m.id);
-        self.mark_read(token, newest).await
+        let done = self.mark_read(token, newest).await;
+        // Whatever the list said before: the user is done with this conversation.
+        self.sink.emit(Event::NoticesCleared { tokens: vec![token.to_string()] });
+        done
     }
 
     /// Signs out on the server; call `shutdown` afterwards.
