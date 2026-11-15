@@ -37,7 +37,8 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
 ### „Allgemein“ (Desktop)
 
 - Ein Schalter **„Beim Schließen im Hintergrund weiterlaufen“** mit dem Untertitel „Damit Anrufe und Nachrichten ankommen“.
-- Er gilt nur unter Linux und Windows. Auf macOS fehlt die Seite, also auch ihre Zeile.
+- Er gilt nur unter Linux und Windows. Auf macOS zeigt die Seite nur „Beim Anmelden starten“.
+- Ein zweiter Schalter **„Beim Anmelden starten“**, standardmäßig aus (`docs/notifications.md`, „Desktop“). Im Flatpak fehlt er.
 - Dahinter steht dieselbe Einstellung wie das Häkchen im Tray-Menü (`settings.closeToTray`). Beide zeigen immer denselben Stand.
 
 ### „Darstellung“ (alle)

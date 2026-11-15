@@ -73,7 +73,10 @@ Reaktionen und Erinnerungen kommen ebenfalls als Nachrichten-Push. Sie haben kei
   - **Android:** `notify(tag = "<Konto>|<Token>", id = 0)` mit `MessagingStyle`. Der bisherige Verlauf kommt aus der aktiven Benachrichtigung (`getActiveNotifications`, `extractMessagingStyleFromNotification`). Dazu die Gruppen-Zusammenfassung des Systems (`setGroup` plus Summary).
   - **iOS:** Thread „<Konto>.<Token>“ wie bisher.
   - **Desktop:** Die App hält die `Notification` je Konto und Chat fest, schließt die alte und zeigt die neue. Beim Beenden schließt sie alle.
-- **Viele auf einmal (Desktop):** Kommen in einem Ereignis mehr als 3 Chats oder trägt es `sinceStart`, erscheint eine einzige Benachrichtigung: Titel „Wolkenfunk“, Text „Neue Nachrichten in {n} Chats“, bei einem Chat die normale. Ein Klick öffnet das Fenster.
+- **Viele auf einmal (Desktop):** Kommen in einem Ereignis mehr als 3 Chats oder trägt es `sinceStart`, erscheint eine einzige Benachrichtigung: Titel „Wolkenfunk“, Text „Neue Nachrichten in {n} Chats“, bei einem Chat die normale.
+  - {n} zählt den Chat nicht mit, der gerade offen und im Vordergrund ist.
+  - Ein Klick zeigt das Fenster und wechselt ins Konto der Zusammenfassung. Sie trägt ab zwei Konten die Kontozeile.
+  - Sie verschwindet, sobald der letzte ihrer Chats gelesen ist.
 - **Mobil** zeigt nie etwas für `sinceStart`. Die App ist dann ohnehin vorn.
 
 ## Wann sie verschwindet
@@ -125,14 +128,16 @@ Beide gehen an das Konto der Benachrichtigung, ohne es aktiv zu machen.
 - **„Beim Anmelden starten“** unter „Allgemein“, standardmäßig aus, Untertitel „Wolkenfunk startet im Hintergrund, damit Nachrichten und Anrufe ankommen“.
   - Windows und macOS: `setLoginItemSettings`.
   - Linux: ein Eintrag in `~/.config/autostart`, beim AppImage mit `$APPIMAGE` als Programm. Im Flatpak fehlt der Schalter.
-  - Ein so gestarteter Lauf zeigt kein Fenster, wo das System das zulässt.
+  - Ein so gestarteter Lauf zeigt kein Fenster, wo das System das zulässt. Ohne Tray-Dienst (GNOME ohne AppIndicator) bleibt er unsichtbar, bis man die App normal startet oder eine Benachrichtigung anklickt, wie bei „Beim Schließen im Hintergrund weiterlaufen“.
+  - Auf macOS steht der Schalter als einziger auf der Seite „Allgemein“.
+- **Festgehalten** werden auch „Verpasster Anruf“, „Nachricht nicht gesendet“, Aufnahme-Hinweise und die Klingel-Benachrichtigung, damit ihr Klick nicht verloren geht.
 
 ## Anrufe
 
 Klingeln und „Verpasster Anruf“ bleiben wie in `docs/calls.md`. Neu:
 
 - **Verpasst, während die App nicht lief:** Nach dem Start und nach jeder Wiederverbindung meldet der Kern Einzelanrufe, die inzwischen verpasst wurden, einmal als `callMissed`. Er merkt sich dazu die höchste gesehene Benachrichtigungs-ID. Beim ersten Lauf meldet er nichts nach, und Anrufe, die älter als 24 Stunden sind, auch nicht.
-- **„Nicht stören“:** Der Kern klingelt nicht und meldet nichts als verpasst, außer in wichtigen Chats. So verhält sich auch der Server beim Push.
+- **„Nicht stören“:** Der Kern klingelt nicht und meldet nichts als verpasst, außer in wichtigen Chats. So verhält sich auch der Server beim Push. Den Status liest der Kern mit jedem vollständigen Abruf der Chatliste, er wirkt also nach spätestens einer Minute.
 - **iOS:** Weist das System einen per Push gemeldeten Anruf ab (Fokus, blockiert), zeigt die App „Verpasster Anruf“.
 
 ## Abmelden ohne Netz (Android, iOS)
