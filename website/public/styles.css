@@ -110,7 +110,7 @@ a:focus-visible, .button:focus-visible { outline: 3px solid var(--brand-1); outl
 /* Inhalt */
 main { padding: clamp(40px, 7vw, 72px) 0 24px; }
 
-.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 16px; }
 .features article {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 22px 22px 18px;
@@ -213,7 +213,7 @@ a.button.outline:hover { background: var(--surface); }
   .feature:has(.phone):nth-of-type(odd) .feature-shot { order: -1; }
   .feature:has(.phone):nth-of-type(odd) { grid-template-columns: 200px 1fr; }
 }
-.feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; padding-top: 32px; border-top: 1px solid var(--border); }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 16px; padding-top: 32px; border-top: 1px solid var(--border); }
 .feature-grid article { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 22px 18px; }
 .feature-grid p { margin: 0; color: var(--muted); }
 
