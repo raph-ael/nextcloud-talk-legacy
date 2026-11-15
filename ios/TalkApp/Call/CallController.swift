@@ -256,10 +256,47 @@ final class CallController: NSObject {
     private func endInCore() {
         guard let call, let session else { return }
         if call.state == .incoming {
-            session.declineCall(token: call.token)
+            decline(call.token, session)
         } else {
             session.hangUp()
         }
+    }
+
+    /// Declines a ringing call. In a 1:1 the core then ends the call for the caller
+    /// ("Abgelehnt"), a request of up to 10 s after `ended(declined)`; iOS suspends an app
+    /// that PushKit woke right after the CallKit action, so the process is kept running
+    /// until it is out (docs/calls.md "Wenn das System die App nach dem Ablehnen anhält").
+    private func decline(_ token: String, _ session: TalkSession) {
+        let done = holdBackground(name: "decline")
+        Task {
+            await session.declineCallAndWait(token: token, timeoutMs: 12_000)
+            done()
+        }
+    }
+
+    /// The system ended the ringing itself (CallKit's time limit) or would not show the call
+    /// (focus, blocked): no decline, a missed call, ended in the core before iOS suspends
+    /// the app (docs/calls.md "Wenn das System das Klingeln selbst beendet").
+    private func miss(_ token: String, _ session: TalkSession) {
+        let done = holdBackground(name: "miss")
+        Task {
+            await session.missCallAndWait(token: token, timeoutMs: 2_000)
+            done()
+        }
+    }
+
+    /// Keeps the process running after a CallKit action until the returned function is
+    /// called (or iOS takes the time back), so the core's work that follows goes out.
+    private func holdBackground(name: String) -> () -> Void {
+        let app = UIApplication.shared
+        var id = UIBackgroundTaskIdentifier.invalid
+        let end = {
+            guard id != .invalid else { return }
+            app.endBackgroundTask(id)
+            id = .invalid
+        }
+        id = app.beginBackgroundTask(withName: name) { end() }
+        return { Task { @MainActor in end() } }
     }
 
     // MARK: Camera
@@ -468,7 +505,7 @@ final class CallController: NSObject {
         if new.state != .ended { closeTask?.cancel() }
         let previous = lastState
         if previous != new.state {
-            Log.call.info("call \(String(describing: new.state), privacy: .public) participants=\(new.participants.count) end=\(String(describing: new.endReason), privacy: .public)")
+            Log.call.info("call \(String(describing: new.state), privacy: .public) account=\(self.account ?? "-", privacy: .public) participants=\(new.participants.count) end=\(String(describing: new.endReason), privacy: .public)")
             #if DEBUG
             // In the background iOS suspends the app right after a call ends.
             LogDump.write(sync: UIApplication.shared.applicationState == .background)
@@ -603,12 +640,14 @@ final class CallController: NSObject {
         endedLocally = false
         provider.reportNewIncomingCall(with: id, update: update(c)) { [weak self] error in
             guard let error else { return }
-            // Do not disturb, blocked or another call: this device does not ring.
+            // Do not disturb, blocked or another call: this device does not ring. Focus and
+            // block list are no decline: the caller keeps ringing, here it is missed.
             Task { @MainActor in
                 Log.call.info("incoming not shown: \(error.localizedDescription, privacy: .public)")
                 guard let self, self.uuid == id else { return }
                 self.clearCallKit()
-                self.session?.declineCall(token: c.token)
+                guard let session = self.session else { return }
+                if Self.filtered(error) { self.miss(c.token, session) } else { self.decline(c.token, session) }
             }
         }
     }
@@ -662,11 +701,7 @@ final class CallController: NSObject {
                     Log.push.info("pushed call not shown: \(error.localizedDescription, privacy: .public)")
                     if self.uuid == id { self.clearCallKit() }
                     // Turned away by the system: "Verpasster Anruf" (docs/notifications.md "Anrufe").
-                    let e = error as NSError
-                    let filtered = e.domain == CXErrorDomainIncomingCall
-                        && (e.code == CXErrorCodeIncomingCallError.filteredByDoNotDisturb.rawValue
-                            || e.code == CXErrorCodeIncomingCallError.filteredByBlockList.rawValue)
-                    if filtered, let token, let rt {
+                    if Self.filtered(error), let token, let rt {
                         let room = rt.rooms.first { $0.token == token }
                         let group = room.map { $0.roomType == 2 || $0.roomType == 3 } ?? false
                         let caller = message.map { m in
@@ -697,6 +732,14 @@ final class CallController: NSObject {
                 }
             }
         }
+    }
+
+    /// CallKit would not show the call because of a focus or the block list.
+    private static func filtered(_ error: Error) -> Bool {
+        let e = error as NSError
+        return e.domain == CXErrorDomainIncomingCall
+            && (e.code == CXErrorCodeIncomingCallError.filteredByDoNotDisturb.rawValue
+                || e.code == CXErrorCodeIncomingCallError.filteredByBlockList.rawValue)
     }
 
     private static func sameServer(_ a: String?, _ b: String?) -> Bool {
@@ -923,9 +966,12 @@ extension CallController: CXProviderDelegate {
             if uuid == action.callUUID {
                 endedLocally = true
                 // iOS ends an unanswered incoming call itself after 60 s. That is no decline
-                // (in a 1:1 the caller would see "Abgelehnt"); the core reports it as missed.
-                if call?.state == .incoming, let since = ringingSince, Date().timeIntervalSince(since) >= 55 {
+                // (in a 1:1 the caller would see "Abgelehnt"): missed, ended in the core now,
+                // because iOS suspends the app right after this action and the core's own
+                // clock would only run out on the next wake.
+                if let call, call.state == .incoming, let since = ringingSince, Date().timeIntervalSince(since) >= 55 {
                     Log.call.info("CallKit ring timeout")
+                    if let session { miss(call.token, session) }
                 } else {
                     endInCore()
                 }
