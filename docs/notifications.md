@@ -65,7 +65,7 @@ Der Kern merkt sich pro Chat die zuletzt gemeldete Nachricht und speichert das. 
 
 Bei Push kommt der Text aus dem Push selbst, ohne Netz: `pushChatParts(subject, roomName)` liefert Absender und Text. Den Titel bestimmt die App trotzdem aus der Chatliste, denn der Server schreibt bei Gruppen „Bob in Projekt“ in die erste Zeile, in der Sprache des Benutzers. Kennt die App den Chat noch nicht, nimmt sie die erste Zeile.
 
-Reaktionen und Erinnerungen kommen ebenfalls als Nachrichten-Push. Sie haben keinen Zeilenumbruch und stehen dann ganz im Text.
+Reaktionen, Erinnerungen und Einladungen in eine Gruppe kommen ebenfalls als Nachrichten-Push. Sie haben keinen Zeilenumbruch und stehen dann ganz im Text. Bei einer Einladung kennt die App den Chat noch nicht: Der Titel ist dann „Wolkenfunk“.
 
 Ein Push, der nicht zu Talk gehört (auch der von „Push testen“), erscheint als einfache Benachrichtigung: Titel „Wolkenfunk“, Text aus dem Push, ohne Chat. Antippen öffnet die App.
 
