@@ -96,7 +96,8 @@ for channel, link in links.items():
     path = os.path.join(stage, link)
     if not os.path.exists(path):
         continue
-    target = os.path.join(os.path.dirname(link), os.path.basename(os.path.realpath(path)))
+    # The file behind the link, relative to the server root (the .deb lies in apt/pool/…).
+    target = os.path.relpath(os.path.realpath(path), os.path.realpath(stage))
     data = open(path, "rb").read()
     out["downloads"][channel] = {
         "url": f"https://pkg.wolkenfunk.org/{link}",
