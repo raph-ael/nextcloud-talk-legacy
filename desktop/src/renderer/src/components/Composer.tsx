@@ -17,7 +17,9 @@ import {
   cancelRecording,
   clearNotice,
   discardDraft,
+  draftKey,
   loadDraft,
+  recordingFor,
   sendDraft,
   sendRecording,
   startRecording,
@@ -32,7 +34,10 @@ const VOICE_HINT = IS_MAC ? 'Sprachnachricht aufnehmen (⇧⌘Y)' : 'Sprachnachr
 
 const EmojiPicker = lazy(() => import('./EmojiPicker').then((m) => ({ default: m.EmojiPicker })))
 
-/** Text and attachments not sent yet, per conversation (kept while switching chats). */
+/**
+ * Text and attachments not sent yet, per account and conversation (`draftKey`): kept while
+ * switching chats and accounts.
+ */
 const textDrafts = new Map<string, string>()
 const fileDrafts = new Map<string, Draft[]>()
 
@@ -54,21 +59,23 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   { token, replyTo, onCancelReply, onSent, addFilesRef },
   ref,
 ) {
-  const [text, setText] = useState(() => textDrafts.get(token) ?? '')
-  const [files, setFiles] = useState<Draft[]>(() => fileDrafts.get(token) ?? [])
+  // The chat remounts for another account (its key), so the key holds for this composer.
+  const [key] = useState(() => draftKey(token))
+  const [text, setText] = useState(() => textDrafts.get(key) ?? '')
+  const [files, setFiles] = useState<Draft[]>(() => fileDrafts.get(key) ?? [])
   const [staging, setStaging] = useState(0)
   const [error, setError] = useState('')
   const [emoji, setEmoji] = useState(false)
   const input = useRef<HTMLTextAreaElement | null>(null)
   const picker = useRef<HTMLInputElement>(null)
   const emojiButton = useRef<HTMLButtonElement>(null)
-  const recording = useVoice((s) => (s.recording?.token === token ? s.recording : null))
-  const voiceDraft = useVoice((s) => s.drafts[token] ?? null)
-  const notice = useVoice((s) => (s.notice?.token === token ? s.notice.text : null))
+  const recording = useVoice((s) => recordingFor(s, token))
+  const voiceDraft = useVoice((s) => s.drafts[key] ?? null)
+  const notice = useVoice((s) => (s.notice?.key === key ? s.notice.text : null))
 
   useEffect(() => {
-    setText(textDrafts.get(token) ?? '')
-    setFiles(fileDrafts.get(token) ?? [])
+    setText(textDrafts.get(key) ?? '')
+    setFiles(fileDrafts.get(key) ?? [])
     setError('')
     input.current?.focus()
     void loadDraft(token)
@@ -110,15 +117,15 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
 
   function updateText(v: string) {
     setText(v)
-    if (v) textDrafts.set(token, v)
-    else textDrafts.delete(token)
+    if (v) textDrafts.set(key, v)
+    else textDrafts.delete(key)
   }
 
   function updateFiles(f: (list: Draft[]) => Draft[]) {
     setFiles((list) => {
       const next = f(list)
-      if (next.length) fileDrafts.set(token, next)
-      else fileDrafts.delete(token)
+      if (next.length) fileDrafts.set(key, next)
+      else fileDrafts.delete(key)
       return next
     })
   }

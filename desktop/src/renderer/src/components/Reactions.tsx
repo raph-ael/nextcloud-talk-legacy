@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactionView } from '@shared/core'
-import { useStore, type UiMessage } from '../store'
+import { accountId, useStore, type UiMessage } from '../store'
 import { toast } from '../call/store'
 import { Avatar } from './Avatar'
 
@@ -153,7 +153,7 @@ export function ReactionPopover({
 const cache = new Map<string, Promise<ReactionView[]>>()
 
 function stateKey(token: string, m: UiMessage): string {
-  return `${token}\n${m.id}\n${JSON.stringify(m.reactions)}\n${m.reactionsSelf.join(',')}`
+  return `${accountId()}\n${token}\n${m.id}\n${JSON.stringify(m.reactions)}\n${m.reactionsSelf.join(',')}`
 }
 
 function fetchReactions(token: string, m: UiMessage): Promise<ReactionView[]> {

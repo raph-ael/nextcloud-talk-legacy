@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react'
 import { toast } from './call/store'
 import type {
   AccountInfo,
+  AccountRow,
   ChatPage,
   MessageView,
   PendingMessage,
@@ -59,7 +60,12 @@ export function countsAsUnread(m: UiMessage, from: number): boolean {
 
 export interface State {
   session: 'loading' | 'loggedOut' | 'ready'
+  /** The account shown (docs/accounts.md). */
   account: AccountInfo | null
+  /** All signed-in accounts in the order of signing in, with their numbers. */
+  accounts: AccountRow[]
+  /** „Konto hinzufügen“: the login shows while the accounts go on. */
+  adding: boolean
   rooms: RoomView[]
   chats: Record<string, ChatState>
   online: boolean
@@ -84,6 +90,8 @@ export type SettingsPage = 'general' | 'appearance' | 'chats' | 'categories' | '
 let state: State = {
   session: 'loading',
   account: null,
+  accounts: [],
+  adding: false,
   rooms: [],
   chats: {},
   online: true,
@@ -97,6 +105,24 @@ let state: State = {
   settings: null,
 }
 const listeners = new Set<() => void>()
+
+/** What belongs to the account shown: emptied on a switch and when signing out. */
+const EMPTY = {
+  rooms: [],
+  chats: {},
+  activeToken: null,
+  composing: false,
+  groupInfo: null,
+  sections: [],
+  query: '',
+  categories: false,
+  unreadLine: null,
+} satisfies Partial<State>
+
+/** The account shown, for keys of drafts and caches: tokens of different servers overlap. */
+export function accountId(): string {
+  return state.account?.id ?? ''
+}
 
 function set(patch: Partial<State>): void {
   state = { ...state, ...patch }
@@ -170,22 +196,21 @@ function updateOnly(existing: UiMessage[], incoming: MessageView[]): UiMessage[]
 export function handleEvent(e: TalkEvent): void {
   switch (e.type) {
     case 'session':
-      if (e.state === 'ready') set({ session: 'ready', account: e.account })
-      else
-        set({
-          session: 'loggedOut',
-          account: null,
-          rooms: [],
-          chats: {},
-          activeToken: null,
-          composing: false,
-          groupInfo: null,
-          sections: [],
-          query: '',
-          categories: false,
-          unreadLine: null,
-          settings: null,
-        })
+      if (e.state === 'loggedOut') set({ ...EMPTY, session: 'loggedOut', account: null, accounts: [], adding: false, settings: null })
+      else if (state.account?.id === e.account.id) set({ session: 'ready', account: e.account })
+      else {
+        // Another account (docs/accounts.md „Wechseln“): its list at once, nothing of the
+        // one before. Open settings stay open; drafts stay with their account.
+        set({ ...EMPTY, session: 'ready', account: e.account, rooms: e.rooms ?? [], adding: false })
+        void refreshSections()
+        if (!e.rooms) void window.talk.rooms().then((rooms) => set({ rooms }))
+      }
+      break
+    case 'accountsChanged':
+      set({ accounts: e.accounts })
+      break
+    case 'notice':
+      toast(e.text)
       break
     case 'roomsChanged':
       roomsChanged(e.rooms)
@@ -247,7 +272,6 @@ function roomsChanged(rooms: RoomView[]): void {
   }
   for (const t of leaving) if (!rooms.some((r) => r.token === t)) leaving.delete(t)
   set(patch)
-  updateBadge()
   void refreshSections()
 }
 
@@ -337,20 +361,24 @@ export function closeSettings(): void {
   set({ settings: null })
 }
 
-/**
- * Whether a chat counts for the badge (docs/settings.md, „Stummgeschaltete Chats“):
- * „Nur Erwähnungen“ only with a mention, „Aus“ never.
- */
-export function countsForBadge(r: RoomView): boolean {
-  if (r.isArchived || r.unreadMessages === 0) return false
-  if (r.notificationLevel === 3) return false
-  if (r.notificationLevel === 2) return r.unreadMention
-  return true
+// --- accounts (docs/accounts.md) -------------------------------------------------------
+
+/** Shows another account; refused during a call (a toast says so). */
+export async function switchAccount(id: string): Promise<void> {
+  if (id === state.account?.id) return
+  const refused = await window.talk.switchAccount(id).catch(() => 'Wechsel nicht möglich')
+  if (refused) toast(refused)
 }
 
-function updateBadge(): void {
-  window.talk.setBadge(state.rooms.filter(countsForBadge).length)
+/** „Konto hinzufügen“: the login, with „Abbrechen“ back to the chats. */
+export function startAddAccount(): void {
+  if (state.accounts.length < MAX_ACCOUNTS) set({ adding: true })
 }
+export function cancelAddAccount(): void {
+  void window.talk.cancelLogin()
+  set({ adding: false })
+}
+export const MAX_ACCOUNTS = 5
 
 // --- actions ------------------------------------------------------------------------
 
@@ -360,13 +388,15 @@ export async function boot(): Promise<void> {
   window.addEventListener('online', () => window.talk.networkChanged())
   window.addEventListener('offline', () => window.talk.networkChanged())
   window.addEventListener('focus', refreshRoomsThrottled)
-  const account = await window.talk.account()
-  if (!account) {
+  const [shown, accounts] = await Promise.all([window.talk.account(), window.talk.accounts()])
+  if (state.accounts.length === 0) set({ accounts: accounts.accounts })
+  // An event may have been quicker (a switch, the start finishing).
+  if (state.session !== 'loading') return
+  if (!shown) {
     set({ session: 'loggedOut' })
     return
   }
-  set({ session: 'ready', account, rooms: await window.talk.rooms() })
-  updateBadge()
+  set({ session: 'ready', account: shown.account, rooms: shown.rooms })
   void refreshSections()
 }
 

@@ -1,6 +1,9 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { cancelAddAccount } from '../store'
+import { toast } from '../call/store'
 
-export function Login() {
+/** The first sign-in, and „Konto hinzufügen“ (`adding`) while the other accounts go on. */
+export function Login({ adding = false }: { adding?: boolean }) {
   const [server, setServer] = useState('')
   const [waiting, setWaiting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -11,7 +14,10 @@ export function Login() {
     setError(null)
     setWaiting(true)
     try {
-      await window.talk.login(server.trim())
+      const result = await window.talk.addAccount(server.trim())
+      if (result === 'duplicate') toast('Dieses Konto ist schon angemeldet')
+      // Back to the chats (a new account closes this already, by switching to it).
+      if (adding) cancelAddAccount()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (!msg.includes('CANCELLED')) {
@@ -28,6 +34,16 @@ export function Login() {
     }
   }
 
+  // Esc leads back to the chats like „Abbrechen“.
+  useEffect(() => {
+    if (!adding) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !e.defaultPrevented) cancelAddAccount()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [adding])
+
   return (
     <div className="login">
       <form className="login-card" onSubmit={submit}>
@@ -40,7 +56,7 @@ export function Login() {
             />
           </svg>
         </div>
-        <h1>Willkommen</h1>
+        <h1>{adding ? 'Konto hinzufügen' : 'Willkommen'}</h1>
         {waiting ? (
           <>
             <p className="muted">Bestätige die Anmeldung im Browser-Fenster, das sich gerade geöffnet hat.</p>
@@ -65,6 +81,11 @@ export function Login() {
               Anmelden
             </button>
             {error && <p className="error">{error}</p>}
+            {adding && (
+              <button type="button" className="button-secondary" onClick={cancelAddAccount}>
+                Abbrechen
+              </button>
+            )}
           </>
         )}
       </form>

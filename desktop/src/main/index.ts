@@ -24,6 +24,7 @@ import {
   recordingNoticeTitle,
   withAttachment,
   type AccountInfo,
+  type AccountsView,
   type AppEvent,
   type AudioInfo,
   type CallView,
@@ -53,6 +54,9 @@ interface NativeLoginFlow {
 }
 interface NativeSession {
   readonly userId: string
+  /** From the cache at once, up to date after `start()` (docs/accounts.md). */
+  readonly displayName: string
+  badge(): Badge
   start(): Promise<void>
   shutdown(): void
   logout(): Promise<void>
@@ -139,6 +143,10 @@ interface NativeSession {
   userAvatar(userId: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
   mediaReport(report: MediaReport): void
 }
+interface Badge {
+  chats: number
+  messages: number
+}
 interface NativeVoiceRecording {
   push(pcm: Buffer): RecordingStatus
   finish(): VoiceDraft | null
@@ -148,6 +156,8 @@ interface NativeCore {
   coreVersion(): string
   newReferenceId(): string
   startLogin(server: string): Promise<NativeLoginFlow>
+  resolveAccount(server: string, loginName: string, appPassword: string): Promise<{ userId: string; displayName: string; key: string }>
+  revokeAppPassword(server: string, loginName: string, appPassword: string): Promise<void>
   TalkSession: new (
     server: string,
     user: string,
@@ -165,21 +175,8 @@ const core: NativeCore = require(nativePath)
 
 // --- Persistent state -------------------------------------------------------------
 
-interface StoredAccount {
-  server: string
-  loginName: string
-  /** base64 of safeStorage-encrypted app password */
-  secret: string
-}
-
 const dataDir = app.getPath('userData')
 migrateLegacyDataDir()
-const accountFile = join(dataDir, 'account.json')
-/** Core cache (conversations, messages, avatars) and outbox of the signed-in account. */
-const coreDir = join(dataDir, 'talk')
-/** Room list cache of earlier versions (now in the core cache). */
-const legacyRoomsCache = join(dataDir, 'rooms-cache.json')
-
 const settingsFile = join(dataDir, 'settings.json')
 
 interface Settings {
@@ -224,7 +221,7 @@ function saveSettings(): void {
 function migrateLegacyDataDir(): void {
   if (app.commandLine.hasSwitch('user-data-dir')) return
   const legacy = join(app.getPath('appData'), 'Sirplus Talk')
-  if (!existsSync(legacy) || existsSync(join(dataDir, 'account.json'))) return
+  if (!existsSync(legacy) || existsSync(join(dataDir, 'account.json')) || existsSync(join(dataDir, 'accounts.json'))) return
   try {
     mkdirSync(dataDir, { recursive: true })
     for (const entry of readdirSync(legacy)) {
@@ -236,96 +233,444 @@ function migrateLegacyDataDir(): void {
   }
 }
 
-function loadAccount(): StoredAccount | null {
+// --- Account list (docs/accounts.md „Speicherung“) -----------------------------------
+
+/** One entry of `accounts.json`. */
+interface StoredAccount {
+  /** Random local id (hex), never reused: folder names, URLs, IPC. */
+  id: string
+  server: string
+  loginName: string
+  userId: string
+  /** Display name from the server, refreshed after every start. */
+  name: string
+  /** From `resolveAccount`: the same user on the same server (empty until known). */
+  key: string
+  /** Data folder relative to userData: `talk` (the account from before) or `accounts/<id>`. */
+  dir: string
+  /** base64 of the safeStorage-encrypted app password. */
+  secret: string
+}
+
+interface AccountsFile {
+  /** In the order of signing in. */
+  accounts: StoredAccount[]
+  /** The account shown after a restart. */
+  active: string | null
+}
+
+const accountsFile = join(dataDir, 'accounts.json')
+/** The single account of earlier versions; taken over once (`adoptLegacyAccount`). */
+const legacyAccountFile = join(dataDir, 'account.json')
+/** Room list cache of earlier versions (now in the core cache). */
+const legacyRoomsCache = join(dataDir, 'rooms-cache.json')
+const MAX_ACCOUNTS = 5
+
+let list: AccountsFile = { accounts: [], active: null }
+/** Dev runs (`TALK_DEV_*`) keep their accounts out of the list. */
+let persist = true
+
+function readAccountsFile(): AccountsFile {
   try {
-    return JSON.parse(readFileSync(accountFile, 'utf8')) as StoredAccount
-  } catch {
-    return null
+    const f = JSON.parse(readFileSync(accountsFile, 'utf8')) as Partial<AccountsFile>
+    return { accounts: Array.isArray(f.accounts) ? f.accounts : [], active: f.active ?? null }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('reading accounts.json failed:', (err as Error).message)
+    return { accounts: [], active: null }
   }
 }
 
-function saveAccount(server: string, loginName: string, appPassword: string): void {
-  mkdirSync(dataDir, { recursive: true })
-  const secret = safeStorage.encryptString(appPassword).toString('base64')
-  writeFileSync(accountFile, JSON.stringify({ server, loginName, secret } satisfies StoredAccount), { mode: 0o600 })
+/** Atomic: a crash while writing leaves the previous list, never half a file. */
+function saveAccounts(): boolean {
+  if (!persist) return true
+  try {
+    mkdirSync(dataDir, { recursive: true })
+    const tmp = `${accountsFile}.tmp`
+    writeFileSync(tmp, JSON.stringify(list), { mode: 0o600 })
+    renameSync(tmp, accountsFile)
+    return true
+  } catch (err) {
+    console.warn('saving the account list failed:', (err as Error).message)
+    return false
+  }
 }
 
-function clearAccount(): void {
-  rmSync(accountFile, { force: true })
+function newAccountId(): string {
+  for (;;) {
+    const id = randomBytes(6).toString('hex')
+    if (!list.accounts.some((a) => a.id === id) && !existsSync(join(dataDir, 'accounts', id))) return id
+  }
+}
+
+function encrypt(appPassword: string): string {
+  return safeStorage.encryptString(appPassword).toString('base64')
+}
+
+/** Throws when the keyring does not open it (locked, refused): not „no account“. */
+function decrypt(secret: string): string {
+  return safeStorage.decryptString(Buffer.from(secret, 'base64'))
+}
+
+// --- Runtimes: one started session per account -------------------------------------------
+
+interface Runtime {
+  id: string
+  stored: StoredAccount
+  session: NativeSession
+  /** Absolute data folder (cache, outbox, staging). */
+  dir: string
+  /** Last room list, to spot new messages for notifications. */
+  lastRooms: Map<string, RoomView>
+  firstRoomsEvent: boolean
+  /** The chat open in the window (only the active account has one). */
+  openToken: string | null
+  /** Failed messages already announced by a notification. */
+  notifiedFailures: Set<string>
+  /** Recording notices already announced. */
+  knownNotices: Set<number>
+  /** Unix s of the start: older notices (stored while the app was closed) stay quiet. */
+  noticesSince: number
+  badge: Badge
+}
+
+/** In the order of the list; accounts whose secret did not open in this run are missing. */
+const runtimes = new Map<string, Runtime>()
+/** The account the window shows. */
+let activeId: string | null = null
+
+let win: BrowserWindow | null = null
+let loginFlow: NativeLoginFlow | null = null
+/** The voice recording in progress (encoded and written by the core in this process). */
+let recording: { rt: Runtime; token: string; rec: NativeVoiceRecording } | null = null
+
+function activeRuntime(): Runtime | null {
+  return activeId ? (runtimes.get(activeId) ?? null) : null
+}
+
+/** Events of the app itself (no account). */
+function send(event: TalkEvent): void {
+  win?.webContents.send('talk:event', event)
+}
+
+/** Events of an account reach the window only while it is the active one. */
+function sendFrom(rt: Runtime, event: TalkEvent): void {
+  if (rt.id === activeId) send({ ...event, accountId: rt.id })
+}
+
+function serverLabel(server: string): string {
+  return server.replace(/^https?:\/\//, '').replace(/\/+$/, '')
+}
+
+function accountInfo(rt: Runtime): AccountInfo {
+  const s = rt.stored
+  return { id: rt.id, server: s.server, user: s.loginName, userId: s.userId || s.loginName, name: s.name || s.userId || s.loginName }
+}
+
+/** „{Name} · {Server}“ for notifications, only with two accounts or more. */
+function accountLine(rt: Runtime): string | null {
+  if (runtimes.size < 2) return null
+  return `${accountInfo(rt).name} · ${serverLabel(rt.stored.server)}`
+}
+
+function accountsView(): AccountsView {
+  return {
+    active: activeId,
+    accounts: [...runtimes.values()].map((rt) => {
+      const a = accountInfo(rt)
+      return { id: a.id, name: a.name, server: serverLabel(a.server), userId: a.userId, chats: rt.badge.chats }
+    }),
+  }
+}
+
+function sendAccounts(): void {
+  send({ type: 'accountsChanged', ...accountsView() } satisfies AppEvent)
+}
+
+/** App badge: the sum over all accounts (docs/accounts.md); per account in the switcher. */
+function updateBadges(): void {
+  let changed = false
+  let total = 0
+  for (const rt of runtimes.values()) {
+    let b: Badge
+    try {
+      b = rt.session.badge()
+    } catch {
+      b = rt.badge
+    }
+    if (b.chats !== rt.badge.chats || b.messages !== rt.badge.messages) changed = true
+    rt.badge = b
+    total += b.chats
+  }
+  app.setBadgeCount(total)
+  if (changed) sendAccounts()
+}
+
+function onCoreEvent(rt: Runtime, event: CoreEvent): void {
+  if (!runtimes.has(rt.id)) return
+  switch (event.type) {
+    case 'callChanged':
+      // The one call of the process, whichever account it belongs to.
+      onCallChanged(rt, event.call)
+      return
+    case 'callMissed':
+      notifyMissedCall(rt, event)
+      break
+    case 'roomsChanged':
+      notifyNewMessages(rt, event.rooms)
+      updateBadges()
+      break
+    case 'authFailed':
+      void removeAccount(rt, false)
+      return
+    case 'outboxChanged':
+      announceFailures(rt, event.token, event.items)
+      break
+    case 'recordingsChanged':
+      notifyRecordings(rt, event.items)
+      recordingsChanged(rt.id, event.items)
+      break
+  }
+  sendFrom(rt, event)
+}
+
+/** Builds the session of an account (no network yet: `bootRuntime` starts it). */
+function createRuntime(stored: StoredAccount, password: string): Runtime {
+  const dir = join(dataDir, stored.dir)
+  // Leftovers of attachments that were picked but never sent.
+  rmSync(join(dir, 'staging'), { recursive: true, force: true })
+  const rt = {
+    id: stored.id,
+    stored,
+    dir,
+    lastRooms: new Map(),
+    firstRoomsEvent: true,
+    openToken: null,
+    notifiedFailures: new Set(),
+    knownNotices: new Set(),
+    noticesSince: Math.floor(Date.now() / 1000),
+    badge: { chats: 0, messages: 0 },
+  } as Omit<Runtime, 'session'> as Runtime
+  rt.session = new core.TalkSession(stored.server, stored.loginName, password, (e) => onCoreEvent(rt, e), dir)
+  rt.session.setMediaEngine((cmd) => onMediaCommand(rt, cmd))
+  runtimes.set(rt.id, rt)
+  return rt
+}
+
+/** `start()`; afterwards the name, the user id and (once) the key are refreshed. */
+function bootRuntime(rt: Runtime, password: string): void {
+  const s = rt.session
+  s.start()
+    .then(async () => {
+      if (runtimes.get(rt.id) !== rt) return
+      const changed = rt.stored.name !== s.displayName || rt.stored.userId !== s.userId
+      rt.stored.name = s.displayName
+      rt.stored.userId = s.userId
+      if (!rt.stored.key) {
+        const who = await core.resolveAccount(rt.stored.server, rt.stored.loginName, password).catch(() => null)
+        if (who && runtimes.get(rt.id) === rt) rt.stored.key = who.key
+      }
+      saveAccounts()
+      if (changed) sendAccounts()
+      if (rt.id === activeId) sendFrom(rt, { type: 'session', state: 'ready', account: accountInfo(rt) })
+    })
+    .catch((err: Error) => {
+      // Offline start: keep the session, background sync retries.
+      console.warn('session start failed:', err.message)
+      if (err.message.startsWith('UNAUTHORIZED')) void removeAccount(rt, false)
+    })
+}
+
+/**
+ * All stored accounts, plus the one of earlier versions (once). An account whose secret
+ * does not open stays in the list and is tried again at the next start.
+ */
+function startStoredAccounts(): void {
   rmSync(legacyRoomsCache, { force: true })
+  list = readAccountsFile()
+  for (const stored of list.accounts) {
+    let password: string
+    try {
+      password = decrypt(stored.secret)
+    } catch (err) {
+      console.warn('account not opened in this run:', (err as Error).message)
+      continue
+    }
+    bootRuntime(createRuntime(stored, password), password)
+  }
+  adoptLegacyAccount()
+  activeId = list.active && runtimes.has(list.active) ? list.active : ([...runtimes.keys()][0] ?? null)
+  updateBadges()
+}
+
+/**
+ * The account of version 0.3 and earlier becomes the first entry, without signing in again.
+ * It keeps its folder `talk/` (the outbox remembers absolute paths of waiting attachments)
+ * and its secret as it is; `account.json` goes only once the new list is written.
+ */
+function adoptLegacyAccount(): void {
+  if (!existsSync(legacyAccountFile)) return
+  if (list.accounts.some((a) => a.dir === 'talk')) {
+    rmSync(legacyAccountFile, { force: true })
+    return
+  }
+  let old: { server: string; loginName: string; secret: string }
+  let password: string
   try {
-    // Cached messages belong to this account only.
-    rmSync(coreDir, { recursive: true, force: true })
+    old = JSON.parse(readFileSync(legacyAccountFile, 'utf8')) as typeof old
+    password = decrypt(old.secret)
+  } catch (err) {
+    // Locked or refused keyring: nothing is deleted, the next start tries again.
+    console.warn('earlier account not taken over yet:', (err as Error).message)
+    return
+  }
+  const stored: StoredAccount = {
+    id: newAccountId(),
+    server: old.server,
+    loginName: old.loginName,
+    userId: '',
+    name: '',
+    key: '',
+    dir: 'talk',
+    secret: old.secret,
+  }
+  const rt = createRuntime(stored, password)
+  // From the cache, without network; the key follows after the first start.
+  stored.userId = rt.session.userId
+  stored.name = rt.session.displayName
+  list.accounts.unshift(stored)
+  list.active ??= stored.id
+  if (saveAccounts()) rmSync(legacyAccountFile, { force: true })
+  bootRuntime(rt, password)
+  // The runtime map follows the list: the adopted account comes first.
+  const others = [...runtimes.values()].filter((r) => r !== rt)
+  runtimes.clear()
+  for (const r of [rt, ...others]) runtimes.set(r.id, r)
+}
+
+/**
+ * Shows another account (docs/accounts.md „Wechseln“): the open chat closes, the window
+ * gets that account's list at once. Refused during a call unless the call itself switches.
+ */
+function switchTo(id: string, force = false): string | null {
+  const next = runtimes.get(id)
+  if (!next) return 'Dieses Konto ist nicht mehr angemeldet'
+  if (id === activeId) return null
+  if (!force && callRunning()) return 'Während eines Anrufs nicht möglich'
+  const prev = activeRuntime()
+  if (prev?.openToken) {
+    prev.session.closeChat(prev.openToken)
+    prev.openToken = null
+  }
+  activeId = id
+  list.active = id
+  saveAccounts()
+  sendFrom(next, { type: 'session', state: 'ready', account: accountInfo(next), rooms: next.session.rooms() })
+  sendAccounts()
+  return null
+}
+
+/** Only this account: its call, recording, entry, secret and data folder (docs/accounts.md „Abmelden“). */
+async function removeAccount(rt: Runtime, revoke: boolean): Promise<void> {
+  if (runtimes.get(rt.id) !== rt) return
+  runtimes.delete(rt.id)
+  if (recording?.rt === rt) {
+    recording.rec.cancel()
+    recording = null
+  }
+  if (callOwner === rt) {
+    // Leave a running call before the app password goes away.
+    if (callActive()) await rt.session.hangUpAndWait(3000).catch(() => undefined)
+    callEnded()
+  }
+  if (mediaOwner === rt) mediaOwner = null
+  list.accounts = list.accounts.filter((a) => a.id !== rt.id)
+  if (list.active === rt.id) list.active = [...runtimes.keys()][0] ?? null
+  saveAccounts()
+  if (activeId === rt.id) {
+    activeId = null
+    const next = [...runtimes.values()][0]
+    if (next) switchTo(next.id, true)
+    else send({ type: 'session', state: 'loggedOut' } satisfies AppEvent)
+  }
+  for (const key of avatarCache.keys()) if (key.startsWith(`${rt.id}|`)) avatarCache.delete(key)
+  updateBadges()
+  sendAccounts()
+  if (!revoke) announceSignedOut(rt)
+  if (revoke) await rt.session.logout().catch(() => rt.session.shutdown())
+  else rt.session.shutdown()
+  try {
+    // Cached messages and the outbox belong to this account only.
+    rmSync(rt.dir, { recursive: true, force: true })
   } catch (err) {
     console.warn('cache cleanup failed:', (err as Error).message)
   }
 }
 
-// --- Session -------------------------------------------------------------------------
-
-let win: BrowserWindow | null = null
-let session: NativeSession | null = null
-let account: AccountInfo | null = null
-let loginFlow: NativeLoginFlow | null = null
-let activeToken: string | null = null
-let lastRooms = new Map<string, RoomView>()
-let firstRoomsEvent = true
-/** Core data folder of the running session (cache, outbox, staging). */
-let sessionDir: string | null = null
-/** Failed messages already announced by a notification. */
-const notifiedFailures = new Set<string>()
-/** The voice recording in progress (encoded and written by the core in this process). */
-let recording: { token: string; rec: NativeVoiceRecording } | null = null
-
-function send(event: TalkEvent): void {
-  win?.webContents.send('talk:event', event)
+/** „Anmeldung abgelaufen“: toast in the window, a notification when it is not in front. */
+function announceSignedOut(rt: Runtime): void {
+  const a = accountInfo(rt)
+  const text = `${a.name} (${serverLabel(a.server)}) wurde abgemeldet. Bitte neu anmelden.`
+  send({ type: 'notice', text } satisfies AppEvent)
+  if (win?.isFocused() || !Notification.isSupported()) return
+  const n = new Notification({ title: 'Wolkenfunk', body: text })
+  n.on('click', showWindow)
+  n.show()
 }
 
-function onCoreEvent(event: CoreEvent): void {
-  if (event.type === 'callChanged') {
-    onCallChanged(event.call)
-  } else if (event.type === 'callMissed') {
-    notifyMissedCall(event)
-  } else if (event.type === 'roomsChanged') {
-    notifyNewMessages(event.rooms)
-  } else if (event.type === 'authFailed') {
-    void signOut(false)
-    return
-  } else if (event.type === 'outboxChanged') {
-    announceFailures(event.token, event.items)
-  } else if (event.type === 'recordingsChanged') {
-    notifyRecordings(event.items)
-    recordingsChanged(event.items)
+/**
+ * „Konto hinzufügen“ and the first sign-in: browser login, then `resolveAccount`; only then
+ * is anything stored. An account that is signed in already gets the window instead.
+ */
+async function addAccount(server: string): Promise<'added' | 'duplicate'> {
+  loginFlow?.cancel()
+  const flow = await core.startLogin(server)
+  loginFlow = flow
+  await shell.openExternal(flow.loginUrl)
+  try {
+    const creds = await flow.wait()
+    const who = await core.resolveAccount(creds.server, creds.loginName, creds.appPassword)
+    showWindow()
+    const same = [...runtimes.values()].find((r) => r.stored.key === who.key)
+    if (same) {
+      void core.revokeAppPassword(creds.server, creds.loginName, creds.appPassword).catch(() => undefined)
+      switchTo(same.id)
+      return 'duplicate'
+    }
+    // An entry whose secret did not open in this run: the fresh password repairs it, with
+    // its folder and outbox.
+    const stale = list.accounts.find((a) => a.key === who.key && !runtimes.has(a.id))
+    if (stale) {
+      stale.secret = persist ? encrypt(creds.appPassword) : ''
+      stale.loginName = creds.loginName
+      saveAccounts()
+      bootRuntime(createRuntime(stale, creds.appPassword), creds.appPassword)
+      switchTo(stale.id, true)
+      updateBadges()
+      sendAccounts()
+      return 'added'
+    }
+    if (runtimes.size >= MAX_ACCOUNTS) throw new Error('TOO_MANY_ACCOUNTS')
+    const id = newAccountId()
+    const stored: StoredAccount = {
+      id,
+      server: creds.server,
+      loginName: creds.loginName,
+      userId: who.userId,
+      name: who.displayName,
+      key: who.key,
+      dir: persist ? join('accounts', id) : join('talk-dev', id),
+      secret: persist ? encrypt(creds.appPassword) : '',
+    }
+    list.accounts.push(stored)
+    saveAccounts()
+    bootRuntime(createRuntime(stored, creds.appPassword), creds.appPassword)
+    switchTo(id, true)
+    updateBadges()
+    sendAccounts()
+    return 'added'
+  } finally {
+    if (loginFlow === flow) loginFlow = null
   }
-  send(event)
-}
-
-function startSession(stored: StoredAccount, plainPassword?: string): void {
-  const password = plainPassword ?? safeStorage.decryptString(Buffer.from(stored.secret, 'base64'))
-  rmSync(legacyRoomsCache, { force: true })
-  // Dev accounts (not stored) get their own cache: never mix two accounts' messages.
-  const dir = stored.secret ? coreDir : join(dataDir, 'talk-dev', stored.loginName)
-  knownNotices.clear()
-  noticesSince = Math.floor(Date.now() / 1000)
-  session = new core.TalkSession(stored.server, stored.loginName, password, onCoreEvent, dir)
-  session.setMediaEngine(onMediaCommand)
-  sessionDir = dir
-  // Leftovers of attachments that were picked but never sent.
-  rmSync(join(dir, 'staging'), { recursive: true, force: true })
-  firstRoomsEvent = true
-  const s = session
-  s.start()
-    .then(() => {
-      if (session !== s) return
-      account = { server: stored.server, user: stored.loginName, userId: s.userId }
-      send({ type: 'session', state: 'ready', account })
-    })
-    .catch((err: Error) => {
-      // Offline start: keep the session, background sync retries.
-      console.warn('session start failed:', err.message)
-      if (err.message.startsWith('UNAUTHORIZED')) void signOut(false)
-    })
-  account = { server: stored.server, user: stored.loginName, userId: stored.loginName }
 }
 
 /** Ends a recording whose renderer went away: it stays as the chat's draft. */
@@ -348,40 +693,23 @@ function voiceFileName(): string {
   return `Sprachnachricht ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
 }
 
-async function signOut(revoke: boolean): Promise<void> {
-  recording?.rec.cancel()
-  recording = null
-  const s = session
-  // Leave a running call before the app password goes away.
-  if (s && callActive()) await s.hangUpAndWait(3000).catch(() => undefined)
-  onCallChanged(null)
-  session = null
-  account = null
-  activeToken = null
-  lastRooms = new Map()
-  sessionDir = null
-  notifiedFailures.clear()
-  if (s) {
-    if (revoke) await s.logout().catch(() => s.shutdown())
-    else s.shutdown()
-  }
-  clearAccount()
-  app.setBadgeCount(0)
-  send({ type: 'session', state: 'loggedOut' } satisfies AppEvent)
-}
-
 /**
- * Development only: `TALK_DEV_ENV=../.env TALK_DEV_PREFIX=BOT_A npm run dev` signs in with
- * `<PREFIX>_USER`/`<PREFIX>_PASS` and `NC_URL` from that file, without storing anything.
+ * Development only, never stored and never mixed with the stored accounts:
+ * `TALK_DEV_SERVER`/`_USER`/`_PASS` (and the same with `_2` for a second account), or
+ * `TALK_DEV_ENV=../.env TALK_DEV_PREFIX=BOT_A` with `<PREFIX>_USER`/`_PASS` and `NC_URL`.
  */
-function devAccount(): { server: string; user: string; password: string } | null {
-  if (app.isPackaged) return null
-  // Unpackaged runs only: TALK_DEV_SERVER/USER/PASS directly (like the iOS debug build) …
-  const { TALK_DEV_SERVER: server, TALK_DEV_USER: devUser, TALK_DEV_PASS: devPass } = process.env
-  if (server && devUser && devPass) return { server, user: devUser, password: devPass }
-  // … or a .env file with a prefix.
+function devAccounts(): { server: string; user: string; password: string }[] {
+  if (app.isPackaged) return []
+  const found: { server: string; user: string; password: string }[] = []
+  for (const suffix of ['', '_2']) {
+    const server = process.env[`TALK_DEV_SERVER${suffix}`]
+    const user = process.env[`TALK_DEV_USER${suffix}`]
+    const password = process.env[`TALK_DEV_PASS${suffix}`]
+    if (server && user && password) found.push({ server, user, password })
+  }
+  if (found.length) return found
   const file = process.env.TALK_DEV_ENV
-  if (!file) return null
+  if (!file) return []
   const prefix = process.env.TALK_DEV_PREFIX ?? 'NC'
   const env = Object.fromEntries(
     readFileSync(file, 'utf8')
@@ -391,12 +719,29 @@ function devAccount(): { server: string; user: string; password: string } | null
   )
   const user = env[`${prefix}_USER`]
   const password = env[`${prefix}_PASS`]
-  return env.NC_URL && user && password ? { server: env.NC_URL, user, password } : null
+  return env.NC_URL && user && password ? [{ server: env.NC_URL, user, password }] : []
 }
 
-function requireSession(): NativeSession {
-  if (!session) throw new Error('not signed in')
-  return session
+function startDevAccounts(dev: { server: string; user: string; password: string }[]): void {
+  persist = false
+  for (const d of dev) {
+    const host = serverLabel(d.server).replace(/[^a-zA-Z0-9.-]/g, '_')
+    const stored: StoredAccount = {
+      id: newAccountId(),
+      server: d.server,
+      loginName: d.user,
+      userId: d.user,
+      name: d.user,
+      key: '',
+      // Their own cache: never mix two accounts' messages.
+      dir: join('talk-dev', `${host}-${d.user}`),
+      secret: '',
+    }
+    list.accounts.push(stored)
+    bootRuntime(createRuntime(stored, d.password), d.password)
+  }
+  activeId = list.accounts[0]?.id ?? null
+  updateBadges()
 }
 
 // --- Notifications ----------------------------------------------------------------
@@ -406,50 +751,56 @@ function wantsNotification(room: RoomView): boolean {
   return room.notificationLevel === 1 || (room.notificationLevel === 2 && room.unreadMention)
 }
 
-function notifyNewMessages(rooms: RoomView[]): void {
-  const previous = lastRooms
-  lastRooms = new Map(rooms.map((r) => [r.token, r]))
-  if (firstRoomsEvent) {
-    firstRoomsEvent = false
+/**
+ * A notification of an account: from two accounts on it names the account, as subtitle on
+ * macOS, elsewhere behind the title. A click switches to the account and opens the chat.
+ */
+function notify(rt: Runtime, options: Electron.NotificationConstructorOptions, token: string | null): Notification {
+  const line = accountLine(rt)
+  const n = new Notification(
+    !line ? options : process.platform === 'darwin' ? { ...options, subtitle: line } : { ...options, title: `${options.title} – ${line}` },
+  )
+  n.on('click', () => openFromNotification(rt, token))
+  n.show()
+  return n
+}
+
+function openFromNotification(rt: Runtime, token: string | null): void {
+  showWindow()
+  if (!runtimes.has(rt.id)) return
+  const refused = switchTo(rt.id)
+  if (refused) send({ type: 'notice', text: refused } satisfies AppEvent)
+  else if (token) sendFrom(rt, { type: 'openRoom', token })
+}
+
+function notifyNewMessages(rt: Runtime, rooms: RoomView[]): void {
+  const previous = rt.lastRooms
+  rt.lastRooms = new Map(rooms.map((r) => [r.token, r]))
+  if (rt.firstRoomsEvent) {
+    rt.firstRoomsEvent = false
     return
   }
-  const focused = win?.isFocused() ?? false
+  // Only the chat open in the window, in the front, stays quiet.
+  const focused = (win?.isFocused() ?? false) && rt.id === activeId
   for (const room of rooms) {
     const before = previous.get(room.token)
     if (!before || room.unreadMessages <= before.unreadMessages) continue
-    if (focused && room.token === activeToken) continue
+    if (focused && room.token === rt.openToken) continue
     if (!wantsNotification(room) || !room.lastMessage || room.lastMessage.isOwn) continue
     if (!Notification.isSupported()) continue
     const text = withAttachment(room.lastMessage.text, room.lastMessage.attachment)
-    const n = new Notification({
-      title: room.name,
-      body: room.roomType === 1 ? text : `${room.lastMessage.author}: ${text}`,
-      silent: false,
-    })
-    n.on('click', () => {
-      showWindow()
-      send({ type: 'openRoom', token: room.token })
-    })
-    n.show()
+    notify(rt, { title: room.name, body: room.roomType === 1 ? text : `${room.lastMessage.author}: ${text}`, silent: false }, room.token)
   }
 }
 
 /** A message finally failed while the user was not looking at its chat. */
-function announceFailures(token: string, items: PendingMessage[]): void {
-  const fresh = items.filter((i) => i.state === 'failed' && !notifiedFailures.has(i.message.referenceId))
+function announceFailures(rt: Runtime, token: string, items: PendingMessage[]): void {
+  const fresh = items.filter((i) => i.state === 'failed' && !rt.notifiedFailures.has(i.message.referenceId))
   if (fresh.length === 0) return
-  fresh.forEach((i) => notifiedFailures.add(i.message.referenceId))
-  const visible = (win?.isFocused() ?? false) && activeToken === token
+  fresh.forEach((i) => rt.notifiedFailures.add(i.message.referenceId))
+  const visible = (win?.isFocused() ?? false) && rt.id === activeId && rt.openToken === token
   if (visible || !Notification.isSupported()) return
-  const n = new Notification({
-    title: 'Nachricht nicht gesendet',
-    body: lastRooms.get(token)?.name ?? 'Unterhaltung',
-  })
-  n.on('click', () => {
-    showWindow()
-    send({ type: 'openRoom', token })
-  })
-  n.show()
+  notify(rt, { title: 'Nachricht nicht gesendet', body: rt.lastRooms.get(token)?.name ?? 'Unterhaltung' }, token)
 }
 
 // --- Calls: media engine bridge (core in this process, WebRTC in the renderer) -----
@@ -466,9 +817,14 @@ let micEnabled = true
 let cameraEnabled = false
 /** The call shown last (state drives ringing attention and close-to-tray). */
 let call: CallView | null = null
+/** The account of that call: controls and media reports go there (docs/accounts.md „Anrufe“). */
+let callOwner: Runtime | null = null
+/** The account whose core issued the last media command: its peers, its reports. */
+let mediaOwner: Runtime | null = null
 let ringNotification: Notification | null = null
 
-function onMediaCommand(cmd: MediaCommand): void {
+function onMediaCommand(rt: Runtime, cmd: MediaCommand): void {
+  mediaOwner = rt
   switch (cmd.cmd) {
     case 'createPeer':
       openPeers.add(cmd.peerId)
@@ -506,10 +862,11 @@ function mediaEngineLost(): void {
     if (queued.has(peerId)) continue
     // The core replaces failed peers with new ones (new ids); late commands for these are ignored.
     openPeers.delete(peerId)
-    session?.mediaReport({ type: 'peerState', peerId, state: 'failed' })
+    mediaOwner?.session.mediaReport({ type: 'peerState', peerId, state: 'failed' })
   }
   // The screen track went with the renderer; a reload does not bring the share back.
-  if (session?.currentCall()?.screenSharing) session.mediaReport({ type: 'screenState', on: false })
+  const owner = callOwner
+  if (owner?.session.currentCall()?.screenSharing) owner.session.mediaReport({ type: 'screenState', on: false })
 }
 
 function mediaEngineReady(): void {
@@ -531,71 +888,78 @@ function callActive(): boolean {
   return call !== null && call.state !== 'ended'
 }
 
-function onCallChanged(next: CallView | null): void {
+/** A call that rings no more: no switching to another account meanwhile. */
+function callRunning(): boolean {
+  return callActive() && call?.state !== 'incoming'
+}
+
+/** The account of the running call; throws without one. */
+function callRuntime(): Runtime {
+  if (!callOwner || !runtimes.has(callOwner.id)) throw new Error('Kein Anruf')
+  return callOwner
+}
+
+function onCallChanged(rt: Runtime, next: CallView | null): void {
+  // The core keeps one call per process: `null` from another account is not about this one.
+  if (callOwner && callOwner !== rt && !next) return
   const wasRinging = call?.state === 'incoming'
   const wasActive = callActive()
   call = next
+  callOwner = next ? rt : null
   // Keep awake, network, and on macOS dock, menu bar and the notification with buttons.
-  callChanged(next)
+  callChanged(next ? { ...next, accountLine: accountLine(rt) } : null)
   const ringing = next?.state === 'incoming'
   if (callActive() !== wasActive) updateTrayMenu()
-  if (ringing && !wasRinging) startRingAttention(next)
+  if (ringing && !wasRinging) startRingAttention(rt, next)
   else if (!ringing && wasRinging) stopRingAttention()
+  // Whichever account is shown: the call UI belongs to the window.
+  send({ type: 'callChanged', call: next, accountId: rt.id })
+}
+
+/** The call's account went away (signed out): the call UI closes. */
+function callEnded(): void {
+  const rt = callOwner
+  if (rt) onCallChanged(rt, null)
 }
 
 /** Incoming call: blink the taskbar entry and show a silent notification (the bar rings). */
-function startRingAttention(c: CallView): void {
+function startRingAttention(rt: Runtime, c: CallView): void {
   if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true)
   // macOS: system.ts shows the notification with Annehmen/Ablehnen buttons.
   if (process.platform === 'darwin' || !Notification.isSupported()) return
   ringNotification?.close()
+  const line = accountLine(rt)
+  const title = c.isGroup ? `Gruppenanruf · ${c.roomName}` : c.roomName
   const n = new Notification({
-    title: c.isGroup ? `Gruppenanruf · ${c.roomName}` : c.roomName,
+    title: line ? `${title} – ${line}` : title,
     body: c.isGroup && c.callerName ? `${c.callerName} ruft an` : 'Eingehender Anruf',
     silent: true,
     urgency: 'critical',
     timeoutType: 'never',
   })
+  // The bar in the window answers; the chat opens only where no call blocks the switch.
   n.on('click', () => {
     showWindow()
-    send({ type: 'openRoom', token: c.token })
+    if (rt.id === activeId) sendFrom(rt, { type: 'openRoom', token: c.token })
   })
   n.show()
   ringNotification = n
 }
 
-function notifyMissedCall(m: { token: string; roomName: string; callerName: string; isGroup: boolean }): void {
+function notifyMissedCall(rt: Runtime, m: { token: string; roomName: string; callerName: string; isGroup: boolean }): void {
   if (!Notification.isSupported()) return
-  const n = new Notification({
-    title: 'Verpasster Anruf',
-    body: m.isGroup ? `${m.callerName || 'Gruppenanruf'} · ${m.roomName}` : `von ${m.roomName}`,
-  })
-  n.on('click', () => {
-    showWindow()
-    send({ type: 'openRoom', token: m.token })
-  })
-  n.show()
+  notify(rt, { title: 'Verpasster Anruf', body: m.isGroup ? `${m.callerName || 'Gruppenanruf'} · ${m.roomName}` : `von ${m.roomName}` }, m.token)
 }
 
-/** Recording notices already announced. */
-const knownNotices = new Set<number>()
-/** Unix s of the sign-in: older notices (stored while the app was closed) stay quiet. */
-let noticesSince = 0
-
 /** A recording, transcript or summary is ready while the app runs: a quiet notification. */
-function notifyRecordings(items: RecordingNotice[]): void {
+function notifyRecordings(rt: Runtime, items: RecordingNotice[]): void {
   // The core sends no first (empty) list, so "the first event is old" does not hold;
   // the server timestamp decides (a minute of slack for clock skew).
-  const fresh = items.filter((i) => !knownNotices.has(i.id) && i.timestamp >= noticesSince - 60)
-  items.forEach((i) => knownNotices.add(i.id))
+  const fresh = items.filter((i) => !rt.knownNotices.has(i.id) && i.timestamp >= rt.noticesSince - 60)
+  items.forEach((i) => rt.knownNotices.add(i.id))
   if (!Notification.isSupported()) return
   for (const i of fresh) {
-    const n = new Notification({ title: recordingNoticeTitle(i), body: i.fileName ? `${i.roomName} · ${i.fileName}` : i.roomName, silent: true })
-    n.on('click', () => {
-      showWindow()
-      send({ type: 'openRoom', token: i.token })
-    })
-    n.show()
+    notify(rt, { title: recordingNoticeTitle(i), body: i.fileName ? `${i.roomName} · ${i.fileName}` : i.roomName, silent: true }, i.token)
   }
 }
 
@@ -605,11 +969,18 @@ function stopRingAttention(): void {
   ringNotification = null
 }
 
+/** „Annehmen“ (bar, notification, dock): first in the call's account, then switch there. */
+async function acceptCall(token: string): Promise<void> {
+  const rt = callRuntime()
+  if (!(await ensureMicrophone('call'))) return
+  await rt.session.acceptCall(token)
+  if (runtimes.has(rt.id)) switchTo(rt.id, true)
+}
+
 // --- Attachments: staging ----------------------------------------------------------
 
-function stagingDir(): string {
-  if (!sessionDir) throw new Error('not signed in')
-  const dir = join(sessionDir, 'staging')
+function stagingDir(rt: Runtime): string {
+  const dir = join(rt.dir, 'staging')
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -620,8 +991,8 @@ function safeName(name: string): string {
   return clean || 'Datei'
 }
 
-function stagedPath(name: string): string {
-  return join(stagingDir(), `${randomBytes(8).toString('hex')}${extname(safeName(name)).toLowerCase()}`)
+function stagedPath(rt: Runtime, name: string): string {
+  return join(stagingDir(rt), `${randomBytes(8).toString('hex')}${extname(safeName(name)).toLowerCase()}`)
 }
 
 /** `true` when `path` lies inside `dir` (no `..` escapes). */
@@ -682,16 +1053,16 @@ async function sniffAudio(path: string, fallback: string): Promise<string> {
   }
 }
 
-async function stageData(name: string, mime: string, data: Uint8Array, width: number, height: number): Promise<StagedFile> {
-  const path = stagedPath(name)
+async function stageData(rt: Runtime, name: string, mime: string, data: Uint8Array, width: number, height: number): Promise<StagedFile> {
+  const path = stagedPath(rt, name)
   await writeFile(path, data)
   return { path, name: safeName(name), mime: mimeFor(name, mime), size: data.byteLength, width, height }
 }
 
-async function stagePath(source: string, name: string, mime: string): Promise<StagedFile> {
+async function stagePath(rt: Runtime, source: string, name: string, mime: string): Promise<StagedFile> {
   const info = await stat(source)
   if (!info.isFile()) throw new Error('Ordner können nicht gesendet werden')
-  const path = stagedPath(name || source)
+  const path = stagedPath(rt, name || source)
   // A copy: the outbox moves its file, the user's original must stay.
   await copyFile(source, path)
   const fileName = safeName(name || basename(source))
@@ -729,7 +1100,7 @@ function updateTrayMenu(): void {
   tray?.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Wolkenfunk öffnen', click: showWindow },
-      ...(callActive() ? [{ label: 'Auflegen', click: () => session?.hangUp() }] : []),
+      ...(callActive() ? [{ label: 'Auflegen', click: () => callOwner?.session.hangUp() }] : []),
       { type: 'separator' },
       {
         label: 'Beim Schließen im Hintergrund weiterlaufen',
@@ -859,82 +1230,82 @@ function createWindow(): void {
 
 // --- IPC ---------------------------------------------------------------------------
 
-function registerIpc(): void {
-  ipcMain.handle('talk:account', () => account)
+/**
+ * A call for one account: the renderer passes the id of the account it shows, and the call
+ * runs in exactly that account, also when another one became active meanwhile
+ * (docs/accounts.md). `r` is null when the account is gone.
+ */
+function handle<A extends unknown[]>(channel: string, fn: (r: Runtime | null, ...args: A) => unknown): void {
+  ipcMain.handle(channel, (_e, id: string | null, ...args: A) => fn(id ? (runtimes.get(id) ?? null) : null, ...args))
+}
 
-  ipcMain.handle('talk:login', async (_e, server: string) => {
-    loginFlow?.cancel()
-    const flow = await core.startLogin(server)
-    loginFlow = flow
-    await shell.openExternal(flow.loginUrl)
-    try {
-      const creds = await flow.wait()
-      saveAccount(creds.server, creds.loginName, creds.appPassword)
-      const stored = loadAccount()
-      if (stored) startSession(stored)
-      showWindow()
-    } finally {
-      if (loginFlow === flow) loginFlow = null
-    }
+/** The account of a call that cannot do without one. */
+function need(r: Runtime | null): Runtime {
+  if (!r) throw new Error('Dieses Konto ist nicht mehr angemeldet')
+  return r
+}
+
+function registerIpc(): void {
+  // Accounts (docs/accounts.md): not bound to the account shown.
+  ipcMain.handle('talk:account', () => {
+    const rt = activeRuntime()
+    return rt ? { account: accountInfo(rt), rooms: rt.session.rooms() } : null
   })
+  ipcMain.handle('talk:accounts', () => accountsView())
+  ipcMain.handle('talk:switchAccount', (_e, id: string) => switchTo(id))
+  ipcMain.handle('talk:addAccount', (_e, server: string) => addAccount(server))
   ipcMain.handle('talk:cancelLogin', () => {
     loginFlow?.cancel()
     loginFlow = null
   })
-  ipcMain.handle('talk:logout', () => signOut(true))
+  handle('talk:logout', async (r) => {
+    if (r) await removeAccount(r, true)
+  })
 
   // From the core cache before the first request completes.
-  ipcMain.handle('talk:rooms', () => session?.rooms() ?? [])
-  ipcMain.handle('talk:cachedChat', (_e, token: string) => requireSession().cachedChat(token))
-  ipcMain.handle('talk:openChat', (_e, token: string) => {
-    activeToken = token
-    return requireSession().openChat(token)
+  handle('talk:rooms', (r) => r?.session.rooms() ?? [])
+  handle('talk:cachedChat', (r, token: string) => need(r).session.cachedChat(token))
+  handle('talk:openChat', (r, token: string) => {
+    need(r).openToken = token
+    return r!.session.openChat(token)
   })
-  ipcMain.handle('talk:closeChat', (_e, token: string) => {
-    if (activeToken === token) activeToken = null
-    session?.closeChat(token)
+  handle('talk:closeChat', (r, token: string) => {
+    if (!r) return
+    if (r.openToken === token) r.openToken = null
+    r.session.closeChat(token)
   })
-  ipcMain.handle('talk:loadOlder', (_e, token: string, beforeId: number) => requireSession().loadOlder(token, beforeId))
-  ipcMain.handle('talk:refreshRooms', () => session?.refreshRooms().catch(() => undefined))
-  ipcMain.handle('talk:enqueueText', (_e, token: string, text: string, replyTo: ReplyPreview | null) =>
-    requireSession().enqueueText(token, text, replyTo, core.newReferenceId()),
+  handle('talk:loadOlder', (r, token: string, beforeId: number) => need(r).session.loadOlder(token, beforeId))
+  handle('talk:refreshRooms', (r) => r?.session.refreshRooms().catch(() => undefined))
+  handle('talk:enqueueText', (r, token: string, text: string, replyTo: ReplyPreview | null) =>
+    need(r).session.enqueueText(token, text, replyTo, core.newReferenceId()),
   )
-  ipcMain.handle(
-    'talk:enqueueFile',
-    (_e, token: string, file: StagedFile, caption: string, replyTo: ReplyPreview | null) => {
-      if (!sessionDir || !inside(join(sessionDir, 'staging'), file.path)) throw new Error('not a staged file')
-      return requireSession().enqueueFile(
-        token,
-        file.path,
-        file.name,
-        file.mime,
-        file.width,
-        file.height,
-        caption,
-        replyTo,
-        core.newReferenceId(),
-      )
-    },
-  )
-  ipcMain.handle('talk:pending', (_e, token: string) => session?.pending(token) ?? [])
-  ipcMain.handle('talk:retrySend', (_e, referenceId: string) => {
-    notifiedFailures.delete(referenceId)
-    session?.retrySend(referenceId)
+  handle('talk:enqueueFile', (r, token: string, file: StagedFile, caption: string, replyTo: ReplyPreview | null) => {
+    const rt = need(r)
+    if (!inside(join(rt.dir, 'staging'), file.path)) throw new Error('not a staged file')
+    return rt.session.enqueueFile(token, file.path, file.name, file.mime, file.width, file.height, caption, replyTo, core.newReferenceId())
   })
-  ipcMain.handle('talk:discard', (_e, referenceId: string) => session?.discard(referenceId))
-  ipcMain.on('talk:networkChanged', () => session?.networkChanged())
-  ipcMain.handle('talk:stageData', (_e, name: string, mime: string, data: Uint8Array, width: number, height: number) =>
-    stageData(name, mime, data, width, height),
-  )
-  ipcMain.handle('talk:stagePath', (_e, path: string, name: string, mime: string) => stagePath(path, name, mime))
-  ipcMain.handle('talk:unstage', async (_e, path: string) => {
-    if (sessionDir && inside(join(sessionDir, 'staging'), path)) await rm(path, { force: true })
+  handle('talk:pending', (r, token: string) => r?.session.pending(token) ?? [])
+  handle('talk:retrySend', (r, referenceId: string) => {
+    r?.notifiedFailures.delete(referenceId)
+    r?.session.retrySend(referenceId)
   })
-  ipcMain.handle('talk:voiceStart', async (_e, token: string, sampleRate: number) => {
+  handle('talk:discard', (r, referenceId: string) => r?.session.discard(referenceId))
+  // Every account's outbox waits for the network.
+  ipcMain.on('talk:networkChanged', () => runtimes.forEach((r) => r.session.networkChanged()))
+  handle('talk:stageData', (r, name: string, mime: string, data: Uint8Array, width: number, height: number) =>
+    stageData(need(r), name, mime, data, width, height),
+  )
+  handle('talk:stagePath', (r, path: string, name: string, mime: string) => stagePath(need(r), path, name, mime))
+  handle('talk:unstage', async (r, path: string) => {
+    if (r && inside(join(r.dir, 'staging'), path)) await rm(path, { force: true })
+  })
+  handle('talk:voiceStart', async (r, token: string, sampleRate: number) => {
+    const rt = need(r)
     finishRecording()
     if (!(await ensureMicrophone('voice'))) throw new Error('Kein Zugriff auf das Mikrofon')
-    recording = { token, rec: requireSession().startVoice(token, sampleRate) }
+    recording = { rt, token, rec: rt.session.startVoice(token, sampleRate) }
   })
+  // The recording knows its account: these follow it, whichever account is shown.
   ipcMain.handle('talk:voicePush', (_e, pcm: Uint8Array) => {
     if (!recording) throw new Error('no recording')
     return recording.rec.push(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength))
@@ -944,96 +1315,75 @@ function registerIpc(): void {
     recording?.rec.cancel()
     recording = null
   })
-  ipcMain.handle('talk:voiceDraft', (_e, token: string) =>
-    recording?.token === token ? null : (session?.voiceDraft(token) ?? null),
+  handle('talk:voiceDraft', (r, token: string) =>
+    !r || (recording?.rt === r && recording.token === token) ? null : (r.session.voiceDraft(token) ?? null),
   )
-  ipcMain.handle('talk:voiceDiscard', (_e, token: string) => session?.discardVoiceDraft(token))
-  ipcMain.handle('talk:voiceSend', (_e, token: string, replyTo: ReplyPreview | null) =>
-    requireSession().sendVoiceDraft(token, voiceFileName(), replyTo, core.newReferenceId()),
+  handle('talk:voiceDiscard', (r, token: string) => r?.session.discardVoiceDraft(token))
+  handle('talk:voiceSend', (r, token: string, replyTo: ReplyPreview | null) =>
+    need(r).session.sendVoiceDraft(token, voiceFileName(), replyTo, core.newReferenceId()),
   )
-  ipcMain.handle('talk:fetchFile', (_e, path: string, size: number) => requireSession().fetchFile(path, size))
-  ipcMain.handle('talk:audioInfo', (_e, localPath: string) => {
-    if (!sessionDir || !inside(sessionDir, localPath)) throw new Error('not an app file')
-    return requireSession().audioInfo(localPath)
+  handle('talk:fetchFile', (r, path: string, size: number) => need(r).session.fetchFile(path, size))
+  handle('talk:audioInfo', (r, localPath: string) => {
+    const rt = need(r)
+    if (!inside(rt.dir, localPath)) throw new Error('not an app file')
+    return rt.session.audioInfo(localPath)
   })
-  ipcMain.handle('talk:markRead', (_e, token: string, messageId: number) => session?.markRead(token, messageId))
-  ipcMain.handle('talk:setReaction', (_e, token: string, messageId: number, emoji: string | null) =>
-    session ? session.setReaction(token, messageId, emoji) : 'Nicht angemeldet',
+  handle('talk:markRead', (r, token: string, messageId: number) => r?.session.markRead(token, messageId))
+  handle('talk:setReaction', (r, token: string, messageId: number, emoji: string | null) =>
+    r ? r.session.setReaction(token, messageId, emoji) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:reactions', (_e, token: string, messageId: number) => session?.reactions(token, messageId) ?? [])
+  handle('talk:reactions', (r, token: string, messageId: number) => r?.session.reactions(token, messageId) ?? [])
 
   // Groups (docs/groups.md) and categories (docs/categories.md): changes resolve to a
   // German error text or null.
-  const NOT_SIGNED_IN = 'Nicht angemeldet'
-  ipcMain.handle('talk:roomSections', (_e, query: string, activeToken: string | null) =>
-    session ? session.roomSections(query, activeToken) : [],
+  handle('talk:roomSections', (r, query: string, activeToken: string | null) => (r ? r.session.roomSections(query, activeToken) : []))
+  handle('talk:toggleSection', (r, id: string) => (r ? r.session.toggleSection(id) : NOT_SIGNED_IN))
+  handle('talk:categoriesSupported', (r) => r?.session.categoriesSupported() ?? false)
+  handle('talk:categories', (r) => (r ? r.session.categories() : []))
+  handle('talk:createCategory', (r, name: string, tokens: string[]) =>
+    r ? r.session.createCategory(name, tokens) : { id: null, error: NOT_SIGNED_IN },
   )
-  ipcMain.handle('talk:toggleSection', (_e, id: string) => (session ? session.toggleSection(id) : NOT_SIGNED_IN))
-  ipcMain.handle('talk:categoriesSupported', () => session?.categoriesSupported() ?? false)
-  ipcMain.handle('talk:categories', () => (session ? session.categories() : []))
-  ipcMain.handle('talk:createCategory', (_e, name: string, tokens: string[]) =>
-    session ? session.createCategory(name, tokens) : { id: null, error: NOT_SIGNED_IN },
-  )
-  ipcMain.handle('talk:renameCategory', (_e, id: string, name: string) =>
-    session ? session.renameCategory(id, name) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:deleteCategory', (_e, id: string) => (session ? session.deleteCategory(id) : NOT_SIGNED_IN))
-  ipcMain.handle('talk:moveCategory', (_e, id: string, offset: number) =>
-    session ? session.moveCategory(id, offset) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:setCategoryRooms', (_e, id: string, tokens: string[]) =>
-    session ? session.setCategoryRooms(id, tokens) : NOT_SIGNED_IN,
-  )
+  handle('talk:renameCategory', (r, id: string, name: string) => (r ? r.session.renameCategory(id, name) : NOT_SIGNED_IN))
+  handle('talk:deleteCategory', (r, id: string) => (r ? r.session.deleteCategory(id) : NOT_SIGNED_IN))
+  handle('talk:moveCategory', (r, id: string, offset: number) => (r ? r.session.moveCategory(id, offset) : NOT_SIGNED_IN))
+  handle('talk:setCategoryRooms', (r, id: string, tokens: string[]) => (r ? r.session.setCategoryRooms(id, tokens) : NOT_SIGNED_IN))
   const bytes = (data: Uint8Array | null) => (data ? Buffer.from(data) : null)
-  ipcMain.handle('talk:canCreateGroups', () => session?.canCreateGroups() ?? false)
-  ipcMain.handle('talk:searchUsers', (_e, query: string, excludeToken: string | null) =>
-    requireSession().searchUsers(query, excludeToken),
+  handle('talk:canCreateGroups', (r) => r?.session.canCreateGroups() ?? false)
+  handle('talk:searchUsers', (r, query: string, excludeToken: string | null) => need(r).session.searchUsers(query, excludeToken))
+  handle('talk:openDirect', (r, userId: string) => (r ? r.session.openDirect(userId) : { token: null, error: NOT_SIGNED_IN }))
+  handle('talk:createGroup', (r, name: string, userIds: string[], photo: Uint8Array | null) =>
+    r ? r.session.createGroup(name, userIds, bytes(photo)) : { token: null, error: NOT_SIGNED_IN },
   )
-  ipcMain.handle('talk:openDirect', (_e, userId: string) =>
-    session ? session.openDirect(userId) : { token: null, error: NOT_SIGNED_IN },
+  handle('talk:members', (r, token: string) => need(r).session.members(token))
+  handle('talk:addMembers', (r, token: string, userIds: string[]) => (r ? r.session.addMembers(token, userIds) : NOT_SIGNED_IN))
+  handle('talk:removeMember', (r, token: string, attendeeId: number) =>
+    r ? r.session.removeMember(token, attendeeId) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:createGroup', (_e, name: string, userIds: string[], photo: Uint8Array | null) =>
-    session ? session.createGroup(name, userIds, bytes(photo)) : { token: null, error: NOT_SIGNED_IN },
+  handle('talk:setModerator', (r, token: string, attendeeId: number, moderator: boolean) =>
+    r ? r.session.setModerator(token, attendeeId, moderator) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:members', (_e, token: string) => requireSession().members(token))
-  ipcMain.handle('talk:addMembers', (_e, token: string, userIds: string[]) =>
-    session ? session.addMembers(token, userIds) : NOT_SIGNED_IN,
+  handle('talk:renameGroup', (r, token: string, name: string) => (r ? r.session.renameGroup(token, name) : NOT_SIGNED_IN))
+  handle('talk:setDescription', (r, token: string, description: string) =>
+    r ? r.session.setDescription(token, description) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:removeMember', (_e, token: string, attendeeId: number) =>
-    session ? session.removeMember(token, attendeeId) : NOT_SIGNED_IN,
+  handle('talk:setGroupPhoto', (r, token: string, photo: Uint8Array | null) =>
+    r ? r.session.setGroupPhoto(token, bytes(photo)) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:setModerator', (_e, token: string, attendeeId: number, moderator: boolean) =>
-    session ? session.setModerator(token, attendeeId, moderator) : NOT_SIGNED_IN,
+  handle('talk:setGroupLink', (r, token: string, on: boolean) => (r ? r.session.setGroupLink(token, on) : NOT_SIGNED_IN))
+  handle('talk:groupLink', (r, token: string) => need(r).session.groupLink(token))
+  handle('talk:setNotificationLevel', (r, token: string, level: number) =>
+    r ? r.session.setNotificationLevel(token, level) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:renameGroup', (_e, token: string, name: string) =>
-    session ? session.renameGroup(token, name) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:setDescription', (_e, token: string, description: string) =>
-    session ? session.setDescription(token, description) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:setGroupPhoto', (_e, token: string, photo: Uint8Array | null) =>
-    session ? session.setGroupPhoto(token, bytes(photo)) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:setGroupLink', (_e, token: string, on: boolean) =>
-    session ? session.setGroupLink(token, on) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:groupLink', (_e, token: string) => requireSession().groupLink(token))
-  ipcMain.handle('talk:setNotificationLevel', (_e, token: string, level: number) =>
-    session ? session.setNotificationLevel(token, level) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:leaveNeedsModerator', (_e, token: string) => requireSession().leaveNeedsModerator(token))
-  ipcMain.handle('talk:leaveGroup', (_e, token: string) => (session ? session.leaveGroup(token) : NOT_SIGNED_IN))
-  ipcMain.handle('talk:deleteGroup', (_e, token: string) => (session ? session.deleteGroup(token) : NOT_SIGNED_IN))
-  ipcMain.on('talk:setBadge', (_e, count: number) => app.setBadgeCount(count))
+  handle('talk:leaveNeedsModerator', (r, token: string) => need(r).session.leaveNeedsModerator(token))
+  handle('talk:leaveGroup', (r, token: string) => (r ? r.session.leaveGroup(token) : NOT_SIGNED_IN))
+  handle('talk:deleteGroup', (r, token: string) => (r ? r.session.deleteGroup(token) : NOT_SIGNED_IN))
 
   // Chat menu (docs/settings.md): shown at once, a German error text or null.
-  ipcMain.handle('talk:setFavorite', (_e, token: string, on: boolean) =>
-    session ? session.setFavorite(token, on) : NOT_SIGNED_IN,
+  handle('talk:setFavorite', (r, token: string, on: boolean) => (r ? r.session.setFavorite(token, on) : NOT_SIGNED_IN))
+  handle('talk:setRoomCategories', (r, token: string, ids: string[]) =>
+    r ? r.session.setRoomCategories(token, ids) : NOT_SIGNED_IN,
   )
-  ipcMain.handle('talk:setRoomCategories', (_e, token: string, ids: string[]) =>
-    session ? session.setRoomCategories(token, ids) : NOT_SIGNED_IN,
-  )
-  ipcMain.handle('talk:markRoomRead', (_e, token: string) => (session ? session.markRoomRead(token) : NOT_SIGNED_IN))
+  handle('talk:markRoomRead', (r, token: string) => (r ? r.session.markRoomRead(token) : NOT_SIGNED_IN))
 
   // Settings (docs/settings.md): device settings in settings.json.
   ipcMain.handle('talk:appearance', () => ({ theme: settings.theme, accent: settings.accent }))
@@ -1047,50 +1397,57 @@ function registerIpc(): void {
   }))
   ipcMain.handle('talk:checkForUpdates', () => checkForUpdatesNow())
 
-  // Calls (docs/calls.md).
+  // Calls (docs/calls.md). Starting is the shown account's; everything after that goes to
+  // the account of the call (docs/accounts.md „Anrufe“).
   // macOS asks for the microphone first (and explains a refusal) instead of a silent call.
-  ipcMain.handle('talk:startCall', async (_e, token: string, silent: boolean) => {
-    if (await ensureMicrophone('call')) await requireSession().startCall(token, silent)
+  handle('talk:startCall', async (r, token: string, silent: boolean) => {
+    const rt = need(r)
+    if (await ensureMicrophone('call')) await rt.session.startCall(token, silent)
   })
-  ipcMain.handle('talk:acceptCall', async (_e, token: string) => {
-    if (await ensureMicrophone('call')) await requireSession().acceptCall(token)
-  })
-  ipcMain.handle('talk:declineCall', (_e, token: string) => session?.declineCall(token))
-  ipcMain.handle('talk:hangUp', () => session?.hangUp())
-  ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => session?.setCallMuted(muted))
+  ipcMain.handle('talk:acceptCall', (_e, token: string) => acceptCall(token))
+  ipcMain.handle('talk:declineCall', (_e, token: string) => callOwner?.session.declineCall(token))
+  ipcMain.handle('talk:hangUp', () => callOwner?.session.hangUp())
+  ipcMain.handle('talk:setCallMuted', (_e, muted: boolean) => callOwner?.session.setCallMuted(muted))
   ipcMain.handle('talk:setFullScreen', (_e, on: boolean) => win?.setFullScreen(on))
   ipcMain.handle('talk:isFullScreen', () => win?.isFullScreen() ?? false)
   // macOS asks for the camera on the first switch-on; refused, it stays off (the dialog explains).
   ipcMain.handle('talk:setCameraEnabled', async (_e, on: boolean) => {
     if (on && !(await ensureCamera())) return false
-    session?.setCameraEnabled(on)
+    callOwner?.session.setCameraEnabled(on)
     return true
   })
-  ipcMain.handle('talk:setScreenShare', (_e, on: boolean) => session?.setScreenShare(on))
-  ipcMain.handle('talk:currentCall', () => session?.currentCall() ?? null)
-  // Recording (docs/calls.md, „Aufnahme“).
-  ipcMain.handle('talk:startRecording', (_e, video: boolean) => requireSession().startRecording(video))
-  ipcMain.handle('talk:stopRecording', () => requireSession().stopRecording())
-  ipcMain.handle('talk:consentToRecording', () => session?.consentToRecording())
-  ipcMain.handle('talk:recordingNotices', () => session?.recordingNotices() ?? [])
-  ipcMain.handle('talk:shareRecording', (_e, id: number) => requireSession().shareRecording(id))
-  ipcMain.handle('talk:dismissRecording', (_e, id: number) => requireSession().dismissRecording(id))
+  ipcMain.handle('talk:setScreenShare', (_e, on: boolean) => callOwner?.session.setScreenShare(on))
+  ipcMain.handle('talk:currentCall', () => {
+    const rt = callOwner
+    const c = rt?.session.currentCall()
+    return rt && c ? { call: c, account: rt.id } : null
+  })
+  // Recording (docs/calls.md, „Aufnahme“): of the call; the notices are the shown account's.
+  ipcMain.handle('talk:startRecording', (_e, video: boolean) => callRuntime().session.startRecording(video))
+  ipcMain.handle('talk:stopRecording', () => callRuntime().session.stopRecording())
+  ipcMain.handle('talk:consentToRecording', () => callOwner?.session.consentToRecording())
+  handle('talk:recordingNotices', (r) => r?.session.recordingNotices() ?? [])
+  handle('talk:shareRecording', (r, id: number) => need(r).session.shareRecording(id))
+  handle('talk:dismissRecording', (r, id: number) => need(r).session.dismissRecording(id))
   ipcMain.on('talk:mediaReady', (e) => {
     if (e.sender === win?.webContents) mediaEngineReady()
   })
   ipcMain.on('talk:mediaReport', (e, report: MediaReport) => {
-    if (e.sender !== win?.webContents || !session) return
+    const rt = mediaOwner
+    if (e.sender !== win?.webContents || !rt || !runtimes.has(rt.id)) return
     // Reports of peers lost with an earlier renderer must not reach the core.
     if ('peerId' in report && !openPeers.has(report.peerId)) return
     try {
-      session.mediaReport(report)
+      rt.session.mediaReport(report)
     } catch (err) {
       console.warn('media report rejected:', (err as Error).message)
     }
   })
 }
 
-// --- Avatars: talk-avatar://room/<token>?v=<version> ---------------------------------
+const NOT_SIGNED_IN = 'Nicht angemeldet'
+
+// --- Avatars: talk-avatar://<account>/room/<token>?v=<version>, …/user/<userId> -------
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'talk-avatar', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -1098,32 +1455,38 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'talk-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ])
 
+/** `<account>|room|<token>|<version>|<dark>`: tokens of different servers overlap. */
 const avatarCache = new Map<string, { data: Buffer; contentType: string }>()
+
+/** `talk-…://<account>/<kind>/<id>`: the account, the kind and the decoded id. */
+function parseAppUrl(request: Request): { rt: Runtime | null; url: URL; kind: string; id: string } {
+  const url = new URL(request.url)
+  const [, kind = '', ...rest] = url.pathname.split('/')
+  return { rt: runtimes.get(url.hostname) ?? null, url, kind, id: decodeURIComponent(rest.join('/')) }
+}
 
 function registerAvatarProtocol(): void {
   protocol.handle('talk-avatar', async (request) => {
-    const url = new URL(request.url)
-    const id = decodeURIComponent(url.pathname.replace(/^\//, ''))
-    const user = url.hostname === 'user'
+    const { rt, url, kind, id } = parseAppUrl(request)
+    if (!rt || (kind !== 'room' && kind !== 'user')) return new Response(null, { status: 404 })
     const dark = nativeTheme.shouldUseDarkColors
-    const key = `${url.hostname}|${id}|${url.searchParams.get('v') ?? ''}|${dark}`
+    const key = `${rt.id}|${kind}|${id}|${url.searchParams.get('v') ?? ''}|${dark}`
     let hit = avatarCache.get(key)
-    if (!hit && session) {
+    if (!hit) {
       try {
-        hit = user ? await session.userAvatar(id, dark) : await session.avatar(id, dark)
+        hit = kind === 'user' ? await rt.session.userAvatar(id, dark) : await rt.session.avatar(id, dark)
         avatarCache.set(key, hit)
       } catch {
         return new Response(null, { status: 404 })
       }
     }
-    if (!hit) return new Response(null, { status: 404 })
     return new Response(new Uint8Array(hit.data), {
       headers: { 'content-type': hit.contentType, 'cache-control': 'max-age=86400' },
     })
   })
 }
 
-// --- Media: talk-media://preview/<fileId>?w=&h=, talk-media://local/file?p=<path> ---
+// --- Media: talk-media://<account>/preview/<fileId>?w=&h=, …/local/file?p=<path> -------
 
 function imageType(data: Uint8Array, fallback: string): string {
   if (data[0] === 0xff && data[1] === 0xd8) return 'image/jpeg'
@@ -1135,21 +1498,21 @@ function imageType(data: Uint8Array, fallback: string): string {
 
 function registerMediaProtocol(): void {
   protocol.handle('talk-media', async (request) => {
-    const url = new URL(request.url)
+    const { rt, url, kind, id } = parseAppUrl(request)
+    if (!rt) return new Response(null, { status: 404 })
     try {
-      if (url.hostname === 'preview' && session) {
-        const fileId = decodeURIComponent(url.pathname.replace(/^\//, ''))
+      if (kind === 'preview') {
         const w = Math.min(Number(url.searchParams.get('w')) || 512, 4096)
         const h = Math.min(Number(url.searchParams.get('h')) || 512, 4096)
-        const data = await session.filePreview(fileId, w, h)
+        const data = await rt.session.filePreview(id, w, h)
         return new Response(new Uint8Array(data), {
           headers: { 'content-type': imageType(data, 'image/jpeg'), 'cache-control': 'max-age=604800' },
         })
       }
-      if (url.hostname === 'local' && sessionDir) {
+      if (kind === 'local') {
         // Only files of the outbox/staging of this account, nothing else on disk.
         const path = url.searchParams.get('p') ?? ''
-        if (!inside(sessionDir, path)) return new Response(null, { status: 403 })
+        if (!inside(rt.dir, path)) return new Response(null, { status: 403 })
         let type = mimeFor(path, '')
         if (type.startsWith('audio/') || type === 'application/octet-stream') type = await sniffAudio(path, type)
         if (type.startsWith('audio/') || type.startsWith('video/')) return rangeResponse(path, type, request)
@@ -1196,20 +1559,24 @@ async function rangeResponse(path: string, type: string, request: Request): Prom
 let quitting = false
 let readyToQuit = false
 
-/** Gives the outbox a moment to deliver what is in flight before the process ends. */
+/** Gives every account's outbox a moment (one shared deadline) before the process ends. */
 async function quitAfterOutbox(): Promise<void> {
   if (quitting) return
   quitting = true
   finishRecording()
-  const s = session
-  if (s && callActive()) {
+  const all = [...runtimes.values()]
+  if (callOwner && callActive()) {
     // Leave the call properly instead of letting the server time us out.
-    await s.hangUpAndWait(3000).catch(() => undefined)
+    await callOwner.session.hangUpAndWait(3000).catch(() => undefined)
   }
-  if (s && s.outboxUnsent() > 0) {
-    await Promise.race([s.waitOutboxIdle(), new Promise((r) => setTimeout(r, 10_000))]).catch(() => undefined)
+  const waiting = all.filter((r) => r.session.outboxUnsent() > 0)
+  if (waiting.length) {
+    await Promise.race([
+      Promise.all(waiting.map((r) => r.session.waitOutboxIdle().catch(() => undefined))),
+      new Promise((r) => setTimeout(r, 10_000)),
+    ])
   }
-  s?.shutdown()
+  for (const r of all) r.session.shutdown()
   readyToQuit = true
   // Never from inside the `before-quit` that started this (nothing was awaited above):
   // Electron drops a nested quit and the app would stay alive without windows.
@@ -1325,28 +1692,18 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
     installSystem({
-      acceptCall: (token) => requireSession().acceptCall(token),
-      declineCall: (token) => session?.declineCall(token),
-      hangUp: () => session?.hangUp(),
-      setCallMuted: (muted) => session?.setCallMuted(muted),
-      networkChanged: () => session?.networkChanged(),
+      acceptCall,
+      declineCall: (token) => callOwner?.session.declineCall(token),
+      hangUp: () => callOwner?.session.hangUp(),
+      setCallMuted: (muted) => callOwner?.session.setCallMuted(muted),
+      networkChanged: () => runtimes.forEach((r) => r.session.networkChanged()),
       showWindow,
       window: () => (win?.isVisible() ? win : null),
     })
-    const dev = devAccount()
-    const stored = existsSync(accountFile) ? loadAccount() : null
-    if (dev) startSession({ server: dev.server, loginName: dev.user, secret: '' }, dev.password)
-    else if (stored) {
-      try {
-        startSession(stored)
-      } catch (err) {
-        // The keyring no longer opens the stored password (e.g. after the rename from
-        // "Sirplus Talk", whose key it is filed under): sign in again.
-        console.warn('stored account unusable:', (err as Error).message)
-        session = null
-        clearAccount()
-      }
-    }
+    // A dev run (TALK_DEV_*) starts only its own accounts, never the stored ones.
+    const dev = devAccounts()
+    if (dev.length) startDevAccounts(dev)
+    else startStoredAccounts()
     installAutoUpdate()
     createWindow()
     nativeTheme.on('updated', () => avatarCache.clear())

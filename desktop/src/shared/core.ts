@@ -414,8 +414,17 @@ export type MediaReport =
 
 /** Events produced by the Electron main process itself. */
 export type AppEvent =
+  /** No account left: the login shows. */
   | { type: 'session'; state: 'loggedOut' }
-  | { type: 'session'; state: 'ready'; account: AccountInfo }
+  /**
+   * The window shows `account` (docs/accounts.md): after the start, and on a switch, then
+   * with that account's list right away (`rooms`), no loading state.
+   */
+  | { type: 'session'; state: 'ready'; account: AccountInfo; rooms?: RoomView[] }
+  /** The list, the names or the numbers of the accounts changed. */
+  | ({ type: 'accountsChanged' } & AccountsView)
+  /** A short text for a toast (signed out, switching refused). */
+  | { type: 'notice'; text: string }
   | { type: 'openRoom'; token: string }
   /** Keyboard shortcut or notification action of the incoming-call bar. */
   | { type: 'callAction'; action: 'accept' | 'decline' }
@@ -448,20 +457,58 @@ export interface AppInfo {
 /** Result of „Nach Updates suchen“. */
 export type UpdateCheck = { state: 'current' } | { state: 'ready'; version: string }
 
-export type TalkEvent = CoreEvent | AppEvent
+/**
+ * `accountId`: the account the event belongs to. Only the shown account's events reach the
+ * window; `callChanged` comes from whichever account has the call.
+ */
+export type TalkEvent = (CoreEvent | AppEvent) & { accountId?: string }
 
 export interface AccountInfo {
+  /** Local account id (docs/accounts.md). */
+  id: string
   server: string
+  /** Login name. */
   user: string
   userId: string
+  /** Display name from the server, else the user id. */
+  name: string
+}
+
+/** One row of the account menu. */
+export interface AccountRow {
+  id: string
+  name: string
+  /** Without `https://`. */
+  server: string
+  userId: string
+  /** `badge().chats`: chats with something new that counts. */
+  chats: number
+}
+
+export interface AccountsView {
+  /** In the order of signing in. */
+  accounts: AccountRow[]
+  active: string | null
 }
 
 /** API exposed by the preload script as `window.talk`. */
 export interface TalkApi {
-  account(): Promise<AccountInfo | null>
-  /** Opens the browser and resolves once the login was approved (or rejects). */
-  login(server: string): Promise<void>
+  /**
+   * Every call below that concerns chats runs in the account the window shows (the preload
+   * passes its id); answers that arrive after a switch are dropped and never settle.
+   */
+  /** The shown account and its cached list. */
+  account(): Promise<{ account: AccountInfo; rooms: RoomView[] } | null>
+  accounts(): Promise<AccountsView>
+  /** A German text when it is refused (during a call). */
+  switchAccount(id: string): Promise<string | null>
+  /**
+   * First sign-in and „Konto hinzufügen“: opens the browser, resolves once the account is
+   * signed in and shown; `duplicate`: it was signed in already and is shown now.
+   */
+  addAccount(server: string): Promise<'added' | 'duplicate'>
   cancelLogin(): Promise<void>
+  /** Signs the shown account out on this device. */
   logout(): Promise<void>
   rooms(): Promise<RoomView[]>
   /** Newest cached messages, for the first frame of a chat (empty without cache). */
@@ -572,9 +619,8 @@ export interface TalkApi {
   leaveNeedsModerator(token: string): Promise<boolean>
   leaveGroup(token: string): Promise<string | null>
   deleteGroup(token: string): Promise<string | null>
-  setBadge(count: number): void
 
-  // --- calls ---
+  // --- calls: after the start everything goes to the account of the call ---
   /** Calls the conversation or joins its running call; `silent`: nobody is rung (tests). */
   startCall(token: string, silent: boolean): Promise<void>
   acceptCall(token: string): Promise<void>
@@ -596,7 +642,7 @@ export interface TalkApi {
   chooseScreen(sourceId: string | null): Promise<void>
   /** Screen sharing on/off in the running call: after `getDisplayMedia`, see `ScreenSource`. */
   setScreenShare(on: boolean): Promise<void>
-  currentCall(): Promise<CallView | null>
+  currentCall(): Promise<{ call: CallView; account: string } | null>
   /** Only with `call.canRecord`; `video` records the Talk web view. */
   startRecording(video: boolean): Promise<void>
   stopRecording(): Promise<void>
@@ -607,8 +653,8 @@ export interface TalkApi {
   shareRecording(id: number): Promise<void>
   /** Removes the notice (the file stays in the user's files). */
   dismissRecording(id: number): Promise<void>
-  /** Avatar of a call participant by Nextcloud user id. */
-  userAvatarUrl(userId: string): string
+  /** Avatar by Nextcloud user id; `account`: another than the shown one (call, account menu). */
+  userAvatarUrl(userId: string, account?: string): string
   /** Registers the media engine; commands arrive in order. Call once, then `mediaReady`. */
   onMediaCommand(cb: (cmd: MediaCommand) => void): () => void
   /** The engine is listening: main flushes queued commands (also after a reload). */
@@ -617,7 +663,7 @@ export interface TalkApi {
   /** Attention for an incoming call (flash frame, silent notification); `null` stops it. */
   ringAttention(call: { roomName: string; callerName: string; isGroup: boolean } | null): void
   onEvent(cb: (event: TalkEvent) => void): () => void
-  avatarUrl(token: string, version: string): string
+  avatarUrl(token: string, version: string, account?: string): string
   /** Server preview of a shared file, fitting into width×height (CSS px ×2 for HiDPI). */
   previewUrl(fileId: string, width: number, height: number): string
   /** A local file of the app (pending attachment, downloaded file, voice draft). */

@@ -7,7 +7,7 @@
 import { useSyncExternalStore } from 'react'
 import { VOICE_MAX_MS, type AudioInfo, type VoiceDraft } from '@shared/core'
 import workletUrl from './voice-worklet.js?url'
-import { getState, showQueued, toReply, type UiMessage } from './store'
+import { accountId, getState, showQueued, toReply, type UiMessage } from './store'
 import { openMicrophone } from './call/devices'
 
 /** Show a hint this long before the one-hour limit. */
@@ -19,6 +19,8 @@ const AUTO_FETCH_BYTES = 15 * 1024 * 1024
 export const RATES = [1, 1.5, 2, 0.5] as const
 
 export interface Recording {
+  /** The account it records for (docs/accounts.md): its draft stays there. */
+  account: string
   token: string
   durationMs: number
   /** Last levels 0..1, oldest first. */
@@ -30,10 +32,10 @@ export interface Recording {
 
 interface VoiceState {
   recording: Recording | null
-  /** Draft per conversation: undefined = not loaded yet. */
+  /** Draft per account and conversation (`draftKey`): undefined = not loaded yet. */
   drafts: Record<string, VoiceDraft | null>
-  /** Why the last recording stopped or failed (shown once in the composer). */
-  notice: { token: string; text: string } | null
+  /** Why the last recording stopped or failed (shown once in the composer); `key`: `draftKey`. */
+  notice: { key: string; text: string } | null
 }
 
 let vs: VoiceState = { recording: null, drafts: {}, notice: null }
@@ -57,8 +59,18 @@ export function clearNotice(): void {
   if (vs.notice) set({ notice: null })
 }
 
-function setDraft(token: string, draft: VoiceDraft | null): void {
-  set({ drafts: { ...vs.drafts, [token]: draft } })
+/** Tokens of different servers overlap: drafts go by account and token. */
+export function draftKey(token: string, account = accountId()): string {
+  return `${account}|${token}`
+}
+
+/** The recording of this chat in the account shown. */
+export function recordingFor(s: VoiceState, token: string): Recording | null {
+  return s.recording?.token === token && s.recording.account === accountId() ? s.recording : null
+}
+
+function setDraft(key: string, draft: VoiceDraft | null): void {
+  set({ drafts: { ...vs.drafts, [key]: draft } })
 }
 
 // --- recording ------------------------------------------------------------------------
@@ -87,7 +99,8 @@ function micError(err: unknown): string {
 
 export async function startRecording(token: string): Promise<void> {
   if (vs.recording || capture) return
-  set({ recording: { token, durationMs: 0, levels: [], warn: false, starting: true }, notice: null })
+  const account = accountId()
+  set({ recording: { account, token, durationMs: 0, levels: [], warn: false, starting: true }, notice: null })
   let stream: MediaStream | null = null
   let ctx: AudioContext | null = null
   try {
@@ -120,7 +133,7 @@ export async function startRecording(token: string): Promise<void> {
     stream?.getTracks().forEach((t) => t.stop())
     void ctx?.close()
     await window.talk.voiceCancel().catch(() => undefined)
-    set({ recording: null, notice: { token, text: micError(err) } })
+    set({ recording: null, notice: { key: draftKey(token, account), text: micError(err) } })
   }
 }
 
@@ -129,7 +142,7 @@ async function push(c: Capture, token: string, pcm: Uint8Array): Promise<void> {
   try {
     const status = await window.talk.voicePush(pcm)
     const r = vs.recording
-    if (r && r.token === token) {
+    if (r && r.token === token && capture === c) {
       const levels = [...r.levels, status.level].slice(-LEVEL_BARS)
       set({
         recording: { ...r, durationMs: status.durationMs, levels, warn: status.durationMs >= VOICE_MAX_MS - WARN_BEFORE_MS },
@@ -170,8 +183,9 @@ export async function stopToDraft(notice?: string): Promise<VoiceDraft | null> {
   if (!r) return null
   await stopCapture()
   const draft = await window.talk.voiceFinish().catch(() => null)
-  set({ recording: null, notice: notice && draft ? { token: r.token, text: notice } : vs.notice })
-  setDraft(r.token, draft)
+  const key = draftKey(r.token, r.account)
+  set({ recording: null, notice: notice && draft ? { key, text: notice } : vs.notice })
+  setDraft(key, draft)
   return draft
 }
 
@@ -188,30 +202,35 @@ export async function sendRecording(replyTo: UiMessage | null): Promise<void> {
   const r = vs.recording
   if (!r) return
   const draft = await stopToDraft()
+  if (r.account !== accountId()) return
   if (draft) await sendDraft(r.token, replyTo)
-  else set({ notice: { token: r.token, text: 'Zu kurz – zum Aufnehmen etwas länger sprechen.' } })
+  else set({ notice: { key: draftKey(r.token, r.account), text: 'Zu kurz – zum Aufnehmen etwas länger sprechen.' } })
 }
 
 export async function loadDraft(token: string): Promise<void> {
-  if (vs.recording?.token === token) return
-  setDraft(token, await window.talk.voiceDraft(token).catch(() => null))
+  if (recordingFor(vs, token)) return
+  const key = draftKey(token)
+  // An answer after a switch never arrives (dropped): nothing lands in the other account.
+  setDraft(key, await window.talk.voiceDraft(token).catch(() => null))
 }
 
 export async function discardDraft(token: string): Promise<void> {
-  stopPlayback(`draft:${vs.drafts[token]?.id}`)
-  setDraft(token, null)
+  const key = draftKey(token)
+  stopPlayback(`draft:${vs.drafts[key]?.id}`)
+  setDraft(key, null)
   await window.talk.voiceDiscard(token)
 }
 
 export async function sendDraft(token: string, replyTo: UiMessage | null): Promise<void> {
-  const draft = vs.drafts[token]
+  const key = draftKey(token)
+  const draft = vs.drafts[key]
   if (draft) stopPlayback(`draft:${draft.id}`)
   try {
     const p = await window.talk.voiceSend(token, toReply(replyTo))
-    setDraft(token, null)
+    setDraft(key, null)
     showQueued(token, p)
   } catch (err) {
-    set({ notice: { token, text: `Senden nicht möglich: ${(err as Error).message}` } })
+    set({ notice: { key, text: `Senden nicht möglich: ${(err as Error).message}` } })
   }
 }
 
@@ -231,6 +250,7 @@ export interface Source {
   /** Resolves the local file (downloads received files once). */
   resolve: () => Promise<string>
   /** For autoplay of the following voice message. */
+  account?: string
   token?: string
   messageId?: number
 }
@@ -372,8 +392,11 @@ export function isAudioAttachment(m: UiMessage): boolean {
 export function messageSource(m: UiMessage): Source {
   const a = m.attachment!
   const local = m.localPath && (m.status || !a.id) ? m.localPath : null
+  const account = accountId()
   return {
-    key: m.referenceId ? `ref:${m.referenceId}` : `id:${m.id}`,
+    // Message ids of different servers overlap.
+    key: m.referenceId ? `ref:${m.referenceId}` : `${account}:id:${m.id}`,
+    account,
     token: m.token,
     messageId: m.id,
     resolve: () => (local ? Promise.resolve(local) : fetchCached(a.path, a.size)),
@@ -387,7 +410,7 @@ export function draftSource(d: VoiceDraft): Source {
 const fetches = new Map<string, Promise<string>>()
 
 function fetchCached(path: string, size: number): Promise<string> {
-  const key = `${path}|${size}`
+  const key = `${accountId()}|${path}|${size}`
   let p = fetches.get(key)
   if (!p) {
     p = window.talk.fetchFile(path, size)
@@ -403,7 +426,7 @@ function fetchCached(path: string, size: number): Promise<string> {
  * message would break such chains).
  */
 function playNextAfter(done: Source): void {
-  if (!done.token || done.messageId == null) return
+  if (!done.token || done.messageId == null || done.account !== accountId()) return
   const chat = getState().chats[done.token]
   if (!chat || getState().activeToken !== done.token) return
   const i = chat.messages.findIndex((m) => m.id === done.messageId)

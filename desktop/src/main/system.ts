@@ -32,6 +32,8 @@ export interface SystemCall {
   muted: boolean
   /** Server-side call recording (docs/calls.md, „Aufnahme“). */
   recording?: 'off' | 'startingAudio' | 'startingVideo' | 'audio' | 'video' | 'failed'
+  /** „{Name} · {Server}“ of the call's account, from two accounts on (docs/accounts.md). */
+  accountLine?: string | null
 }
 
 /** The part of a `RecordingNotice` this module needs. */
@@ -41,8 +43,9 @@ export interface SystemRecordingNotice {
   timestamp: number
 }
 
-/** Call actions of the session, plus the window. */
+/** Call actions (they go to the account of the call), plus the window. */
 export interface SystemControls {
+  /** Answers in the call's account, then shows that account. */
   acceptCall(token: string): Promise<void>
   declineCall(token: string): void
   hangUp(): void
@@ -208,6 +211,7 @@ function startRinging(call: SystemCall): void {
   const n = new Notification({
     title: call.isGroup ? call.roomName : call.callerName || call.roomName,
     body: call.isGroup ? `Gruppenanruf${call.callerName ? ` von ${call.callerName}` : ''}` : 'Talk-Anruf',
+    ...(call.accountLine ? { subtitle: call.accountLine } : {}),
     silent: true,
     actions: [{ type: 'button', text: 'Annehmen' }],
     closeButtonText: 'Ablehnen',
@@ -247,7 +251,7 @@ function stopRinging(): void {
 
 /** Accept from the notification, the dock or the menu bar. */
 async function accept(token: string): Promise<void> {
-  if (!(await ensureMicrophone('call'))) return
+  // acceptCall asks for the microphone itself.
   await controls?.acceptCall(token).catch((err: Error) => console.warn('accept failed:', err.message))
 }
 
@@ -340,7 +344,8 @@ function menuBarImage(): Electron.NativeImage {
 
 // --- Recording notices ----------------------------------------------------------------
 
-const knownNotices = new Set<number>()
+/** `<account>|<id>`: notice ids of different servers overlap. */
+const knownNotices = new Set<string>()
 /** Notices from before this run (a minute of clock skew allowed) are old news. */
 const startedAt = Date.now() / 1000 - 60
 
@@ -349,10 +354,10 @@ const startedAt = Date.now() / 1000 - 60
  * comes from index.ts on every platform; on macOS a new notice also bounces the dock once
  * while the app is in the background (informational: one hop, not until clicked).
  */
-export function recordingsChanged(items: SystemRecordingNotice[]): void {
+export function recordingsChanged(account: string, items: SystemRecordingNotice[]): void {
   // The core only reports changes, so the first list may already hold the new notice.
-  const fresh = items.filter((i) => !knownNotices.has(i.id) && i.timestamp >= startedAt)
-  for (const i of items) knownNotices.add(i.id)
+  const fresh = items.filter((i) => !knownNotices.has(`${account}|${i.id}`) && i.timestamp >= startedAt)
+  for (const i of items) knownNotices.add(`${account}|${i.id}`)
   if (!fresh.length) return
   const bounce = mac && !controls?.window()?.isFocused() ? app.dock?.bounce('informational') : null
   log('recording notices', fresh.map((i) => i.id).join(','), 'bounce', bounce ?? 'no')

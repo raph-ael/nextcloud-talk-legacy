@@ -9,12 +9,24 @@ interface Props {
   version?: string
   /** Nextcloud user id: loads the user's avatar (call participants). */
   userId?: string
+  /** Another account than the one shown (a call, the account menu). */
+  account?: string
 }
 
-export function Avatar({ name, size = 48, token, version = '', userId }: Props) {
+export function Avatar({ name, size = 48, token, version = '', userId, account }: Props) {
   const [failed, setFailed] = useState(false)
   const style = { width: size, height: size, fontSize: size * 0.4 }
-  const src = token ? window.talk.avatarUrl(token, version) : userId ? window.talk.userAvatarUrl(userId) : null
+  const src = token
+    ? window.talk.avatarUrl(token, version, account)
+    : userId
+      ? window.talk.userAvatarUrl(userId, account)
+      : null
+  // Another picture (another account): try it, even if the one before failed.
+  const [shownSrc, setShownSrc] = useState(src)
+  if (shownSrc !== src) {
+    setShownSrc(src)
+    setFailed(false)
+  }
   if (src && !failed) {
     return (
       <img

@@ -91,10 +91,11 @@ export function ReturnToCallBar() {
 /** Call button in the chat header; "Beitreten" while the conversation has a running call. */
 export function CallButton({ room }: { room: RoomView }) {
   const call = useCall((s) => s.call)
+  const sameAccount = useCall((s) => s.account) === useStore((s) => s.account?.id)
   // 1:1, groups and public conversations; not changelog, former 1:1 or notes to self.
   if (![1, 2, 3].includes(room.roomType)) return null
   const live = call && call.state !== 'ended' && call.state !== 'incoming' ? call : null
-  const here = live?.token === room.token
+  const here = live?.token === room.token && sameAccount
   const busy = !!live && !here
   if (room.hasCall && !here && !busy) {
     return (
@@ -119,15 +120,33 @@ export function CallButton({ room }: { room: RoomView }) {
 
 // --- Incoming ---------------------------------------------------------------------------
 
+/** The call's room, only when its account is the one shown (tokens overlap across servers). */
+function useCallRoom(call: CallView) {
+  const account = useCall((s) => s.account)
+  return useStore((s) => (s.account?.id === account ? s.rooms.find((r) => r.token === call.token) : undefined))
+}
+
+/** „{Name} · {Server}“ of the call's account, from two accounts on (docs/accounts.md). */
+function useCallAccountLine(): string | null {
+  const account = useCall((s) => s.account)
+  return useStore((s) => {
+    const a = s.accounts.length >= 2 ? s.accounts.find((x) => x.id === account) : undefined
+    return a ? `${a.name} · ${a.server}` : null
+  })
+}
+
 function IncomingCallBar({ call }: { call: CallView }) {
-  const room = useStore((s) => s.rooms.find((r) => r.token === call.token))
+  const room = useCallRoom(call)
+  const account = useCall((s) => s.account) ?? undefined
+  const line = useCallAccountLine()
   const sub = call.isGroup ? (call.callerName ? `${call.callerName} · Gruppenanruf` : 'Gruppenanruf') : 'Eingehender Anruf'
   return (
-    <div className="call-incoming" role="alertdialog" aria-label={`Anruf von ${call.roomName}`}>
-      <Avatar name={call.roomName} token={call.token} version={room?.avatarVersion} size={48} />
+    <div className="call-incoming" role="alertdialog" aria-label={`Anruf von ${call.roomName}${line ? `, ${line}` : ''}`}>
+      <Avatar name={call.roomName} token={call.token} version={room?.avatarVersion} account={account} size={48} />
       <div className="call-incoming-text">
         <strong className="ellipsis">{call.roomName}</strong>
         <span className="muted ellipsis">{sub}</span>
+        {line && <span className="muted ellipsis">{line}</span>}
       </div>
       <button
         className="call-round call-decline"
@@ -147,7 +166,8 @@ function IncomingCallBar({ call }: { call: CallView }) {
 // --- Call view --------------------------------------------------------------------------
 
 function CallScreen({ call }: { call: CallView }) {
-  const room = useStore((s) => s.rooms.find((r) => r.token === call.token))
+  const room = useCallRoom(call)
+  const account = useCall((s) => s.account) ?? undefined
   const media = useSyncExternalStore(subscribeMedia, mediaState)
   const tiles = call.isGroup && call.participants.length > 0
   const ended = call.state === 'ended'
@@ -180,7 +200,7 @@ function CallScreen({ call }: { call: CallView }) {
     >
       <div
         className="call-backdrop"
-        style={{ backgroundImage: `url("${window.talk.avatarUrl(call.token, room?.avatarVersion ?? '')}")` }}
+        style={{ backgroundImage: `url("${window.talk.avatarUrl(call.token, room?.avatarVersion ?? '', account)}")` }}
       />
       <header className="call-top">
         <button className="call-icon-btn" onClick={() => minimize(true)} title="Zu den Chats" aria-label="Anruf verkleinern">
@@ -240,7 +260,7 @@ function CallScreen({ call }: { call: CallView }) {
         ) : (
           !soloVideo && (
             <div className="call-solo">
-              <Avatar name={call.roomName} token={call.token} version={room?.avatarVersion} size={112} />
+              <Avatar name={call.roomName} token={call.token} version={room?.avatarVersion} account={account} size={112} />
               <h1 className="ellipsis">{call.roomName}</h1>
               <CallStatusLine call={call} />
             </div>
@@ -493,6 +513,7 @@ function useNow(running: boolean): number {
 
 /** A participant; `small` in the rail beside a shared screen. */
 function Tile({ p, small }: { p: CallParticipant; small?: boolean }) {
+  const account = useCall((s) => s.account) ?? undefined
   const stream = useRemoteVideo(p.video ? p.peerId : null)
   const [ref, live] = useVideoLive(stream)
   return (
@@ -500,7 +521,7 @@ function Tile({ p, small }: { p: CallParticipant; small?: boolean }) {
       className={`call-tile${small ? ' small' : ''}${p.speaking && !p.muted ? ' speaking' : ''}${p.connected ? '' : ' waiting'}${live ? ' has-video' : ''}`}
     >
       {stream && <video ref={ref} className={`call-video${live ? ' live' : ''}`} autoPlay muted playsInline />}
-      {!live && <Avatar name={p.name} userId={p.userId || undefined} size={small ? 44 : 72} />}
+      {!live && <Avatar name={p.name} userId={p.userId || undefined} account={account} size={small ? 44 : 72} />}
       <div className="call-tile-name">
         {p.muted && (
           <span className="call-tile-muted" title="Stummgeschaltet">

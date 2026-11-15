@@ -289,8 +289,26 @@ body.resizing {
   letter-spacing: -0.25px;
 }
 .own-avatar {
+  position: relative;
   display: grid;
   border-radius: 50%;
+}
+/* Something new in the other accounts (docs/accounts.md), like the unread number in the list. */
+.own-avatar .avatar-badge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-side);
 }
 .menu-anchor {
   position: relative;
@@ -362,6 +380,45 @@ body.resizing {
 .menu-chevron {
   flex-shrink: 0;
   color: var(--text-muted);
+}
+/* Account menu: avatar or symbol in front, a second line, a check mark or number at the end. */
+.menu-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  min-width: 20px;
+  color: var(--text-muted);
+}
+.menu-item.two-line {
+  gap: 10px;
+  padding: 6px 10px;
+}
+.menu-title,
+.menu-detail {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.menu-trailing {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  min-width: 18px;
+  color: var(--accent);
+}
+.menu-item.dimmed .menu-icon,
+.menu-item.dimmed .menu-label,
+.menu-item.dimmed .menu-trailing {
+  opacity: 0.45;
+}
+.account-menu {
+  min-width: 260px;
+  max-width: 320px;
 }
 .menu-separator {
   height: 1px;
@@ -3543,6 +3600,32 @@ a.settings-row:focus-visible {
 }
 .settings-nav-row.danger {
   color: var(--danger);
+}
+.settings-accounts {
+  margin-bottom: 12px;
+}
+.settings-accounts .settings-heading {
+  padding: 4px 14px 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.account-row {
+  min-height: 52px;
+  padding: 6px 14px;
+}
+.account-row-name,
+.account-row-server {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-row-server {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.account-row.dimmed > * {
+  opacity: 0.45;
 }
 .settings-nav-foot {
   margin-top: auto;

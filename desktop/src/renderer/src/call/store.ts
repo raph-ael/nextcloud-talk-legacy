@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react'
 import type { CallView, EndReason } from '@shared/core'
 import { playConnected, playHangup, playRecordingCue, playRingback, playRingtone, stopTones } from './tones'
 import { startRecordingNotices } from './recordings'
+import { getState } from '../store'
 import { setDeviceNotice } from './devices'
 import { cancelScreenPicker, openScreenShare, screenState, setScreenNotice, stopScreenShare, stopScreenTrack } from './screen'
 
@@ -13,13 +14,15 @@ const ENDED_MS = 1500
 
 export interface CallUiState {
   call: CallView | null
+  /** The account of the call (docs/accounts.md): its avatars, its name on the bar. */
+  account: string | null
   /** The call view is hidden behind the "back to call" bar (chats stay usable). */
   minimized: boolean
   /** Short message (failed action, „Dieser Anruf wird aufgezeichnet“); shown briefly. */
   toast: string | null
 }
 
-let st: CallUiState = { call: null, minimized: false, toast: null }
+let st: CallUiState = { call: null, account: null, minimized: false, toast: null }
 const listeners = new Set<() => void>()
 let endTimer: ReturnType<typeof setTimeout> | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
@@ -52,12 +55,16 @@ export function startCallUi(): void {
   if (started) return
   started = true
   window.talk.onEvent((e) => {
-    if (e.type === 'callChanged') show(e.call)
-    else if (e.type === 'session' && e.state === 'loggedOut') show(null)
+    if (e.type === 'callChanged') {
+      if (e.call) set({ account: e.accountId ?? null })
+      show(e.call)
+    } else if (e.type === 'session' && e.state === 'loggedOut') show(null)
   })
   // After a reload the core still knows the call.
   void window.talk.currentCall().then((c) => {
-    if (c && !st.call) show(c)
+    if (!c || st.call) return
+    set({ account: c.account })
+    show(c.call)
   })
   window.addEventListener('keydown', onKey, true)
   startRecordingNotices()
@@ -99,7 +106,7 @@ function close(): void {
   if (endTimer) clearTimeout(endTimer)
   endTimer = null
   stopTones()
-  set({ call: null, minimized: false })
+  set({ call: null, account: null, minimized: false })
 }
 
 function tones(prev: CallView | null, next: CallView): void {
@@ -186,7 +193,7 @@ function fail(err: unknown): void {
 
 export function startCall(token: string): void {
   if (st.call && st.call.state !== 'ended') {
-    if (st.call.token === token) set({ minimized: false })
+    if (st.call.token === token && st.account === getState().account?.id) set({ minimized: false })
     else fail(new Error('busy'))
     return
   }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FileAttachment } from '@shared/core'
-import type { UiMessage } from '../store'
+import { accountId, type UiMessage } from '../store'
 import { fileSize } from '../format'
 
 /** Width of photos in chat bubbles (CSS px). */
@@ -31,7 +31,8 @@ const aspects = new Map<string, number>()
 function knownAspect(msg: UiMessage): number | undefined {
   const a = msg.attachment!
   if (a.width > 0 && a.height > 0) return a.width / a.height
-  return (a.id && aspects.get(a.id)) || (msg.referenceId && aspects.get(msg.referenceId)) || undefined
+  const acc = accountId()
+  return (a.id && aspects.get(`${acc}|${a.id}`)) || (msg.referenceId && aspects.get(msg.referenceId)) || undefined
 }
 
 function heightFor(aspect: number): number {
@@ -67,7 +68,7 @@ export function ChatImage({
           const img = e.currentTarget
           if (!img.naturalWidth || !img.naturalHeight) return
           const r = img.naturalWidth / img.naturalHeight
-          if (a.id) aspects.set(a.id, r)
+          if (a.id) aspects.set(`${accountId()}|${a.id}`, r)
           if (msg.referenceId) aspects.set(msg.referenceId, r)
           if (!(a.width > 0 && a.height > 0) && Math.abs(r - aspect) > 0.01) setAspect(r)
         }}

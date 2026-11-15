@@ -5,7 +5,22 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
  * state (`keepOpen`: the menu stays, e.g. toggling categories); `submenu` opens on hover or →.
  */
 export type MenuItem =
-  | { kind?: 'action'; label: string; onSelect: () => void; danger?: boolean }
+  | {
+      kind?: 'action'
+      label: string
+      onSelect: () => void
+      danger?: boolean
+      /** In front of the label (the account menu: avatar, plus, gear). */
+      icon?: ReactNode
+      /** A second, muted line under the label. */
+      detail?: string
+      /** At the end of the row (a check mark, a number). */
+      trailing?: ReactNode
+      /** Accessible name when the row says more than its label. */
+      ariaLabel?: string
+      /** Shown greyed, still focusable: a click explains why it does nothing. */
+      dimmed?: boolean
+    }
   | { kind: 'check'; label: string; checked: boolean; onSelect: () => void; keepOpen?: boolean }
   | { kind: 'radio'; label: string; checked: boolean; onSelect: () => void }
   | { kind: 'submenu'; label: string; items: MenuItem[] }
@@ -21,6 +36,7 @@ export function MessageMenu({
   items,
   header,
   label,
+  className,
   onClose,
 }: {
   x: number
@@ -29,6 +45,8 @@ export function MessageMenu({
   header?: ReactNode
   /** Accessible name of the menu. */
   label?: string
+  /** Extra class of the top level (its width). */
+  className?: string
   onClose: () => void
 }) {
   const layer = useRef<HTMLDivElement>(null)
@@ -114,6 +132,7 @@ export function MessageMenu({
         items={items}
         header={header}
         label={label}
+        className={className}
         at={{ left: x, top: y }}
         autoFocus
         openIndex={subItems ? (open?.index ?? null) : null}
@@ -143,6 +162,7 @@ function MenuList({
   items,
   header,
   label,
+  className = '',
   at,
   anchor,
   autoFocus,
@@ -156,6 +176,7 @@ function MenuList({
   items: MenuItem[]
   header?: ReactNode
   label?: string
+  className?: string
   /** Top level: the click position. */
   at?: { left: number; top: number }
   /** Submenu: the entry it belongs to. */
@@ -195,12 +216,13 @@ function MenuList({
   const marks = items.some((i) => i.kind === 'check' || i.kind === 'radio')
 
   return (
-    <div className="menu context-menu" role="menu" aria-label={label} data-level={level} ref={ref} style={pos}>
+    <div className={`menu context-menu ${className}`} role="menu" aria-label={label} data-level={level} ref={ref} style={pos}>
       {header && <div className="menu-header">{header}</div>}
       {items.map((item, index) => {
         if (item.kind === 'separator') return <div key={`sep${index}`} className="menu-separator" role="separator" />
         const isSub = item.kind === 'submenu'
         const checkable = item.kind === 'check' || item.kind === 'radio'
+        const action = !item.kind || item.kind === 'action' ? item : null
         return (
           <button
             key={`${index}:${item.label}`}
@@ -214,9 +236,10 @@ function MenuList({
             aria-checked={checkable ? item.checked : undefined}
             aria-haspopup={isSub ? 'menu' : undefined}
             aria-expanded={isSub ? openIndex === index : undefined}
-            className={`menu-item${item.kind !== 'check' && item.kind !== 'radio' && !isSub && item.danger ? ' danger' : ''}${
+            aria-label={action?.ariaLabel}
+            className={`menu-item${action?.danger ? ' danger' : ''}${action?.dimmed ? ' dimmed' : ''}${
               checkable ? ' checkable' : ''
-            }${isSub ? ' has-sub' : ''}${isSub && openIndex === index ? ' open' : ''}`}
+            }${isSub ? ' has-sub' : ''}${isSub && openIndex === index ? ' open' : ''}${action?.detail ? ' two-line' : ''}`}
             onMouseEnter={() => onHover?.(index, isSub)}
             onClick={() => (isSub ? onOpen?.(index) : onSelect(item))}
           >
@@ -233,7 +256,24 @@ function MenuList({
                   ))}
               </span>
             )}
-            <span className="menu-label">{item.label}</span>
+            {action?.icon && (
+              <span className="menu-icon" aria-hidden>
+                {action.icon}
+              </span>
+            )}
+            {action?.detail ? (
+              <span className="menu-label">
+                <span className="menu-title">{item.label}</span>
+                <span className="menu-detail">{action.detail}</span>
+              </span>
+            ) : (
+              <span className="menu-label">{item.label}</span>
+            )}
+            {action?.trailing && (
+              <span className="menu-trailing" aria-hidden>
+                {action.trailing}
+              </span>
+            )}
             {isSub && (
               <svg className="menu-chevron" viewBox="0 0 16 16" width="12" height="12" aria-hidden>
                 <path fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M6 3.5l4.5 4.5L6 12.5" />

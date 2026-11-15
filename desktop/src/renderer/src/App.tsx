@@ -77,6 +77,9 @@ export function App() {
   const groupInfo = useStore((s) => s.groupInfo)
   const categories = useStore((s) => s.categories)
   const settings = useStore((s) => s.settings)
+  const adding = useStore((s) => s.adding)
+  // Tokens of different servers overlap: another account means another chat.
+  const accountKey = useStore((s) => s.account?.id ?? '')
   const search = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const { width, handle } = useSidebarWidth()
@@ -130,6 +133,15 @@ export function App() {
 
   if (session === 'loading') return <div className="splash" />
   if (session === 'loggedOut') return <Login />
+  if (adding) {
+    // „Konto hinzufügen“: the other accounts go on, a call keeps its view.
+    return (
+      <div className="app-shell">
+        <Login adding />
+        <CallLayer />
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -150,9 +162,9 @@ export function App() {
         <div className="chat-pane">
           {/* The chat stays mounted under the settings (scroll position, draft). */}
           <div className="chat-slot" inert={groupInfo === room.token || categories}>
-            <Chat key={room.token} room={room} ref={composer} />
+            <Chat key={`${accountKey}:${room.token}`} room={room} ref={composer} />
           </div>
-          {categories ? <Categories /> : groupInfo === room.token && <GroupInfo key={room.token} room={room} />}
+          {categories ? <Categories /> : groupInfo === room.token && <GroupInfo key={`${accountKey}:${room.token}`} room={room} />}
         </div>
       ) : categories ? (
         <Categories />

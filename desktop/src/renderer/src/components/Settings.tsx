@@ -4,12 +4,14 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { AppInfo, Theme, UpdateCheck } from '@shared/core'
-import { closeSettings, setSettingsPage, useStore, type SettingsPage } from '../store'
+import { closeSettings, MAX_ACCOUNTS, setSettingsPage, startAddAccount, useStore, type SettingsPage } from '../store'
 import { toast } from '../call/store'
 import { ACCENTS } from '../accents'
 import { setAppearance, useAppearance } from '../appearance'
 import { Avatar } from './Avatar'
 import { Categories } from './Categories'
+import { ConfirmDialog } from './Modal'
+import { accountRowLabel, chooseAccount, countLabel, PlusIcon, useSwitchLocked } from './AccountMenu'
 import appIcon from '../../../../resources/icons/128x128.png'
 
 const IS_MAC = navigator.platform.startsWith('Mac')
@@ -31,6 +33,7 @@ export function Settings() {
   const page = useStore((s) => s.settings) ?? 'appearance'
   const account = useStore((s) => s.account)
   const [chats, setChats] = useState(false)
+  const [confirmLogout, setConfirmLogout] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -84,10 +87,11 @@ export function Settings() {
         </header>
         <div className="settings-nav-scroll">
           <div className="settings-profile">
-            <Avatar name={account?.user ?? '?'} userId={account?.userId} size={64} />
-            <span className="settings-profile-name">{account?.user}</span>
+            <Avatar name={account?.name ?? '?'} userId={account?.userId} size={64} />
+            <span className="settings-profile-name">{account?.name}</span>
             <span className="muted">{account?.server.replace(/^https?:\/\//, '')}</span>
           </div>
+          <OtherAccounts />
           <nav className="settings-nav-rows" aria-label="Einstellungen">
             {rows.map((r) => (
               <button
@@ -103,12 +107,13 @@ export function Settings() {
             ))}
           </nav>
           <div className="settings-nav-foot">
-            <button className="settings-nav-row danger" onClick={() => void window.talk.logout()}>
+            <button className="settings-nav-row danger" onClick={() => setConfirmLogout(true)}>
               <span className="settings-text">Abmelden</span>
             </button>
           </div>
         </div>
       </aside>
+      {confirmLogout && account && <LogoutDialog name={account.name} server={account.server} onClose={() => setConfirmLogout(false)} />}
       {page === 'categories' ? (
         <Categories onClose={() => setSettingsPage('chats')} />
       ) : (
@@ -127,6 +132,70 @@ export function Settings() {
         </section>
       )}
     </div>
+  )
+}
+
+/** „Konten“ (docs/accounts.md): the other accounts (a click switches, the settings stay), „Konto hinzufügen“. */
+function OtherAccounts() {
+  const active = useStore((s) => s.account?.id)
+  const accounts = useStore((s) => s.accounts)
+  const locked = useSwitchLocked()
+  const others = accounts.filter((a) => a.id !== active)
+  return (
+    <section className="settings-accounts" aria-labelledby="settings-accounts">
+      <h3 className="settings-heading" id="settings-accounts">
+        Konten
+      </h3>
+      {others.map((a) => (
+        <button
+          key={a.id}
+          className={`settings-nav-row account-row${locked ? ' dimmed' : ''}`}
+          aria-label={accountRowLabel(a, false, locked)}
+          onClick={() => chooseAccount(a, false, locked)}
+        >
+          <Avatar name={a.name} userId={a.userId} account={a.id} size={36} />
+          <span className="settings-text">
+            <span className="account-row-name">{a.name}</span>
+            <span className="account-row-server">{a.server}</span>
+          </span>
+          {a.chats > 0 && (
+            <span className="badge" aria-hidden>
+              {countLabel(a.chats)}
+            </span>
+          )}
+        </button>
+      ))}
+      {accounts.length < MAX_ACCOUNTS && (
+        <button className="settings-nav-row" onClick={startAddAccount}>
+          <span className="settings-icon">
+            <PlusIcon />
+          </span>
+          <span className="settings-text">Konto hinzufügen</span>
+        </button>
+      )}
+    </section>
+  )
+}
+
+/** „Abmelden?“ for the shown account only; the others go on. */
+function LogoutDialog({ name, server, onClose }: { name: string; server: string; onClose: () => void }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <ConfirmDialog
+      title="Abmelden?"
+      text={`${name} (${server.replace(/^https?:\/\//, '')}) wird auf diesem Gerät abgemeldet. Ungesendete Nachrichten und der Offline-Speicher dieses Kontos werden gelöscht.`}
+      confirm="Abmelden"
+      danger
+      busy={busy}
+      onCancel={onClose}
+      onConfirm={() => {
+        setBusy(true)
+        void window.talk
+          .logout()
+          .catch((e: Error) => toast(`Abmelden fehlgeschlagen: ${e.message}`))
+          .finally(onClose)
+      }}
+    />
   )
 }
 
@@ -319,7 +388,7 @@ function Icon({ children }: { children: ReactNode }) {
     </svg>
   )
 }
-const GearIcon = () => (
+export const GearIcon = () => (
   <Icon>
     <circle cx="12" cy="12" r="3" />
     <path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4L18 18M6 18l1.6-1.6M16.4 7.6L18 6" />

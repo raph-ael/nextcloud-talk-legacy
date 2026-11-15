@@ -17,11 +17,11 @@ import { toast } from '../call/store'
 import { Avatar } from './Avatar'
 import { RecordingBanners } from '../call/RecordingBanners'
 import { NewMessage } from './NewMessage'
+import { OwnAvatar } from './AccountMenu'
 import { MessageMenu, type MenuItem } from './MessageMenu'
 import { NameDialog } from './Categories'
 import { isGroupRoom, LEVELS } from './GroupInfo'
 
-const MOD = navigator.platform.startsWith('Mac') ? '⌘' : 'Strg+'
 
 export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, searchRef) {
   const sections = useStore((s) => s.sections)
@@ -62,9 +62,7 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
-        <button className="own-avatar" aria-label="Einstellungen" title={`Einstellungen (${MOD},)`} onClick={() => openSettings()}>
-          <Avatar name={account?.user ?? '?'} userId={account?.userId} size={28} />
-        </button>
+        <OwnAvatar />
         <h2>Chats</h2>
         <button
           className="icon-button"
