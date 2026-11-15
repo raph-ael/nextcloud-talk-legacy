@@ -161,7 +161,18 @@ pub struct LoginFlow {
     pub granted: bool,
 }
 
+/// A call notification of the notifications app (for missed calls).
+pub struct CallNotice {
+    pub id: i64,
+    pub token: String,
+    pub caller: String,
+    pub ts: i64,
+}
+
 pub struct State {
+    /// The signed-in user's status (`online`, `dnd`, ...).
+    pub status: String,
+    pub call_notices: Vec<CallNotice>,
     pub me: String,
     pub people: Vec<Person>,
     pub rooms: Vec<Room>,
@@ -340,6 +351,8 @@ impl State {
             serde_json::from_slice(&read("conversations.json")?).map_err(|e| format!("conversations.json: {e}"))?;
 
         let mut st = State {
+            status: "online".into(),
+            call_notices: Vec::new(),
             me: people.me.clone(),
             people: Vec::new(),
             rooms: Vec::new(),

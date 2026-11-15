@@ -97,8 +97,91 @@ pub async fn delete_app_password() -> Response {
     ocs(json!([]))
 }
 
-pub async fn notifications() -> Response {
-    ocs(json!([]))
+/// Only call notifications (missed calls), in the shape of the notifications app.
+pub async fn notifications(AxState(app): S) -> Response {
+    let st = app.st.lock().unwrap();
+    let list: Vec<Value> = st
+        .call_notices
+        .iter()
+        .rev()
+        .map(|n| {
+            let name = st.name_of(&n.caller);
+            json!({
+                "notification_id": n.id,
+                "app": "spreed",
+                "user": st.me,
+                "datetime": iso_utc(n.ts),
+                "object_type": "call",
+                "object_id": n.token,
+                "subject": format!("Du hast einen Anruf von {name} verpasst"),
+                "subjectRichParameters": { "user": { "type": "user", "id": n.caller, "name": name } },
+            })
+        })
+        .collect();
+    ocs(json!(list))
+}
+
+/// Unix seconds as `2026-11-15T20:59:15+00:00`.
+fn iso_utc(ts: i64) -> String {
+    let days = ts.div_euclid(86_400);
+    let secs = ts.rem_euclid(86_400);
+    // Civil date from days since 1970-01-01.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}+00:00", secs / 3600, secs % 3600 / 60, secs % 60)
+}
+
+/// The signed-in user's own status.
+pub async fn user_status(AxState(app): S) -> Response {
+    let st = app.st.lock().unwrap();
+    ocs(json!({ "userId": st.me, "status": st.status, "message": null, "icon": null, "clearAt": null }))
+}
+
+/// `GET call/{token}/notification-state`: 201 for a missed call, else 404 (nothing rings
+/// here: the demo has no calls).
+pub async fn call_notification_state(AxState(app): S, Path(token): Path<String>) -> Response {
+    let st = app.st.lock().unwrap();
+    if st.call_notices.iter().any(|n| n.token == token) {
+        ocs_status(StatusCode::CREATED, json!([]))
+    } else {
+        not_found()
+    }
+}
+
+/// Test hook: the user's status, e.g. `status=dnd` ("do not disturb") or `status=online`.
+pub async fn demo_status(AxState(app): S, p: Params) -> Response {
+    let status = p.str("status").unwrap_or_default();
+    if !["online", "away", "dnd", "invisible", "offline"].contains(&status.as_str()) {
+        return bad_request("status");
+    }
+    app.st.lock().unwrap().status = status.clone();
+    ocs(json!({ "status": status }))
+}
+
+/// Test hook: somebody called in a one-to-one conversation and nobody answered. `token`,
+/// optionally `from` and `ago` (seconds in the past, default 0).
+pub async fn demo_missed_call(AxState(app): S, p: Params) -> Response {
+    let mut st = app.st.lock().unwrap();
+    let token = p.str("token").unwrap_or_default();
+    let Some(room) = st.room(&token) else { return not_found() };
+    let from = p
+        .str("from")
+        .or_else(|| room.members.iter().find(|m| m.person != st.me).map(|m| m.person.clone()))
+        .unwrap_or_default();
+    if from == st.me || !room.is_member(&from) {
+        return bad_request("from");
+    }
+    let id = st.call_notices.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+    let ts = crate::state::now() - p.i64("ago").unwrap_or(0).max(0);
+    st.call_notices.push(crate::state::CallNotice { id, token, caller: from, ts });
+    ocs_status(StatusCode::CREATED, json!({ "notification_id": id }))
 }
 
 pub async fn autocomplete(AxState(app): S, p: Params) -> Response {

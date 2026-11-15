@@ -93,6 +93,13 @@ Stand, z. B. nach einem Neustart der Activity bzw. des Fensters.
 `CallMissed { token, roomName, callerName, isGroup }` kommt, wenn ein eingehender Anruf
 verpasst wurde: nicht angenommen (Ende mit `missed`) oder während eines anderen Anrufs
 eingegangen (der klingelt dann nicht). Dafür eine Benachrichtigung „Verpasster Anruf“ zeigen.
+Es kommt auch für Einzelanrufe, die verpasst wurden, während die App nicht lief oder nicht
+verbunden war: einmal, nach dem Start bzw. der Wiederverbindung, und nur wenn der Anruf
+nicht älter als 24 Stunden ist. Beim allerersten Lauf wird nichts nachgemeldet.
+
+Steht der eigene Status auf „Nicht stören“, klingelt der Kern nicht und meldet nichts als
+verpasst, außer in Chats, die als wichtig markiert sind. Der Server sendet dann auch keinen
+Push (`docs/notifications.md`).
 
 Klingeln funktioniert auch ohne `setMediaEngine`. Annehmen ohne MediaEngine endet mit
 `failed{no-media-engine}`. `createPeer` kommt nie vor `acceptCall` bzw. `startCall`, und

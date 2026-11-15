@@ -87,7 +87,8 @@ Alle Laufzeiten sind gestartet (`start()`), nicht nur die aktive. Nur die aktive
 
 | Ereignis einer inaktiven Laufzeit | Was die Plattform tut |
 |---|---|
-| `roomsChanged` | Badge neu rechnen; Desktop: Benachrichtigungen wie im aktiven Konto |
+| `roomsChanged` | Badge neu rechnen |
+| `messageNotices`, `noticesCleared` | Benachrichtigungen wie im aktiven Konto (`docs/notifications.md`) |
 | `callChanged`, `callMissed` | an die eine Anrufsteuerung, die sich das Konto des Anrufs merkt |
 | `outboxChanged` | fehlgeschlagene Sendungen melden wie bisher |
 | `recordingsChanged` | wie bisher, mit Konto |

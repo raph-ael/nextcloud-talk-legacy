@@ -1065,6 +1065,14 @@ impl TalkClient {
         Ok((status, env.ocs.data))
     }
 
+    /// The user's own status: `online`, `away`, `dnd`, `invisible` or `offline`. Fails
+    /// when the server has no user status app.
+    pub async fn user_status(&self) -> Result<String> {
+        let rb = self.request(Method::GET, "/ocs/v2.php/apps/user_status/api/v1/user_status");
+        let (data, _) = self.ocs::<serde_json::Value>(rb).await?;
+        Ok(data["status"].as_str().unwrap_or_default().to_string())
+    }
+
     /// Asks the server to send a test push to this user's devices (capability `test-push`).
     pub async fn test_push(&self) -> Result<serde_json::Value> {
         let rb = self.request(Method::POST, "/ocs/v2.php/apps/notifications/api/v3/test/self");

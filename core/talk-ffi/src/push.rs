@@ -80,6 +80,23 @@ pub fn decrypt_push_for(keys: Vec<PushKey>, subject: String) -> Option<AccountPu
     Some(AccountPush { account_id, message: message.into() })
 }
 
+/// Sender and text of a chat push, for a notification built without network.
+#[derive(uniffi::Record, Clone)]
+pub struct ChatPushParts {
+    /// Who wrote; empty when the push does not say (reactions, reminders).
+    pub sender: String,
+    pub text: String,
+}
+
+/// Splits the subject of a `Chat` push. `room_name`: the conversation's name from the
+/// room list (empty if unknown), which is also the notification's title: in groups the
+/// server writes "Bob in Projekt" into the first line, in the user's language.
+#[uniffi::export]
+pub fn push_chat_parts(subject: String, room_name: String) -> ChatPushParts {
+    let p = core::push::chat_parts(&subject, &room_name);
+    ChatPushParts { sender: p.sender, text: p.text }
+}
+
 /// Caller name from a call push subject ("Bob möchte mit dir sprechen" → "Bob").
 #[uniffi::export]
 pub fn push_caller_name(subject: String) -> String {
@@ -106,6 +123,13 @@ impl TalkSession {
 
     pub async fn unregister_push(&self) -> Result<(), CoreError> {
         Ok(self.engine.unregister_push().await?)
+    }
+
+    /// "Push testen": asks the server for a test push to this user's devices. It arrives
+    /// as an `Other` push within seconds, or not at all when the server sends none
+    /// (more than 1000 users without a subscription).
+    pub async fn test_push(&self) -> Result<(), CoreError> {
+        Ok(self.engine.test_push().await?)
     }
 
     /// Acts on a decrypted push: a call rings (`call_id`: the id already reported to

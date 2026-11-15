@@ -28,11 +28,14 @@ use crate::voice::VoiceStore;
 use crate::client::TalkClient;
 use crate::error::{Error, Result};
 use crate::models::{ChatMessage, FileAttachment, Reactions, Room, RoomType};
+use crate::notices::{MessageNotice, Notices};
 
 /// Room list refresh while no signaling connection exists yet.
 const ROOMS_INTERVAL: Duration = Duration::from_secs(10);
 /// Incremental refreshes miss deletions and some counter changes; do a full one regularly.
 const ROOMS_FULL_INTERVAL: Duration = Duration::from_secs(60);
+/// notify_push announced something: wait this long, then fetch what changed.
+const NOTIFY_REFRESH_DELAY: Duration = Duration::from_millis(300);
 const POLL_TIMEOUT_S: u32 = 30;
 const PAGE_SIZE: u32 = 50;
 /// Messages per delta request (the server's limit for `lookIntoFuture`).
@@ -150,6 +153,15 @@ pub enum Event {
     /// Members or roles of a conversation changed (someone added, removed, promoted):
     /// reload [`Engine::members`] if they are shown. Only for open chats and own changes.
     ParticipantsChanged { token: String },
+    /// Conversations with a new message that deserves a notification
+    /// (docs/notifications.md). Comes after the `RoomsChanged` that brought it, also for
+    /// the conversation that is open: whether to show it is the platform's call.
+    /// `since_start`: the first comparison of this run, i.e. what came in while the app
+    /// was closed.
+    MessageNotices { items: Vec<MessageNotice>, since_start: bool },
+    /// The notifications of these conversations are obsolete: read (here or elsewhere),
+    /// archived or gone.
+    NoticesCleared { tokens: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -297,6 +309,17 @@ pub struct Engine {
     pub(crate) voice: Arc<VoiceStore>,
     pub(crate) calls: CallManager,
     pub(crate) recordings: Recordings,
+    notices: Mutex<Notices>,
+    /// The user's status is "do not disturb": nothing announces or rings, except in
+    /// conversations marked as important (the server sends no push then either).
+    quiet: AtomicBool,
+    /// A room refresh asked for by notify_push is running / was asked for again meanwhile.
+    refreshing: AtomicBool,
+    refresh_again: AtomicBool,
+    /// Highest call notification id that was dealt with (missed calls are reported once).
+    pub(crate) call_mark: Mutex<Option<i64>>,
+    /// One look at the notifications at a time, so two triggers do not report twice.
+    pub(crate) incoming_lock: tokio::sync::Mutex<()>,
     /// Runtime of `start`, for spawning from synchronous calls.
     pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
     weak: Weak<Self>,
@@ -311,8 +334,11 @@ impl Engine {
         let me = cache
             .meta("user_id")
             .unwrap_or_else(|| client.account().user.clone());
+        let cached = cache.rooms();
+        let notices = Notices::load(cache.meta("notice_marks"), &cached);
+        let call_mark = cache.meta("call_mark").and_then(|v| v.parse().ok());
         let state = State {
-            rooms: cache.rooms().into_iter().map(|r| (r.token.clone(), r)).collect(),
+            rooms: cached.into_iter().map(|r| (r.token.clone(), r)).collect(),
             ..State::default()
         };
         Arc::new_cyclic(|weak| Self {
@@ -335,6 +361,12 @@ impl Engine {
             cache,
             calls: CallManager::default(),
             recordings: Recordings::default(),
+            notices: Mutex::new(notices),
+            quiet: AtomicBool::new(false),
+            refreshing: AtomicBool::new(false),
+            refresh_again: AtomicBool::new(false),
+            call_mark: Mutex::new(call_mark),
+            incoming_lock: tokio::sync::Mutex::new(()),
             runtime: OnceLock::new(),
             weak: weak.clone(),
         })
@@ -363,11 +395,12 @@ impl Engine {
             }
         });
         // User id, room list and server features in parallel: saves round trips on cold start.
-        let (user, rooms, caps, tags) = tokio::join!(
+        let (user, rooms, caps, tags, _) = tokio::join!(
             self.client.current_user(),
             self.client.rooms(None, false),
             self.client.capabilities(),
-            self.client.tags()
+            self.client.tags(),
+            self.refresh_status()
         );
         self.apply_tags(tags);
         if let Ok(caps) = caps {
@@ -397,6 +430,7 @@ impl Engine {
                     .unwrap()
                     .last_full
                     .is_none_or(|t| t.elapsed() >= ROOMS_FULL_INTERVAL);
+
                 if let Err(Error::Unauthorized) = engine.refresh_rooms(full).await {
                     break;
                 }
@@ -405,6 +439,9 @@ impl Engine {
         if let Some(old) = self.state.lock().unwrap().rooms_task.replace(task) {
             old.abort();
         }
+        // Calls that were missed while the app was not running (and recording notices),
+        // also on servers without notify_push.
+        self.spawn_incoming_check();
         let notify = tokio::spawn(Engine::notify_push_loop(Arc::downgrade(self)));
         if let Some(old) = self.state.lock().unwrap().notify_task.replace(notify) {
             old.abort();
@@ -500,14 +537,15 @@ impl Engine {
             return;
         }
         self.cache.put_rooms(rooms.clone(), false);
-        let rooms = {
+        let views = {
             let mut st = self.state.lock().unwrap();
-            for room in rooms {
+            for room in rooms.iter().cloned() {
                 st.rooms.insert(room.token.clone(), room);
             }
             self.sorted_views(&st.rooms)
         };
-        self.sink.emit(Event::RoomsChanged { rooms });
+        self.sink.emit(Event::RoomsChanged { rooms: views });
+        self.notices_from_server(&rooms, false);
     }
 
     /// Sends the current list again (e.g. after a category change).
@@ -526,10 +564,13 @@ impl Engine {
             if !edit(r) {
                 return Ok(false);
             }
-            self.cache.put_rooms(vec![r.clone()], false);
-            self.sorted_views(&st.rooms)
+            let changed = r.clone();
+            self.cache.put_rooms(vec![changed.clone()], false);
+            (self.sorted_views(&st.rooms), changed)
         };
+        let (rooms, changed) = rooms;
         self.sink.emit(Event::RoomsChanged { rooms });
+        self.notices_local(&changed);
         Ok(true)
     }
 
@@ -649,7 +690,8 @@ impl Engine {
         };
         let batch = if full {
             // Categories change rarely: with every full refresh (docs/categories.md).
-            let (batch, tags) = tokio::join!(self.client.rooms(since, true), self.client.tags());
+            // ... and so does the user's status ("do not disturb").
+            let (batch, tags, _) = tokio::join!(self.client.rooms(since, true), self.client.tags(), self.refresh_status());
             self.apply_tags(tags);
             batch
         } else {
@@ -664,6 +706,7 @@ impl Engine {
         if full || !batch.rooms.is_empty() {
             self.cache.put_rooms(batch.rooms.clone(), full);
         }
+        let fresh = batch.rooms.clone();
         let (views, call_started) = {
             let mut st = self.state.lock().unwrap();
             // A call starting in a conversation may ring for us (safety net for notify_push).
@@ -694,6 +737,97 @@ impl Engine {
             self.spawn_incoming_check();
         }
         self.sink.emit(Event::RoomsChanged { rooms: views });
+        self.notices_from_server(&fresh, full);
+    }
+
+    // --- new-message notices (docs/notifications.md) ---------------------------------
+
+    /// Conversations fresh from the server: announce the ones with a new message.
+    fn notices_from_server(&self, rooms: &[Room], all: bool) {
+        let quiet = self.quiet.load(Ordering::Relaxed);
+        let scan = self
+            .notices
+            .lock()
+            .unwrap()
+            .server(rooms, all, |m| self.is_own(&m.actor_type, &m.actor_id), quiet);
+        let items: Vec<MessageNotice> = scan
+            .notify
+            .iter()
+            .filter_map(|token| rooms.iter().find(|r| r.token == *token))
+            .map(|r| MessageNotice {
+                token: r.token.clone(),
+                room_name: r.display_name.clone(),
+                is_group: crate::notices::is_group(r),
+                mention: r.unread_mention || r.unread_mention_direct,
+                unread: r.unread_messages,
+                message: r.last_message.as_ref().map(|m| self.preview(m)),
+            })
+            .collect();
+        let since_start = scan.since_start;
+        self.after_scan(scan);
+        if !items.is_empty() {
+            self.sink.emit(Event::MessageNotices { items, since_start });
+        }
+    }
+
+    /// A conversation changed here (read, sent, archived): its notification may be obsolete.
+    fn notices_local(&self, room: &Room) {
+        let scan = self.notices.lock().unwrap().local(room);
+        self.after_scan(scan);
+    }
+
+    fn after_scan(&self, scan: crate::notices::Scan) {
+        if scan.dirty {
+            self.cache.set_meta("notice_marks", self.notices.lock().unwrap().store());
+        }
+        if !scan.cleared.is_empty() {
+            self.sink.emit(Event::NoticesCleared { tokens: scan.cleared });
+        }
+    }
+
+    /// The user's own status, for "do not disturb". Unknown (no status app, offline)
+    /// keeps the last answer.
+    pub(crate) async fn refresh_status(&self) {
+        if let Ok(status) = self.client.user_status().await {
+            self.quiet.store(status == "dnd", Ordering::Relaxed);
+        }
+    }
+
+    /// "Do not disturb" applies to this conversation: no notice, no ringing.
+    pub(crate) fn hushed(&self, token: &str) -> bool {
+        self.quiet.load(Ordering::Relaxed) && !self.state_room(token).is_some_and(|r| r.is_important)
+    }
+
+    /// notify_push says there is a new notification: fetch what changed now instead of
+    /// at the next poll. One refresh at a time; requests that come in meanwhile make it
+    /// run once more (notify_push also reports our own read markers and other apps).
+    pub(crate) fn spawn_rooms_refresh(&self) {
+        let Some(rt) = self.runtime.get() else { return };
+        if self.refreshing.swap(true, Ordering::SeqCst) {
+            self.refresh_again.store(true, Ordering::SeqCst);
+            return;
+        }
+        let weak = self.weak_self();
+        rt.spawn(async move {
+            loop {
+                // A burst collapses into one request, and the server is done with what
+                // it announces.
+                tokio::time::sleep(NOTIFY_REFRESH_DELAY).await;
+                let Some(engine) = weak.upgrade() else { return };
+                engine.refresh_again.store(false, Ordering::SeqCst);
+                let _ = engine.refresh_rooms(false).await;
+                if !engine.refresh_again.load(Ordering::SeqCst) {
+                    engine.refreshing.store(false, Ordering::SeqCst);
+                    // Asked again in this very moment: the regular poll picks it up.
+                    return;
+                }
+            }
+        });
+    }
+
+    /// Asks the server for a test push to this user's devices ("Push testen").
+    pub async fn test_push(&self) -> Result<()> {
+        self.guard(self.client.test_push().await).map(|_| ())
     }
 
     /// Newest messages from the cache (empty without one), for the first frame of a chat.
@@ -854,18 +988,22 @@ impl Engine {
     }
 
     fn update_room_after_send(&self, token: &str, msg: ChatMessage) {
-        let rooms = {
+        let (rooms, changed) = {
             let mut st = self.state.lock().unwrap();
-            if let Some(room) = st.rooms.get_mut(token) {
+            let changed = st.rooms.get_mut(token).map(|room| {
                 room.last_activity = room.last_activity.max(msg.timestamp);
                 room.last_message = Some(msg);
                 room.unread_messages = 0;
                 room.unread_mention = false;
                 self.cache.put_rooms(vec![room.clone()], false);
-            }
-            self.sorted_views(&st.rooms)
+                room.clone()
+            });
+            (self.sorted_views(&st.rooms), changed)
         };
         self.sink.emit(Event::RoomsChanged { rooms });
+        if let Some(room) = changed {
+            self.notices_local(&room);
+        }
     }
 
     /// A message we sent from the outbox: show it in the chat and the room list.
@@ -990,14 +1128,16 @@ impl Engine {
                     r.unread_messages = 0;
                     r.unread_mention = false;
                     r.last_read_message = r.last_read_message.max(message_id);
-                    self.cache.put_rooms(vec![r.clone()], false);
-                    Some(self.sorted_views(&st.rooms))
+                    let room = r.clone();
+                    self.cache.put_rooms(vec![room.clone()], false);
+                    Some((self.sorted_views(&st.rooms), room))
                 }
                 _ => None,
             }
         };
-        let Some(rooms) = changed else { return Ok(()) };
+        let Some((rooms, room)) = changed else { return Ok(()) };
         self.sink.emit(Event::RoomsChanged { rooms });
+        self.notices_local(&room);
         self.guard(self.client.set_read_marker(token, message_id).await)
     }
 
@@ -1215,6 +1355,21 @@ impl Engine {
         list.into_iter().map(|r| self.room_view(r)).collect()
     }
 
+    /// A message as one line, for the conversation list and for notifications.
+    fn preview(&self, m: &ChatMessage) -> MessagePreview {
+        MessagePreview {
+            author: m.actor_display_name.clone(),
+            text: if m.message_type == "comment_deleted" {
+                String::new()
+            } else {
+                preview_text(&m.caption_text())
+            },
+            is_own: self.is_own(&m.actor_type, &m.actor_id),
+            is_system: m.is_system(),
+            attachment: m.attachment(),
+        }
+    }
+
     fn room_view(&self, r: &Room) -> RoomView {
         RoomView {
             token: r.token.clone(),
@@ -1226,17 +1381,7 @@ impl Engine {
             last_activity: r.last_activity,
             last_read_message: r.last_read_message,
             last_common_read_message: r.last_common_read_message,
-            last_message: r.last_message.as_ref().map(|m| MessagePreview {
-                author: m.actor_display_name.clone(),
-                text: if m.message_type == "comment_deleted" {
-                    String::new()
-                } else {
-                    preview_text(&m.caption_text())
-                },
-                is_own: self.is_own(&m.actor_type, &m.actor_id),
-                is_system: m.is_system(),
-                attachment: m.attachment(),
-            }),
+            last_message: r.last_message.as_ref().map(|m| self.preview(m)),
             is_favorite: r.is_favorite,
             is_archived: r.is_archived,
             read_only: r.read_only != 0,

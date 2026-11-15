@@ -200,6 +200,32 @@ pub struct MessagePreview {
     pub attachment: Option<FileAttachment>,
 }
 
+impl From<core::engine::MessagePreview> for MessagePreview {
+    fn from(m: core::engine::MessagePreview) -> Self {
+        Self {
+            author: m.author,
+            text: m.text,
+            is_own: m.is_own,
+            is_system: m.is_system,
+            attachment: m.attachment.map(Into::into),
+        }
+    }
+}
+
+/// A conversation with a new message that deserves a notification (docs/notifications.md).
+#[derive(uniffi::Record)]
+pub struct MessageNotice {
+    pub token: String,
+    pub room_name: String,
+    pub is_group: bool,
+    /// The user was mentioned.
+    pub mention: bool,
+    pub unread: i64,
+    /// The newest message as in the conversation list; `None` when the server shows
+    /// none (sensitive conversations): "Neue Nachricht".
+    pub message: Option<MessagePreview>,
+}
+
 #[derive(uniffi::Record)]
 pub struct RoomView {
     pub token: String,
@@ -248,13 +274,7 @@ impl From<core::RoomView> for RoomView {
             last_activity: r.last_activity,
             last_read_message: r.last_read_message,
             last_common_read_message: r.last_common_read_message,
-            last_message: r.last_message.map(|m| MessagePreview {
-                author: m.author,
-                text: m.text,
-                is_own: m.is_own,
-                is_system: m.is_system,
-                attachment: m.attachment.map(Into::into),
-            }),
+            last_message: r.last_message.map(Into::into),
             is_favorite: r.is_favorite,
             is_archived: r.is_archived,
             read_only: r.read_only,
@@ -620,6 +640,13 @@ pub enum CoreEvent {
     RecordingsChanged { items: Vec<call::RecordingNotice> },
     /// Members or roles of a group changed: reload `members` if shown (docs/groups.md).
     ParticipantsChanged { token: String },
+    /// Conversations with a new message that deserves a notification, after the
+    /// `RoomsChanged` that brought it and also for the open conversation (whether to
+    /// show it is the platform's call). `since_start`: what came in while the app was
+    /// closed. Android uses it only without push, iOS not at all (docs/notifications.md).
+    MessageNotices { items: Vec<MessageNotice>, since_start: bool },
+    /// The notifications of these conversations are obsolete: read, archived or gone.
+    NoticesCleared { tokens: Vec<String> },
 }
 
 impl From<core::Event> for CoreEvent {
@@ -667,6 +694,21 @@ impl From<core::Event> for CoreEvent {
                 items: items.into_iter().map(Into::into).collect(),
             },
             core::Event::ParticipantsChanged { token } => Self::ParticipantsChanged { token },
+            core::Event::MessageNotices { items, since_start } => Self::MessageNotices {
+                items: items
+                    .into_iter()
+                    .map(|n| MessageNotice {
+                        token: n.token,
+                        room_name: n.room_name,
+                        is_group: n.is_group,
+                        mention: n.mention,
+                        unread: n.unread,
+                        message: n.message.map(Into::into),
+                    })
+                    .collect(),
+                since_start,
+            },
+            core::Event::NoticesCleared { tokens } => Self::NoticesCleared { tokens },
         }
     }
 }

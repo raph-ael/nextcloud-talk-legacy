@@ -12,6 +12,7 @@
 //!
 //! - [`push`]: push notifications (device key, registration, decryption)
 //! - [`accounts`]: several accounts side by side (identity, badge)
+//! - [`notices`]: which conversations deserve a notification
 
 pub mod accounts;
 pub mod call;
@@ -23,6 +24,7 @@ pub mod error;
 pub mod groups;
 pub mod login;
 pub mod models;
+pub mod notices;
 pub mod outbox;
 pub mod push;
 pub mod voice;
@@ -40,7 +42,8 @@ pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReactionView, 
 pub use categories::{CategoryOp, CategoryView, SectionView, category_error_text};
 pub use error::{Error, Result};
 pub use groups::{GroupOp, MemberView, UserView, group_error_text, square_photo};
-pub use push::{PushMessage, PushRegistration};
+pub use notices::MessageNotice;
+pub use push::{ChatPushParts, PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
 pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};

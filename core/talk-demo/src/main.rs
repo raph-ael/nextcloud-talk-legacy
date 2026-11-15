@@ -9,6 +9,8 @@
 //!
 //!     cargo run -p talk-demo -- --listen 0.0.0.0:8098 --fixtures core/talk-demo/fixtures-b
 //!     curl -d token=mira -d text=Hallo http://127.0.0.1:8098/demo/incoming
+//!     curl -d status=dnd http://127.0.0.1:8098/demo/status          # "do not disturb"
+//!     curl -d token=mira http://127.0.0.1:8098/demo/missed-call     # a missed call
 //!
 //! Calls and signaling are out of scope. Unknown endpoints are logged as
 //! "nicht implementiert" and answered with an empty OCS success.
@@ -57,6 +59,10 @@ pub fn router(app: App) -> Router {
         .route("/index.php/login/v2/flow/{token}", get(files::login_page))
         .route("/index.php/login/v2/poll", post(files::login_poll))
         .route("/demo/incoming", post(api::demo_incoming))
+        .route("/demo/status", post(api::demo_status))
+        .route("/demo/missed-call", post(api::demo_missed_call))
+        .route("/ocs/v2.php/apps/user_status/api/v1/user_status", get(api::user_status))
+        .route(&format!("{SPREED}/v4/call/{{token}}/notification-state"), get(api::call_notification_state))
         .route("/ocs/v2.php/cloud/capabilities", get(api::capabilities))
         .route("/ocs/v2.php/cloud/user", get(api::cloud_user))
         .route("/ocs/v2.php/core/getapppassword", get(api::get_app_password))

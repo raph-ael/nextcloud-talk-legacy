@@ -827,6 +827,8 @@ class SessionManager(private val context: Context) {
                 rt.recordingsKnown = ids
                 onRecordings(rt, event.items, fresh)
             }
+            // Message notifications come with the notifications block (docs/notifications.md).
+            is CoreEvent.MessageNotices, is CoreEvent.NoticesCleared -> Unit
         }
     }
 

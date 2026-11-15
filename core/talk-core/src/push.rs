@@ -180,10 +180,58 @@ pub fn caller_from_subject(subject: &str) -> String {
     subject.to_string()
 }
 
+/// Sender and text of a chat push, for a notification built without network.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatPushParts {
+    /// Who wrote; empty when the push does not say (reactions, reminders, invitations).
+    pub sender: String,
+    pub text: String,
+}
+
+/// Splits the subject of a chat push. The server writes `"{user}\n{message}"`, in
+/// groups `"{user} in {conversation}\n{message}"` with the "in" in the user's language,
+/// and shortens the message to fit the push. `room_name`: the conversation's name from
+/// the room list (empty if unknown); with it the sender is cut out of the first line.
+/// A subject without a line break (a reaction, a reminder) is all text.
+pub fn chat_parts(subject: &str, room_name: &str) -> ChatPushParts {
+    let Some((first, text)) = subject.split_once('\n') else {
+        return ChatPushParts { sender: String::new(), text: subject.trim().to_string() };
+    };
+    let first = first.trim();
+    let room_name = room_name.trim();
+    let sender = first
+        .strip_suffix(room_name)
+        .filter(|head| !room_name.is_empty() && !head.trim().is_empty())
+        // "Bob in " → "Bob": drop the connecting word, whatever the language.
+        .and_then(|head| head.trim_end().rsplit_once(' ').map(|(name, _)| name.trim_end()))
+        .filter(|name| !name.is_empty())
+        .unwrap_or(first);
+    ChatPushParts { sender: sender.to_string(), text: text.trim().to_string() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rsa::pkcs8::DecodePublicKey;
+
+    #[test]
+    fn chat_subjects_split_into_sender_and_text() {
+        let parts = |subject: &str, room: &str| {
+            let p = chat_parts(subject, room);
+            (p.sender, p.text)
+        };
+        // One-to-one: the conversation is named like the sender.
+        assert_eq!(parts("Bob\nHallo", "Bob"), ("Bob".into(), "Hallo".into()));
+        // Groups, in any language, also with spaces in both names.
+        assert_eq!(parts("Bob in Projekt\nHallo\nzweite Zeile", "Projekt"), ("Bob".into(), "Hallo\nzweite Zeile".into()));
+        assert_eq!(parts("Anna Beispiel dans Jardin partagé\nSalut", "Jardin partagé"), ("Anna Beispiel".into(), "Salut".into()));
+        // The conversation is not known (yet): the first line as it is.
+        assert_eq!(parts("Bob in Projekt\nHallo", ""), ("Bob in Projekt".into(), "Hallo".into()));
+        assert_eq!(parts("Bob in Projekt\nHallo", "Anderes"), ("Bob in Projekt".into(), "Hallo".into()));
+        // Reactions, reminders and invitations have no line break.
+        assert_eq!(parts("Bob hat mit 👍 reagiert", "Projekt"), ("".into(), "Bob hat mit 👍 reagiert".into()));
+    }
 
     fn encrypt(public_pem: &str, plain: &str, oaep: bool) -> String {
         let key = RsaPublicKey::from_public_key_pem(public_pem).unwrap();

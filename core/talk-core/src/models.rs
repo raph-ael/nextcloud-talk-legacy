@@ -107,6 +107,13 @@ pub struct Room {
     /// Status of the other user in 1:1 conversations (only with `includeStatus=true`).
     #[serde(default)]
     pub status: Option<String>,
+    /// Marked as important: notifies and rings even while the user's status is "do not
+    /// disturb" (docs/notifications.md).
+    #[serde(default)]
+    pub is_important: bool,
+    /// Marked as sensitive: the server shows no message preview for it.
+    #[serde(default)]
+    pub is_sensitive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +146,9 @@ pub struct ChatMessage {
     pub reactions_self: Vec<String>,
     #[serde(default)]
     pub last_edit_timestamp: Option<i64>,
+    /// Sent without notifying anybody.
+    #[serde(default)]
+    pub silent: bool,
     /// The message this one replies to (only one level deep).
     #[serde(default, deserialize_with = "object_or_empty_array")]
     pub parent: Option<Box<ChatMessage>>,

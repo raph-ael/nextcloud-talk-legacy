@@ -720,6 +720,10 @@ final class SessionStore {
         case .participantsChanged(let token):
             guard active else { return }
             participantsVersion[token, default: 0] += 1
+        case .messageNotices, .noticesCleared:
+            // iOS notifies from pushes; clearing comes with the notifications block
+            // (docs/notifications.md).
+            break
         }
     }
 

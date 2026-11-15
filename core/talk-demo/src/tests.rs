@@ -314,3 +314,112 @@ async fn two_accounts_and_their_badges() {
     ea.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// What the engine announced since the last call: `(tokens with a notice, since_start)`,
+/// cleared tokens and missed calls.
+fn announced(sink: &Sink) -> (Vec<String>, bool, Vec<String>, Vec<String>) {
+    let mut notices = Vec::new();
+    let mut since_start = false;
+    let mut cleared = Vec::new();
+    let mut missed = Vec::new();
+    for e in sink.0.lock().unwrap().drain(..) {
+        match e {
+            Event::MessageNotices { items, since_start: s } => {
+                since_start |= s;
+                notices.extend(items.into_iter().map(|n| n.token));
+            }
+            Event::NoticesCleared { tokens } => cleared.extend(tokens),
+            Event::CallMissed { token, caller_name, .. } => missed.push(format!("{token}:{caller_name}")),
+            _ => {}
+        }
+    }
+    (notices, since_start, cleared, missed)
+}
+
+/// docs/notifications.md end to end: new messages are announced once, by the rules for
+/// muted chats and "do not disturb", cleared when read, reported after a restart, and a
+/// call missed while the app was away is reported once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn notices_for_new_messages_and_missed_calls() {
+    let server = serve_from(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures-b"))).await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let open = || {
+        let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+        let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+        (Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone())), sink)
+    };
+    let post = |path: &'static str, form: Vec<(&'static str, &'static str)>| {
+        let url = format!("{server}{path}");
+        async move {
+            let r = reqwest::Client::new().post(url).form(&form).send().await.unwrap();
+            assert!(r.status().is_success(), "{path}: {}", r.status());
+        }
+    };
+    let none: Vec<String> = Vec::new();
+
+    let (engine, sink) = open();
+    engine.start().await.unwrap();
+    // The look at the notifications that `start` spawned sets the starting point.
+    engine.check_incoming_calls().await;
+    // Signing in is a starting point: nothing is announced.
+    assert_eq!(announced(&sink), (none.clone(), false, none.clone(), none.clone()));
+
+    // A message in a one-to-one chat: announced once, with the text.
+    post("/demo/incoming", vec![("token", "mira"), ("text", "Bist du schon da?")]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    let notice = sink.0.lock().unwrap().iter().find_map(|e| match e {
+        Event::MessageNotices { items, .. } => items.first().cloned(),
+        _ => None,
+    });
+    let notice = notice.expect("no notice for the new message");
+    assert_eq!((notice.room_name.as_str(), notice.is_group, notice.unread, notice.mention), ("Mira Lange", false, 1, false));
+    assert_eq!(notice.message.as_ref().map(|m| m.text.as_str()), Some("Bist du schon da?"));
+    assert_eq!(announced(&sink), (vec!["mira".to_string()], false, none.clone(), none.clone()));
+    engine.refresh_rooms(true).await.unwrap();
+    assert_eq!(announced(&sink).0, none);
+
+    // "Nur Erwähnungen": only the mention announces.
+    post("/demo/incoming", vec![("token", "werkstatt"), ("text", "Wer kommt?")]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    assert_eq!(announced(&sink).0, none);
+    post("/demo/incoming", vec![("token", "werkstatt"), ("text", "@jonas bringst du den Ständer mit?")]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    assert_eq!(announced(&sink).0, ["werkstatt"]);
+
+    // Read here: the notification is obsolete.
+    engine.mark_room_read("mira").await.unwrap();
+    assert_eq!(announced(&sink).2, ["mira"]);
+
+    // "Do not disturb": nothing, and what was held back does not come later.
+    post("/demo/status", vec![("status", "dnd")]).await;
+    engine.refresh_rooms(true).await.unwrap();
+    post("/demo/incoming", vec![("token", "garten"), ("text", "Die Leiter steht am Tor.")]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    post("/demo/missed-call", vec![("token", "clara")]).await;
+    engine.check_incoming_calls().await;
+    post("/demo/status", vec![("status", "online")]).await;
+    engine.refresh_rooms(true).await.unwrap();
+    engine.check_incoming_calls().await;
+    assert_eq!(announced(&sink), (none.clone(), false, none.clone(), none.clone()));
+
+    // A call missed while the app was not looking: reported once. An old one is not.
+    post("/demo/missed-call", vec![("token", "mira")]).await;
+    post("/demo/missed-call", vec![("token", "clara"), ("ago", "90000")]).await;
+    engine.check_incoming_calls().await;
+    engine.check_incoming_calls().await;
+    assert_eq!(announced(&sink).3, ["mira:Mira Lange"]);
+
+    // Closed, a message comes in, started again: announced as "since the start".
+    engine.shutdown();
+    drop(engine);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    post("/demo/incoming", vec![("token", "clara"), ("text", "Bis Samstag!")]).await;
+    let (engine, sink) = open();
+    engine.start().await.unwrap();
+    engine.check_incoming_calls().await;
+    let (notices, since_start, _, missed) = announced(&sink);
+    assert_eq!((notices, since_start), (vec!["clara".to_string()], true));
+    assert_eq!(missed, none, "a missed call was reported again after the restart");
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}

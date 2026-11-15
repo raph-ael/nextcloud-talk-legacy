@@ -18,11 +18,44 @@ const NOTIFY_BACKOFF_MAX_S: u64 = 60;
 /// Without any frame for this long the notify_push socket is considered dead.
 const NOTIFY_IDLE: Duration = Duration::from_secs(120);
 
+/// A call that was missed while the app was not connected is still reported if it is
+/// not older than this.
+const MISSED_REPORT_MAX_AGE_S: i64 = 24 * 60 * 60;
+
 /// Incoming call found in the user's notifications.
 struct CallNotification {
     token: String,
     caller: String,
     id: i64,
+    /// Unix time the notification was created (0 if unknown).
+    at: i64,
+}
+
+/// `2026-11-15T20:59:15+00:00` → unix seconds (the notifications app always writes UTC
+/// or an offset; 0 for anything else).
+fn unix_time(iso: &str) -> i64 {
+    let num = |range: std::ops::Range<usize>| iso.get(range).and_then(|s| s.parse::<i64>().ok());
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(sec)) =
+        (num(0..4), num(5..7), num(8..10), num(11..13), num(14..16), num(17..19))
+    else {
+        return 0;
+    };
+    // Days since 1970-01-01 (civil calendar).
+    let (y2, m2) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let era = y2.div_euclid(400);
+    let yoe = y2.rem_euclid(400);
+    let doy = (153 * m2 + 2) / 5 + d - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    let offset = match iso.get(19..) {
+        Some(tz) if tz.len() >= 6 && (tz.starts_with('+') || tz.starts_with('-')) => {
+            let sign = if tz.starts_with('-') { -1 } else { 1 };
+            let hours = tz.get(1..3).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let minutes = tz.get(4..6).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            sign * (hours * 3600 + minutes * 60)
+        }
+        _ => 0,
+    };
+    days * 86_400 + h * 3600 + mi * 60 + sec - offset
 }
 
 fn call_notifications(list: &[Value]) -> Vec<CallNotification> {
@@ -36,16 +69,19 @@ fn call_notifications(list: &[Value]) -> Vec<CallNotification> {
                 .unwrap_or_default()
                 .to_string();
             let id = n["notification_id"].as_i64().unwrap_or(0);
-            Some(CallNotification { token, caller, id })
+            let at = n["datetime"].as_str().map_or(0, unix_time);
+            Some(CallNotification { token, caller, id, at })
         })
         .collect()
 }
 
 impl Engine {
-    /// Looks for calls that ring for us right now and starts ringing (at most one).
-    /// Safe to call often: calls that rang already are ignored.
+    /// Looks for calls that ring for us right now and starts ringing (at most one), and
+    /// reports one-to-one calls that were missed while the app was not connected, once.
+    /// Safe to call often: calls that were dealt with are skipped.
     /// Also updates the recording notices from the same response.
     pub async fn check_incoming_calls(&self) {
+        let _one_at_a_time = self.incoming_lock.lock().await;
         let list = match self.client.notifications().await {
             Ok(l) => l,
             Err(e) => {
@@ -57,19 +93,67 @@ impl Engine {
         // A call somewhere in this process (any account): nothing else rings, but a call
         // that comes in meanwhile is reported as missed, once (`ring_token` decides).
         let busy = self.calls.busy_anywhere();
-        for n in call_notifications(&list) {
-            if self.calls.holds(&n.token) || self.calls.has_rung(&n.token, n.id) {
+        // Call notifications up to this id were dealt with in an earlier check or run.
+        // On the very first run there is no mark: then nothing old is reported as missed.
+        let mark = *self.call_mark.lock().unwrap();
+        let mut seen = mark.unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let mut rang = false;
+        let mut calls = call_notifications(&list);
+        // Oldest first, so the mark only moves over what was handled.
+        calls.sort_by_key(|n| n.id);
+        for n in calls {
+            if n.id != 0 && n.id <= mark.unwrap_or(0) {
                 continue;
             }
-            // Only calls that still ring (the notification stays after a missed call).
-            match self.client.ring_state(&n.token).await {
-                Ok(RingState::Ringing) => {}
-                _ => continue,
+            if self.calls.holds(&n.token) || self.calls.has_rung(&n.token, n.id) {
+                seen = seen.max(n.id);
+                continue;
             }
-            if self.ring_token(&n.token, &n.caller, n.id, None, true).await && !busy {
-                return;
+            let state = match self.client.ring_state(&n.token).await {
+                Ok(s) => s,
+                // Not known now: look again at the next check.
+                Err(_) => break,
+            };
+            seen = seen.max(n.id);
+            // "Do not disturb": like the server, which sends no push then.
+            if self.hushed(&n.token) {
+                continue;
+            }
+            match state {
+                // Only calls that still ring (the notification stays after a missed call).
+                RingState::Ringing if !rang => {
+                    rang = self.ring_token(&n.token, &n.caller, n.id, None, true).await && !busy;
+                }
+                RingState::Ringing => {}
+                // Missed while this app was not connected: tell the user once.
+                RingState::Missed if mark.is_some() && (n.at == 0 || now - n.at <= MISSED_REPORT_MAX_AGE_S) => {
+                    self.report_missed(&n);
+                }
+                _ => {}
             }
         }
+        if Some(seen) != mark {
+            *self.call_mark.lock().unwrap() = Some(seen);
+            self.cache.set_meta("call_mark", seen.to_string());
+        }
+    }
+
+    /// A one-to-one call nobody answered while this app was not connected.
+    fn report_missed(&self, n: &CallNotification) {
+        let Some(room) = self.state_room(&n.token) else { return };
+        if !matches!(room.room_type, RoomType::OneToOne | RoomType::FormerOneToOne) {
+            return;
+        }
+        tracing::info!(token = %n.token, "call missed while not connected");
+        self.sink.emit(crate::engine::Event::CallMissed {
+            token: n.token.clone(),
+            room_name: room.display_name.clone(),
+            caller_name: if n.caller.is_empty() { room.display_name } else { n.caller.clone() },
+            is_group: false,
+        });
     }
 
     /// Rings for a call in `token` (from a push or a notification). `call_id`: id the
@@ -189,6 +273,9 @@ async fn notify_session(engine: &Arc<Engine>, url: &str) -> bool {
                     return authenticated;
                 } else if t.starts_with("notify_notification") {
                     engine.spawn_incoming_check();
+                    // A chat message makes a notification too: fetch the rooms now, so
+                    // the message is announced at once and not at the next poll.
+                    engine.spawn_rooms_refresh();
                 }
             }
             Ok(Incoming::Alive) => {}
@@ -212,6 +299,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn reads_notification_times() {
+        assert_eq!(unix_time("1970-01-01T00:00:00+00:00"), 0);
+        assert_eq!(unix_time("2026-11-15T20:59:15+00:00"), 1_794_776_355);
+        assert_eq!(unix_time("2026-11-15T21:59:15+01:00"), 1_794_776_355);
+        assert_eq!(unix_time("2024-02-29T12:00:00Z"), 1_709_208_000);
+        assert_eq!(unix_time("gestern"), 0);
+    }
+
+    #[test]
     fn finds_call_notifications() {
         let list = vec![
             json!({"app":"spreed","object_type":"chat","object_id":"x"}),
@@ -220,6 +316,6 @@ mod tests {
         ];
         let calls = call_notifications(&list);
         assert_eq!(calls.len(), 1);
-        assert_eq!((calls[0].token.as_str(), calls[0].caller.as_str(), calls[0].id), ("tok", "Bob", 7));
+        assert_eq!((calls[0].token.as_str(), calls[0].caller.as_str(), calls[0].id, calls[0].at), ("tok", "Bob", 7, 0));
     }
 }
