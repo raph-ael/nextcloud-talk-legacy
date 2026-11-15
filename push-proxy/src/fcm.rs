@@ -87,8 +87,9 @@ impl Fcm {
         Ok(resp.access_token)
     }
 
-    /// Data message (the app decrypts `subject` itself).
-    pub async fn send(&self, token: &str, subject: &str, signature: &str, high: bool) -> Outcome {
+    /// Data message (the app decrypts `subject` itself). `ttl`: how long FCM keeps it for
+    /// a device that is offline.
+    pub async fn send(&self, token: &str, subject: &str, signature: &str, high: bool, ttl: Duration) -> Outcome {
         let access = match self.access_token().await {
             Ok(t) => t,
             Err(e) => {
@@ -100,11 +101,7 @@ impl Fcm {
             "https://fcm.googleapis.com/v1/projects/{}/messages:send",
             self.account.project_id
         );
-        let body = json!({"message": {
-            "token": token,
-            "data": {"subject": subject, "signature": signature},
-            "android": {"priority": if high { "high" } else { "normal" }, "ttl": "60s"}
-        }});
+        let body = message(token, subject, signature, high, ttl);
         match self.http.post(&url).bearer_auth(access).json(&body).send().await {
             Ok(r) if r.status().is_success() => Outcome::Sent,
             Ok(r) => {
@@ -127,5 +124,29 @@ impl Fcm {
                 Outcome::Failed
             }
         }
+    }
+}
+
+fn message(token: &str, subject: &str, signature: &str, high: bool, ttl: Duration) -> serde_json::Value {
+    json!({"message": {
+        "token": token,
+        "data": {"subject": subject, "signature": signature},
+        "android": {"priority": if high { "high" } else { "normal" }, "ttl": format!("{}s", ttl.as_secs())}
+    }})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_carries_priority_and_lifetime() {
+        let m = message("tok", "s", "g", true, Duration::from_secs(86_400));
+        assert_eq!(m["message"]["android"]["priority"], "high");
+        assert_eq!(m["message"]["android"]["ttl"], "86400s");
+        assert_eq!(m["message"]["data"]["subject"], "s");
+        assert!(m["message"].get("notification").is_none(), "data only: the app builds the notification");
+        let m = message("tok", "s", "g", false, Duration::from_secs(60));
+        assert_eq!((m["message"]["android"]["priority"].as_str(), m["message"]["android"]["ttl"].as_str()), (Some("normal"), Some("60s")));
     }
 }

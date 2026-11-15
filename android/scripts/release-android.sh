@@ -14,6 +14,10 @@
 # WOLKENFUNK_KEYSTORE_PASSWORD, WOLKENFUNK_KEY_ALIAS, WOLKENFUNK_KEY_PASSWORD. Values that are not
 # in the environment are read from the file $WOLKENFUNK_ENV (default ~/claudes/talk-legacy/.env),
 # only its WOLKENFUNK_* lines. Without a complete signing config the script stops.
+#
+# Push: TALK_PUSH_PROXY_URL (environment or the same file) and app/google-services.json must be
+# there, and the script checks that both ended up in the APKs. An APK without push does not ring
+# when the app is closed, so building one needs an explicit WITHOUT_PUSH=1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,17 +31,30 @@ DRY_RUN="${DRY_RUN:-0}"
 ENV_FILE="${WOLKENFUNK_ENV:-$HOME/claudes/talk-legacy/.env}"
 if [ -f "$ENV_FILE" ]; then
   while IFS='=' read -r key value; do
-    [[ "$key" =~ ^WOLKENFUNK_[A-Z_]+$ ]] || continue
+    [[ "$key" =~ ^(WOLKENFUNK_[A-Z_]+|TALK_PUSH_PROXY_URL)$ ]] || continue
     [ -n "${!key:-}" ] && continue
     value="${value%$'\r'}"; value="${value#[\"\']}"; value="${value%[\"\']}"
     export "$key=$value"
-  done < <(grep -E '^\s*(export\s+)?WOLKENFUNK_[A-Z_]+=' "$ENV_FILE" | sed -E 's/^\s*(export\s+)?//')
+  done < <(grep -E '^\s*(export\s+)?(WOLKENFUNK_[A-Z_]+|TALK_PUSH_PROXY_URL)=' "$ENV_FILE" | sed -E 's/^\s*(export\s+)?//')
 fi
 export WOLKENFUNK_KEYSTORE="${WOLKENFUNK_KEYSTORE:-$HOME/claudes/talk-secrets/wolkenfunk-release.jks}"
 [ -f "$WOLKENFUNK_KEYSTORE" ] || { echo "keystore not found: $WOLKENFUNK_KEYSTORE" >&2; exit 1; }
 for v in WOLKENFUNK_KEYSTORE_PASSWORD WOLKENFUNK_KEY_ALIAS WOLKENFUNK_KEY_PASSWORD; do
   [ -n "${!v:-}" ] || { echo "$v is not set (environment or $ENV_FILE)" >&2; exit 1; }
 done
+
+# --- push --------------------------------------------------------------------------------------
+WITHOUT_PUSH="${WITHOUT_PUSH:-0}"
+if [ "$WITHOUT_PUSH" = 1 ]; then
+  echo "note: building WITHOUT push (WITHOUT_PUSH=1): calls will not ring while the app is closed"
+  unset TALK_PUSH_PROXY_URL
+else
+  [[ "${TALK_PUSH_PROXY_URL:-}" == https://* ]] \
+    || { echo "TALK_PUSH_PROXY_URL is not set to an https:// address (environment or $ENV_FILE); WITHOUT_PUSH=1 builds without push" >&2; exit 1; }
+  grep -q '"org.wolkenfunk.app"' app/google-services.json 2>/dev/null \
+    || { echo "app/google-services.json for org.wolkenfunk.app is missing; WITHOUT_PUSH=1 builds without push" >&2; exit 1; }
+  export TALK_PUSH_PROXY_URL
+fi
 
 # --- version -----------------------------------------------------------------------------------
 VERSION=$(sed -nE 's/^\s*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts)
@@ -83,7 +100,18 @@ for name in "${!APKS[@]}"; do
   badging=$("$BUILD_TOOLS/aapt2" dump badging "$apk" | sed -n 1p)
   grep -q "name='org.wolkenfunk.app' versionCode='$CODE' versionName='$VERSION'" <<<"$badging" \
     || { echo "$apk is not org.wolkenfunk.app $VERSION ($CODE): $badging" >&2; exit 1; }
+  if [ "$WITHOUT_PUSH" != 1 ]; then
+    # The Firebase config made it into the APK ...
+    "$BUILD_TOOLS/aapt2" dump resources "$apk" | grep -q 'string/google_app_id' \
+      || { echo "$apk has no Firebase config (google-services.json not applied): no push" >&2; exit 1; }
+  fi
 done
+if [ "$WITHOUT_PUSH" != 1 ]; then
+  # ... and so did the proxy address (the build reads it when it configures, so a stale build
+  # directory or a missing variable shows here).
+  grep -qF "PUSH_PROXY_URL = \"$TALK_PUSH_PROXY_URL\"" app/build/generated/source/buildConfig/release/org/wolkenfunk/app/BuildConfig.java \
+    || { echo "the release build does not carry TALK_PUSH_PROXY_URL: no push" >&2; exit 1; }
+fi
 
 # --- stage -------------------------------------------------------------------------------------
 mkdir -p "$STAGE"

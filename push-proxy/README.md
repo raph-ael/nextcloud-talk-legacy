@@ -22,7 +22,14 @@ mit dem Schlüssel des Geräts.
 - **iOS-Tokens** haben die Form `"<APNs-Token> <PushKit-Token>"`:
   - `voip` geht an PushKit (Topic `<bundle>.voip`).
   - `background` geht an APNs.
-  - `alert` nur mit `APNS_FORWARD_ALERTS=1`, dafür braucht die App eine Notification Service Extension.
+  - `alert` (Nachrichten) geht an APNs, mit Platzhaltertext und Standardton. Die Notification Service Extension der App entschlüsselt und ersetzt den Text. `APNS_FORWARD_ALERTS=0` schaltet das ab.
+- **Wie lange ein Push auf ein Gerät wartet, das offline ist:**
+  | Art | FCM | APNs |
+  |---|---|---|
+  | `voip` (Anruf) | 60 s | gar nicht |
+  | `alert` (Nachricht) | 24 h | 24 h |
+  | `background` (woanders gelesen) | 24 h | gar nicht, damit es keine wartende Nachricht verdrängt |
+- **Nichts fällt still weg:** Jeder verworfene Push steht mit Grund im Log, nie mit Inhalt.
 
 ## Konfiguration (Umgebung)
 
@@ -34,7 +41,7 @@ mit dem Schlüssel des Geräts.
 | `APNS_KEY` | Pfad zum APNs-Schlüssel (`.p8`) |
 | `APNS_KEY_ID`, `APNS_TEAM_ID` | Key-ID und Team-ID aus dem Apple-Developer-Konto |
 | `APNS_TOPIC` | Bundle-ID der App |
-| `APNS_FORWARD_ALERTS` | `1`: auch normale Benachrichtigungen an iOS |
+| `APNS_FORWARD_ALERTS` | `0`: keine Nachrichten an iOS (für eine App ohne Notification Service Extension); Standard ist an |
 | `RUST_LOG` | z. B. `talk_push_proxy=debug` |
 
 Development-Builds von iOS haben Sandbox-Tokens. Der Proxy probiert erst Production, dann Sandbox, und merkt sich das pro Gerät.

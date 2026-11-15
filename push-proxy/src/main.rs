@@ -20,6 +20,7 @@ mod verify;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
@@ -144,13 +145,19 @@ async fn notifications(State(app): State<Arc<App>>, body: Bytes) -> Response {
     let mut unknown = Vec::new();
     let mut failed = 0u32;
     for raw in items {
-        let Ok(n) = serde_json::from_str::<Notification>(&raw) else {
-            failed += 1;
-            continue;
+        // Nothing is dropped without a line in the log (never the content, only why).
+        let n = match serde_json::from_str::<Notification>(&raw) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("notification dropped: not readable ({e})");
+                failed += 1;
+                continue;
+            }
         };
         let device = match app.store.get(&n.device_identifier) {
             Ok(Some(d)) => d,
             Ok(None) => {
+                tracing::info!(device = %short(&n.device_identifier), "notification dropped: device not registered here");
                 unknown.push(n.device_identifier.clone());
                 continue;
             }
@@ -164,7 +171,7 @@ async fn notifications(State(app): State<Arc<App>>, body: Bytes) -> Response {
         if device.push_token_hash != n.push_token_hash
             || !verify::signature(&device.user_public_key, &raw_subject, &n.signature)
         {
-            tracing::info!(device = %short(&n.device_identifier), "notification: token hash or signature mismatch");
+            tracing::warn!(device = %short(&n.device_identifier), "notification dropped: token hash or signature mismatch");
             failed += 1;
             continue;
         }
@@ -181,23 +188,69 @@ async fn notifications(State(app): State<Arc<App>>, body: Bytes) -> Response {
     axum::Json(json!({"unknown": unknown, "failed": failed})).into_response()
 }
 
+/// What the server says a push is, next to the encrypted subject (the proxy cannot read
+/// more): a call, a deletion ("read elsewhere"), or anything else, i.e. a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Voip,
+    Background,
+    Alert,
+}
+
+impl Kind {
+    fn of(r#type: &str) -> Self {
+        match r#type {
+            "voip" => Self::Voip,
+            "background" => Self::Background,
+            _ => Self::Alert,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Voip => "voip",
+            Self::Background => "background",
+            Self::Alert => "alert",
+        }
+    }
+
+    /// How long FCM keeps the push for an offline device: a call only while it rings,
+    /// a message and its deletion for a day. (APNs: see `apns::request`.)
+    fn fcm_ttl(self) -> Duration {
+        match self {
+            Self::Voip => Duration::from_secs(60),
+            Self::Background | Self::Alert => apns::ALERT_LIFETIME,
+        }
+    }
+}
+
 async fn send(app: &App, device: &Device, n: &Notification) -> Outcome {
     let high = n.priority == "high";
-    let kind = if n.r#type.is_empty() { "alert" } else { n.r#type.as_str() };
-    tracing::info!(device = %short(&device.id), kind, high, "forwarding");
+    let kind = Kind::of(&n.r#type);
+    tracing::info!(device = %short(&device.id), kind = kind.name(), high, "forwarding");
     // iOS tokens are "<apns> <pushkit>" (as the Talk iOS app registers them).
     if let Some((apns_token, voip_token)) = device.push_token.split_once(' ') {
-        let Some(apns) = &app.apns else { return Outcome::Failed };
+        let Some(apns) = &app.apns else {
+            tracing::warn!(device = %short(&device.id), "notification dropped: APNs is not configured");
+            return Outcome::Failed;
+        };
         match kind {
-            "voip" => apns.send(&device.id, voip_token, apns::Kind::Voip, &n.subject, &n.signature).await,
-            "background" => apns.send(&device.id, apns_token, apns::Kind::Background, &n.subject, &n.signature).await,
-            _ if app.apns_alerts => apns.send(&device.id, apns_token, apns::Kind::Alert, &n.subject, &n.signature).await,
-            // Not forwarded (no Notification Service Extension yet): not a failure.
-            _ => Outcome::Sent,
+            Kind::Voip => apns.send(&device.id, voip_token, apns::Kind::Voip, &n.subject, &n.signature).await,
+            Kind::Background => apns.send(&device.id, apns_token, apns::Kind::Background, &n.subject, &n.signature).await,
+            Kind::Alert if app.apns_alerts => apns.send(&device.id, apns_token, apns::Kind::Alert, &n.subject, &n.signature).await,
+            Kind::Alert => {
+                // Switched off (APNS_FORWARD_ALERTS=0, an app without a notification
+                // service extension): not a failure.
+                tracing::info!(device = %short(&device.id), "notification dropped: alerts to iOS are switched off");
+                Outcome::Sent
+            }
         }
     } else {
-        let Some(fcm) = &app.fcm else { return Outcome::Failed };
-        fcm.send(&device.push_token, &n.subject, &n.signature, high || kind == "voip").await
+        let Some(fcm) = &app.fcm else {
+            tracing::warn!(device = %short(&device.id), "notification dropped: FCM is not configured");
+            return Outcome::Failed;
+        };
+        fcm.send(&device.push_token, &n.subject, &n.signature, high || kind == Kind::Voip, kind.fcm_ttl()).await
     }
 }
 
@@ -237,7 +290,9 @@ async fn main() -> anyhow::Result<()> {
         store,
         fcm,
         apns,
-        apns_alerts: env("APNS_FORWARD_ALERTS").is_some_and(|v| v == "1" || v == "true"),
+        // Messages go to iOS unless switched off (the app needs a notification service
+        // extension to decrypt them; ours has one).
+        apns_alerts: !env("APNS_FORWARD_ALERTS").is_some_and(|v| v == "0" || v == "false"),
     });
     let router = Router::new()
         .route("/devices", post(register).delete(unregister))
@@ -252,4 +307,22 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds_and_how_long_they_wait() {
+        assert_eq!(Kind::of("voip"), Kind::Voip);
+        assert_eq!(Kind::of("background"), Kind::Background);
+        // Messages come as "alert"; an unknown or missing type is treated like one.
+        assert_eq!(Kind::of("alert"), Kind::Alert);
+        assert_eq!(Kind::of(""), Kind::Alert);
+        // A call only while it rings, a message (and its deletion) for a day.
+        assert_eq!(Kind::Voip.fcm_ttl(), Duration::from_secs(60));
+        assert_eq!(Kind::Alert.fcm_ttl(), Duration::from_secs(24 * 60 * 60));
+        assert_eq!(Kind::Background.fcm_ttl(), Duration::from_secs(24 * 60 * 60));
+    }
 }

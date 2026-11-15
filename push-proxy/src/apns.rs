@@ -81,27 +81,8 @@ impl Apns {
                 return Outcome::Failed;
             }
         };
-        let (push_type, topic, priority, body) = match kind {
-            Kind::Voip => (
-                "voip",
-                format!("{}.voip", self.topic),
-                "10",
-                json!({"subject": subject, "signature": signature, "type": "voip"}),
-            ),
-            Kind::Background => (
-                "background",
-                self.topic.clone(),
-                "5",
-                json!({"aps": {"content-available": 1}, "subject": subject, "signature": signature, "type": "background"}),
-            ),
-            Kind::Alert => (
-                "alert",
-                self.topic.clone(),
-                "10",
-                json!({"aps": {"mutable-content": 1, "alert": {"title": "Nextcloud Talk", "body": "Neue Nachricht"}},
-                       "subject": subject, "signature": signature, "type": "alert"}),
-            ),
-        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let Request { push_type, topic, priority, expiration, body } = request(kind, &self.topic, subject, signature, now);
         // Development builds have sandbox tokens; try the remembered environment first.
         let order = match self.store.apns_sandbox(device_id) {
             Some(true) => [SANDBOX, PRODUCTION],
@@ -116,8 +97,7 @@ impl Apns {
                 .header("apns-topic", &topic)
                 .header("apns-push-type", push_type)
                 .header("apns-priority", priority)
-                // Ringing makes no sense later than this.
-                .header("apns-expiration", "0")
+                .header("apns-expiration", expiration.to_string())
                 .json(&body)
                 .send()
                 .await;
@@ -146,5 +126,78 @@ impl Apns {
             }
         }
         Outcome::Unknown
+    }
+}
+
+/// How long a message notification may wait for a device that is offline.
+pub const ALERT_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
+
+struct Request {
+    push_type: &'static str,
+    topic: String,
+    priority: &'static str,
+    /// `apns-expiration`: 0 = one delivery attempt, otherwise a unix time until which
+    /// APNs keeps the notification for an offline device.
+    expiration: u64,
+    body: serde_json::Value,
+}
+
+/// Headers and payload per kind. `now`: unix seconds.
+fn request(kind: Kind, topic: &str, subject: &str, signature: &str, now: u64) -> Request {
+    match kind {
+        // Ringing makes no sense later.
+        Kind::Voip => Request {
+            push_type: "voip",
+            topic: format!("{topic}.voip"),
+            priority: "10",
+            expiration: 0,
+            body: json!({"subject": subject, "signature": signature, "type": "voip"}),
+        },
+        // "Read elsewhere": now or never. APNs keeps one notification per app for an
+        // offline device, and a stored delete would push a waiting message out.
+        Kind::Background => Request {
+            push_type: "background",
+            topic: topic.to_string(),
+            priority: "5",
+            expiration: 0,
+            body: json!({"aps": {"content-available": 1}, "subject": subject, "signature": signature, "type": "background"}),
+        },
+        // A message: waits for the device. The app's notification service extension
+        // decrypts `subject` and replaces the placeholder; without a title iOS shows
+        // the app's name.
+        Kind::Alert => Request {
+            push_type: "alert",
+            topic: topic.to_string(),
+            priority: "10",
+            expiration: now + ALERT_LIFETIME.as_secs(),
+            body: json!({"aps": {"mutable-content": 1, "sound": "default", "alert": {"body": "Neue Nachricht"}},
+                         "subject": subject, "signature": signature, "type": "alert"}),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_messages_wait_for_an_offline_device() {
+        let now = 1_800_000_000;
+        let voip = request(Kind::Voip, "org.example.app", "s", "g", now);
+        assert_eq!((voip.push_type, voip.topic.as_str(), voip.expiration), ("voip", "org.example.app.voip", 0));
+        assert!(voip.body.get("aps").is_none());
+
+        let delete = request(Kind::Background, "org.example.app", "s", "g", now);
+        assert_eq!((delete.push_type, delete.priority, delete.expiration), ("background", "5", 0));
+        assert_eq!(delete.body["aps"]["content-available"], 1);
+
+        let message = request(Kind::Alert, "org.example.app", "s", "g", now);
+        assert_eq!((message.push_type, message.priority), ("alert", "10"));
+        assert_eq!(message.expiration, now + 24 * 60 * 60);
+        assert_eq!(message.body["aps"]["mutable-content"], 1);
+        assert_eq!(message.body["aps"]["sound"], "default");
+        assert_eq!(message.body["aps"]["alert"]["body"], "Neue Nachricht");
+        assert!(message.body["aps"]["alert"].get("title").is_none());
+        assert_eq!((message.body["subject"].as_str(), message.body["signature"].as_str()), (Some("s"), Some("g")));
     }
 }

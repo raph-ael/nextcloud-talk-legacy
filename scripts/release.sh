@@ -38,7 +38,7 @@ load_env() {
     export "$key=$line"
   done
 }
-load_env MAC_HOST WOLKENFUNK_KEYSTORE WOLKENFUNK_KEYSTORE_PASSWORD WOLKENFUNK_KEY_ALIAS WOLKENFUNK_KEY_PASSWORD
+load_env MAC_HOST WOLKENFUNK_KEYSTORE WOLKENFUNK_KEYSTORE_PASSWORD WOLKENFUNK_KEY_ALIAS WOLKENFUNK_KEY_PASSWORD TALK_PUSH_PROXY_URL
 
 # --- Checks ------------------------------------------------------------------------------
 step "checks"

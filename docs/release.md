@@ -75,6 +75,7 @@ Im Repo steht kein Schlüssel und kein Passwort. Die Skripte lesen sie aus der U
 |---|---|---|
 | APT-Repo signieren | `~/.config/wolkenfunk/apt-gnupg` (GnuPG-Home, ed25519, siehe `desktop/packaging/README.md`) | `WOLKENFUNK_GNUPGHOME` |
 | Android-APK signieren | Keystore außerhalb des Repos | `WOLKENFUNK_KEYSTORE`, `WOLKENFUNK_KEYSTORE_PASSWORD`, `WOLKENFUNK_KEY_ALIAS`, `WOLKENFUNK_KEY_PASSWORD` |
+| Push in den mobilen Apps | Adresse des Push-Proxys (`push-proxy/`) und Firebase-Konfiguration | `TALK_PUSH_PROXY_URL` (auch in der Codemagic-Umgebung für iOS), `android/app/google-services.json` (nicht im Repo) |
 | Mac-Host für den macOS-Build | SSH-Ziel | `MAC_HOST` |
 | Upload | SSH-Zugang zum Paket-Server | `PKG_HOST`, `PKG_REMOTE` |
 | iOS | Codemagic (App-Store-Connect-API-Key, Distribution-Zertifikat) | nur dort hinterlegt |
