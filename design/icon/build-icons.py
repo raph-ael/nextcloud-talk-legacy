@@ -6,7 +6,8 @@
 Without arguments it builds all of them. Results are checked in, so builds (including the
 Windows CI) need none of the tools. Running it again gives byte-identical files.
 
-Needs rsvg-convert (librsvg2-bin) and Python 3 with Pillow.
+Needs rsvg-convert (librsvg2-bin), Python 3 with Pillow and, for the digits of the Windows
+counter, the font DejaVu Sans (fonts-dejavu-core).
 
   design/icon/app-icon.svg                  full-bleed colour icon (1024, source for iOS)
   desktop/resources/icons/<N>x<N>.png       Linux (hicolor), rounded tile
@@ -15,6 +16,8 @@ Needs rsvg-convert (librsvg2-bin) and Python 3 with Pillow.
   desktop/resources/tray-on-light.png       monochrome tray glyph, dark, for light panels
   desktop/resources/tray-on-dark.png        … white, for dark panels (each with @2x)
   desktop/resources/trayTemplate.png        macOS menu bar template (black + alpha, with @2x)
+  desktop/resources/tray*-dot.png           the three tray glyphs with a dot: something unread
+  desktop/resources/tray-count-<n>.png      Windows taskbar overlay: 1–9 and "more" (9+)
   android/…/drawable/ic_launcher_*.xml      adaptive icon: background, foreground, monochrome
   android/…/drawable/ic_stat_wolkenfunk.xml notification small icon
   ios/…/AppIcon.appiconset/                 light, dark and tinted 1024 icons
@@ -40,6 +43,8 @@ BLUE_LIGHT = "#2F7BF5"
 BLUE_DARK = "#1650C4"
 GLYPH_ON_DARK = "#7AAEFF"
 TRAY_DARK = "#2E3436"  # Adwaita dark grey: the glyph on light panels
+DOT_ON_LIGHT = BLUE_LIGHT  # "something unread" on the tray glyph and the Windows counter
+DOT_ON_DARK = "#5B9BFF"
 
 
 # --- Source -----------------------------------------------------------------------------
@@ -76,6 +81,28 @@ GRADIENT = (
 
 def svg512(body: str) -> str:
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">{body}</svg>'
+
+
+def tray_mark(fill: str, dot: str | None = None) -> str:
+    """The tray glyph filling the canvas; `dot`: with a dot in the upper right corner, the
+    glyph cut back around it so the dot stands free at 16 px."""
+    mark = placed(fill, 1.25)
+    if dot is None:
+        return svg512(mark)
+    cx, cy, r, gap = 396, 116, 96, 36
+    return svg512(
+        f'<defs><mask id="cut"><rect width="512" height="512" fill="#fff"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r + gap}" fill="#000"/></mask></defs>'
+        f'<g mask="url(#cut)">{mark}</g><circle cx="{cx}" cy="{cy}" r="{r}" fill="{dot}"/>')
+
+
+def count_badge(label: str) -> str:
+    """Windows taskbar overlay: a filled circle with the number of chats."""
+    size = 340 if len(label) == 1 else 250
+    return svg512(
+        f'<circle cx="256" cy="256" r="248" fill="{BLUE_LIGHT}"/>'
+        f'<text x="256" y="{256 + size * 0.365:.0f}" text-anchor="middle" font-family="DejaVu Sans" '
+        f'font-weight="bold" font-size="{size}" fill="#FFFFFF">{label}</text>')
 
 
 def square_tile() -> str:
@@ -134,10 +161,17 @@ def desktop() -> None:
     # Tray: the glyph alone, filling the canvas (it spans 77 % of the 512 grid) so it reads at 16–22 px.
     for name, fill in (("tray-on-light", TRAY_DARK), ("tray-on-dark", "#FFFFFF"),
                        ("trayTemplate", "#000000")):
-        mark = svg512(placed(fill, 1.25))
         base = 16 if name == "trayTemplate" else 32
-        save_png(render(mark, base), res / f"{name}.png")
-        save_png(render(mark, base * 2), res / f"{name}@2x.png")
+        # A template image has one colour: there the dot is told apart by the gap alone.
+        dot = {"tray-on-light": DOT_ON_LIGHT, "tray-on-dark": DOT_ON_DARK}.get(name, fill)
+        for suffix, mark in (("", tray_mark(fill)), ("-dot", tray_mark(fill, dot))):
+            save_png(render(mark, base), res / f"{name}{suffix}.png")
+            save_png(render(mark, base * 2), res / f"{name}{suffix}@2x.png")
+
+    # Windows scales the overlay to the small icon size (16 px at 100 %).
+    for n in range(1, 10):
+        save_png(render(count_badge(str(n)), 32), res / f"tray-count-{n}.png")
+    save_png(render(count_badge("9+"), 32), res / "tray-count-more.png")
 
 
 def android() -> None:

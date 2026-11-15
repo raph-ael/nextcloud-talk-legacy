@@ -67,7 +67,7 @@ export function Settings() {
   }, [page])
 
   const rows: { page: SettingsPage; label: string; icon: ReactNode }[] = [
-    ...(IS_MAC ? [] : [{ page: 'general' as const, label: 'Allgemein', icon: <GearIcon /> }]),
+    { page: 'general', label: 'Allgemein', icon: <GearIcon /> },
     { page: 'appearance', label: 'Darstellung', icon: <BrushIcon /> },
     ...(chats ? [{ page: 'chats' as const, label: 'Chats', icon: <ChatIcon /> }] : []),
     { page: 'about', label: 'Über Wolkenfunk', icon: <InfoIcon /> },
@@ -199,12 +199,18 @@ function LogoutDialog({ name, server, onClose }: { name: string; server: string;
   )
 }
 
-/** „Allgemein“ (Linux, Windows): the same setting as the check mark in the tray menu. */
+/**
+ * „Allgemein“: „Beim Schließen im Hintergrund weiterlaufen“ (Linux, Windows; the same setting
+ * as the check mark in the tray menu) and „Beim Anmelden starten“ (not in a Flatpak).
+ */
 function GeneralPage() {
   const [on, setOn] = useState<boolean | null>(null)
+  /** `undefined`: not known yet, `null`: no such switch here. */
+  const [atLogin, setAtLogin] = useState<boolean | null | undefined>(undefined)
   useEffect(() => {
     let alive = true
     void window.talk.closeToTray().then((v) => alive && setOn(v))
+    void window.talk.openAtLogin().then((v) => alive && setAtLogin(v))
     const off = window.talk.onEvent((e) => e.type === 'closeToTrayChanged' && setOn(e.on))
     return () => {
       alive = false
@@ -213,22 +219,42 @@ function GeneralPage() {
   }, [])
   return (
     <section className="settings-section">
-      <button
-        className="settings-row"
-        role="switch"
-        aria-checked={!!on}
-        disabled={on === null}
-        onClick={() => {
-          setOn(!on)
-          void window.talk.setCloseToTray(!on)
-        }}
-      >
-        <span className="settings-text">
-          <span>Beim Schließen im Hintergrund weiterlaufen</span>
-          <span className="person-sub wrap">Damit Anrufe und Nachrichten ankommen</span>
-        </span>
-        <span className={`switch${on ? ' on' : ''}`} aria-hidden />
-      </button>
+      {!IS_MAC && (
+        <button
+          className="settings-row"
+          role="switch"
+          aria-checked={!!on}
+          disabled={on === null}
+          onClick={() => {
+            setOn(!on)
+            void window.talk.setCloseToTray(!on)
+          }}
+        >
+          <span className="settings-text">
+            <span>Beim Schließen im Hintergrund weiterlaufen</span>
+            <span className="person-sub wrap">Damit Anrufe und Nachrichten ankommen</span>
+          </span>
+          <span className={`switch${on ? ' on' : ''}`} aria-hidden />
+        </button>
+      )}
+      {atLogin !== null && (
+        <button
+          className="settings-row"
+          role="switch"
+          aria-checked={!!atLogin}
+          disabled={atLogin === undefined}
+          onClick={() => {
+            setAtLogin(!atLogin)
+            void window.talk.setOpenAtLogin(!atLogin)
+          }}
+        >
+          <span className="settings-text">
+            <span>Beim Anmelden starten</span>
+            <span className="person-sub wrap">Wolkenfunk startet im Hintergrund, damit Nachrichten und Anrufe ankommen</span>
+          </span>
+          <span className={`switch${atLogin ? ' on' : ''}`} aria-hidden />
+        </button>
+      )}
     </section>
   )
 }

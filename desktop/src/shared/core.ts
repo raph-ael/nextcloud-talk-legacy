@@ -247,6 +247,24 @@ export type CoreEvent =
   | { type: 'recordingsChanged'; items: RecordingNotice[] }
   /** Members or roles of a group changed: reload `members` if shown (docs/groups.md). */
   | { type: 'participantsChanged'; token: string }
+  /**
+   * Chats with a new message that deserves a notification (docs/notifications.md), also the
+   * one that is open. `sinceStart`: what came in while the app was closed.
+   */
+  | { type: 'messageNotices'; items: MessageNotice[]; sinceStart: boolean }
+  /** The notifications of these chats are obsolete: read (here or elsewhere), archived, gone. */
+  | { type: 'noticesCleared'; tokens: string[] }
+
+/** One chat with something new, for a notification. */
+export interface MessageNotice {
+  token: string
+  roomName: string
+  isGroup: boolean
+  mention: boolean
+  unread: number
+  /** The preview of the chat list; missing where the server shows none: „Neue Nachricht“. */
+  message?: MessagePreview | null
+}
 
 // --- Calls (docs/calls.md, talk-core/src/call/mod.rs) ------------------------------
 
@@ -612,6 +630,9 @@ export interface TalkApi {
   setAppearance(theme: Theme, accent: string): Promise<void>
   closeToTray(): Promise<boolean>
   setCloseToTray(on: boolean): Promise<void>
+  /** „Beim Anmelden starten“ (docs/notifications.md); null where there is no such switch (Flatpak). */
+  openAtLogin(): Promise<boolean | null>
+  setOpenAtLogin(on: boolean): Promise<void>
   appInfo(): Promise<AppInfo>
   /** Rejects when the check fails. */
   checkForUpdates(): Promise<UpdateCheck>

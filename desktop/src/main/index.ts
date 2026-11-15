@@ -17,7 +17,8 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, ren
 import { copyFile, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
-import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged } from './system'
+import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged, unreadChanged } from './system'
+import { autostartAvailable, setAutostart, startedAtLogin } from './autostart'
 import { installScreenShare } from './screen'
 import { checkForUpdatesNow, installAutoUpdate, updatesActive } from './update'
 import {
@@ -30,6 +31,7 @@ import {
   type CallView,
   type MediaCommand,
   type MediaReport,
+  type MessageNotice,
   type CoreEvent,
   type PendingMessage,
   type RecordingNotice,
@@ -42,8 +44,11 @@ import {
   type Theme,
 } from '@shared/core'
 import { ACCENTS, DEFAULT_ACCENT } from '../renderer/src/accents'
-import trayOnDark from '../../resources/tray-on-dark.png?asset'
-import trayOnLight from '../../resources/tray-on-light.png?asset'
+
+/** A picture from `resources/` (design/icon/build-icons.py); the @2x file next to it is picked up for HiDPI. */
+function resource(name: string): string {
+  return join(__dirname, '../../resources', name)
+}
 
 // --- Native core -------------------------------------------------------------------
 
@@ -186,16 +191,19 @@ interface Settings {
   theme: Theme
   /** Accent id from design/theme/accents.json; unknown ids show as the default. */
   accent: string
+  /** „Beim Anmelden starten“ (docs/notifications.md). */
+  openAtLogin: boolean
 }
 
 const THEMES: readonly Theme[] = ['system', 'light', 'dark']
 
 function loadSettings(): Settings {
-  const defaults: Settings = { closeToTray: true, theme: 'system', accent: DEFAULT_ACCENT }
+  const defaults: Settings = { closeToTray: true, theme: 'system', accent: DEFAULT_ACCENT, openAtLogin: false }
   try {
     const stored = { ...defaults, ...(JSON.parse(readFileSync(settingsFile, 'utf8')) as Partial<Settings>) }
     if (!THEMES.includes(stored.theme)) stored.theme = 'system'
     if (!ACCENTS.some((a) => a.id === stored.accent)) stored.accent = DEFAULT_ACCENT
+    stored.openAtLogin = stored.openAtLogin === true
     return stored
   } catch {
     return defaults
@@ -319,9 +327,6 @@ interface Runtime {
   session: NativeSession
   /** Absolute data folder (cache, outbox, staging). */
   dir: string
-  /** Last room list, to spot new messages for notifications. */
-  lastRooms: Map<string, RoomView>
-  firstRoomsEvent: boolean
   /** The chat open in the window (only the active account has one). */
   openToken: string | null
   /** Failed messages already announced by a notification. */
@@ -402,6 +407,7 @@ function updateBadges(): void {
     total += b.chats
   }
   app.setBadgeCount(total)
+  showUnread(total)
   if (changed) sendAccounts()
 }
 
@@ -416,9 +422,14 @@ function onCoreEvent(rt: Runtime, event: CoreEvent): void {
       notifyMissedCall(rt, event)
       break
     case 'roomsChanged':
-      notifyNewMessages(rt, event.rooms)
       updateBadges()
       break
+    case 'messageNotices':
+      notifyMessages(rt, event.items, event.sinceStart)
+      return
+    case 'noticesCleared':
+      closeNotices(rt, event.tokens)
+      return
     case 'authFailed':
       void removeAccount(rt, false)
       return
@@ -442,8 +453,6 @@ function createRuntime(stored: StoredAccount, password: string): Runtime {
     id: stored.id,
     stored,
     dir,
-    lastRooms: new Map(),
-    firstRoomsEvent: true,
     openToken: null,
     notifiedFailures: new Set(),
     knownNotices: new Set(),
@@ -593,6 +602,7 @@ async function removeAccount(rt: Runtime, revoke: boolean): Promise<void> {
     else send({ type: 'session', state: 'loggedOut' } satisfies AppEvent)
   }
   for (const key of avatarCache.keys()) if (key.startsWith(`${rt.id}|`)) avatarCache.delete(key)
+  closeNotices(rt, null)
   updateBadges()
   sendAccounts()
   if (!revoke) announceSignedOut(rt)
@@ -612,7 +622,7 @@ function announceSignedOut(rt: Runtime): void {
   const text = `${a.name} (${serverLabel(a.server)}) wurde abgemeldet. Bitte neu anmelden.`
   send({ type: 'notice', text } satisfies AppEvent)
   if (win?.isFocused() || !Notification.isSupported()) return
-  const n = new Notification({ title: 'Wolkenfunk', body: text })
+  const n = hold(new Notification({ title: 'Wolkenfunk', body: text }))
   n.on('click', showWindow)
   n.show()
 }
@@ -738,17 +748,39 @@ function startDevAccounts(dev: { server: string; user: string; password: string 
       secret: '',
     }
     list.accounts.push(stored)
-    bootRuntime(createRuntime(stored, d.password), d.password)
+    const rt = createRuntime(stored, d.password)
+    // From the cache of an earlier run, so the account line reads right from the start.
+    stored.name = rt.session.displayName || d.user
+    bootRuntime(rt, d.password)
   }
   activeId = list.accounts[0]?.id ?? null
   updateBadges()
 }
 
-// --- Notifications ----------------------------------------------------------------
+// --- Notifications (docs/notifications.md) -----------------------------------------
 
-/** The core gives the effective level (never the server default 0). */
-function wantsNotification(room: RoomView): boolean {
-  return room.notificationLevel === 1 || (room.notificationLevel === 2 && room.unreadMention)
+/**
+ * Every notification on screen. Held on purpose: under Linux an object that was collected
+ * loses its click, and all of them close when the app quits.
+ */
+const shown = new Set<Notification>()
+const MAX_SHOWN = 100
+/** At most one per account and chat, `<account>|<token>`: a new message replaces it. */
+const chatNotices = new Map<string, Notification>()
+/** „Neue Nachrichten in {n} Chats“ of an account, and the chats it stands for. */
+const summaries = new Map<string, { note: Notification; tokens: Set<string> }>()
+
+function hold(n: Notification): Notification {
+  shown.add(n)
+  n.on('close', () => shown.delete(n))
+  // Not every system says when a notification went away: the oldest one gives way.
+  if (shown.size > MAX_SHOWN) shown.delete(shown.values().next().value!)
+  return n
+}
+
+function dismiss(n: Notification): void {
+  shown.delete(n)
+  n.close()
 }
 
 /**
@@ -757,8 +789,10 @@ function wantsNotification(room: RoomView): boolean {
  */
 function notify(rt: Runtime, options: Electron.NotificationConstructorOptions, token: string | null): Notification {
   const line = accountLine(rt)
-  const n = new Notification(
-    !line ? options : process.platform === 'darwin' ? { ...options, subtitle: line } : { ...options, title: `${options.title} – ${line}` },
+  const n = hold(
+    new Notification(
+      !line ? options : process.platform === 'darwin' ? { ...options, subtitle: line } : { ...options, title: `${options.title} – ${line}` },
+    ),
   )
   n.on('click', () => openFromNotification(rt, token))
   n.show()
@@ -773,24 +807,86 @@ function openFromNotification(rt: Runtime, token: string | null): void {
   else if (token) sendFrom(rt, { type: 'openRoom', token })
 }
 
-function notifyNewMessages(rt: Runtime, rooms: RoomView[]): void {
-  const previous = rt.lastRooms
-  rt.lastRooms = new Map(rooms.map((r) => [r.token, r]))
-  if (rt.firstRoomsEvent) {
-    rt.firstRoomsEvent = false
+/** The text below the chat name: as in the chat list, in groups with the author. */
+function noticeText(item: MessageNotice): string {
+  const m = item.message
+  const text = m ? withAttachment(m.text, m.attachment) : ''
+  if (!m || !text) return 'Neue Nachricht'
+  return item.isGroup && !m.isSystem && m.author ? `${m.author}: ${text}` : text
+}
+
+/**
+ * `messageNotices` of the core, for every account. The core also reports the chat that is
+ * open: only that one, in the active account with the window in front, stays quiet.
+ */
+function notifyMessages(rt: Runtime, items: MessageNotice[], sinceStart: boolean): void {
+  if (!Notification.isSupported()) return
+  const open = (win?.isFocused() ?? false) && rt.id === activeId ? rt.openToken : null
+  const fresh = items.filter((i) => i.token !== open)
+  if (fresh.length === 0) return
+  // Many at once, or what came in while the app was closed: one notification for all.
+  if (fresh.length > 1 && (sinceStart || items.length > 3)) {
+    notifySummary(rt, fresh)
     return
   }
-  // Only the chat open in the window, in the front, stays quiet.
-  const focused = (win?.isFocused() ?? false) && rt.id === activeId
-  for (const room of rooms) {
-    const before = previous.get(room.token)
-    if (!before || room.unreadMessages <= before.unreadMessages) continue
-    if (focused && room.token === rt.openToken) continue
-    if (!wantsNotification(room) || !room.lastMessage || room.lastMessage.isOwn) continue
-    if (!Notification.isSupported()) continue
-    const text = withAttachment(room.lastMessage.text, room.lastMessage.attachment)
-    notify(rt, { title: room.name, body: room.roomType === 1 ? text : `${room.lastMessage.author}: ${text}`, silent: false }, room.token)
+  for (const item of fresh) {
+    const key = `${rt.id}|${item.token}`
+    const before = chatNotices.get(key)
+    if (before) dismiss(before)
+    const n = notify(rt, { title: item.roomName, body: noticeText(item), silent: false }, item.token)
+    chatNotices.set(key, n)
+    n.on('close', () => {
+      if (chatNotices.get(key) === n) chatNotices.delete(key)
+    })
   }
+}
+
+function notifySummary(rt: Runtime, items: MessageNotice[]): void {
+  // It stands for these chats now, also for what was shown of them before.
+  closeNotices(rt, items.map((i) => i.token))
+  const before = summaries.get(rt.id)
+  if (before) dismiss(before.note)
+  const note = notify(rt, { title: 'Wolkenfunk', body: `Neue Nachrichten in ${items.length} Chats`, silent: false }, null)
+  summaries.set(rt.id, { note, tokens: new Set(items.map((i) => i.token)) })
+  note.on('close', () => {
+    if (summaries.get(rt.id)?.note === note) summaries.delete(rt.id)
+  })
+}
+
+/**
+ * These chats are read, archived, gone or being opened: their notifications close, and the
+ * summary with its last chat. `null`: everything of the account (signed out).
+ */
+function closeNotices(rt: Runtime, tokens: string[] | null): void {
+  const summary = summaries.get(rt.id)
+  if (tokens === null) {
+    for (const [key, n] of chatNotices) {
+      if (!key.startsWith(`${rt.id}|`)) continue
+      chatNotices.delete(key)
+      dismiss(n)
+    }
+  } else {
+    for (const token of tokens) {
+      const key = `${rt.id}|${token}`
+      const n = chatNotices.get(key)
+      if (n) {
+        chatNotices.delete(key)
+        dismiss(n)
+      }
+      summary?.tokens.delete(token)
+    }
+  }
+  if (summary && (tokens === null || summary.tokens.size === 0)) {
+    summaries.delete(rt.id)
+    dismiss(summary.note)
+  }
+}
+
+/** Quitting: nothing stays behind whose click would lead nowhere. */
+function closeAllNotifications(): void {
+  chatNotices.clear()
+  summaries.clear()
+  for (const n of [...shown]) dismiss(n)
 }
 
 /** A message finally failed while the user was not looking at its chat. */
@@ -800,7 +896,8 @@ function announceFailures(rt: Runtime, token: string, items: PendingMessage[]): 
   fresh.forEach((i) => rt.notifiedFailures.add(i.message.referenceId))
   const visible = (win?.isFocused() ?? false) && rt.id === activeId && rt.openToken === token
   if (visible || !Notification.isSupported()) return
-  notify(rt, { title: 'Nachricht nicht gesendet', body: rt.lastRooms.get(token)?.name ?? 'Unterhaltung' }, token)
+  const room = rt.session.rooms().find((r) => r.token === token)
+  notify(rt, { title: 'Nachricht nicht gesendet', body: room?.name ?? 'Unterhaltung' }, token)
 }
 
 // --- Calls: media engine bridge (core in this process, WebRTC in the renderer) -----
@@ -927,16 +1024,16 @@ function startRingAttention(rt: Runtime, c: CallView): void {
   if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true)
   // macOS: system.ts shows the notification with Annehmen/Ablehnen buttons.
   if (process.platform === 'darwin' || !Notification.isSupported()) return
-  ringNotification?.close()
+  if (ringNotification) dismiss(ringNotification)
   const line = accountLine(rt)
   const title = c.isGroup ? `Gruppenanruf · ${c.roomName}` : c.roomName
-  const n = new Notification({
+  const n = hold(new Notification({
     title: line ? `${title} – ${line}` : title,
     body: c.isGroup && c.callerName ? `${c.callerName} ruft an` : 'Eingehender Anruf',
     silent: true,
     urgency: 'critical',
     timeoutType: 'never',
-  })
+  }))
   // The bar in the window answers; the chat opens only where no call blocks the switch.
   n.on('click', () => {
     showWindow()
@@ -965,7 +1062,7 @@ function notifyRecordings(rt: Runtime, items: RecordingNotice[]): void {
 
 function stopRingAttention(): void {
   if (win && !win.isDestroyed()) win.flashFrame(false)
-  ringNotification?.close()
+  if (ringNotification) dismiss(ringNotification)
   ringNotification = null
 }
 
@@ -1072,14 +1169,16 @@ async function stagePath(rt: Runtime, source: string, name: string, mime: string
 // --- Tray (Linux/Windows; macOS keeps the dock) -------------------------------------
 
 let tray: Tray | null = null
+/** Chats with something new over all accounts, as tray and taskbar show it. */
+let unread = 0
 
 /**
- * Monochrome glyph (the @2x file next to it is picked up for HiDPI). Windows says whether
- * the taskbar is dark; Linux does not, and GNOME, KDE and Ubuntu panels mostly are.
+ * Monochrome glyph, with a dot while something is unread. Windows says whether the taskbar
+ * is dark; Linux does not, and GNOME, KDE and Ubuntu panels mostly are.
  */
 function trayIcon(): string {
   const darkPanel = process.platform === 'win32' ? nativeTheme.shouldUseDarkColorsForSystemIntegratedUI : true
-  return darkPanel ? trayOnDark : trayOnLight
+  return resource(`tray-on-${darkPanel ? 'dark' : 'light'}${unread > 0 ? '-dot' : ''}.png`)
 }
 
 function createTray(): void {
@@ -1090,10 +1189,42 @@ function createTray(): void {
     console.warn('no tray:', (err as Error).message)
     return
   }
-  tray.setToolTip('Wolkenfunk')
+  tray.setToolTip(trayToolTip())
   tray.on('click', showWindow)
   updateTrayMenu()
   nativeTheme.on('updated', () => tray?.setImage(trayIcon()))
+}
+
+function trayToolTip(): string {
+  return unread > 0 ? 'Wolkenfunk, neue Nachrichten' : 'Wolkenfunk'
+}
+
+/**
+ * The sum of `badge().chats` (docs/notifications.md „Desktop“): the tray picture changes
+ * only between „nothing“ and „something“, the Windows counter with the number.
+ */
+function showUnread(total: number): void {
+  const before = unread
+  unread = total
+  if (total === before) return
+  if ((total > 0) !== (before > 0)) {
+    tray?.setImage(trayIcon())
+    tray?.setToolTip(trayToolTip())
+    // macOS: the menu bar icon.
+    unreadChanged(total > 0)
+  }
+  showTaskbarCount()
+}
+
+/** Windows: the number of chats with something new on the taskbar button, „9+“ above nine. */
+function showTaskbarCount(): void {
+  if (process.platform !== 'win32' || !win || win.isDestroyed()) return
+  if (unread <= 0) {
+    win.setOverlayIcon(null, '')
+    return
+  }
+  const image = nativeImage.createFromPath(resource(`tray-count-${unread > 9 ? 'more' : unread}.png`))
+  win.setOverlayIcon(image, unread === 1 ? '1 Chat mit Neuem' : `${unread} Chats mit Neuem`)
 }
 
 function updateTrayMenu(): void {
@@ -1112,6 +1243,19 @@ function updateTrayMenu(): void {
       { label: 'Beenden', click: () => app.quit() },
     ]),
   )
+}
+
+/**
+ * „Beim Anmelden starten“: the setting is ours, the entry is the system's. Under Linux it is
+ * written again at every start, so it follows an AppImage that was moved or replaced.
+ */
+function applyOpenAtLogin(): void {
+  if (!autostartAvailable()) return
+  try {
+    setAutostart(settings.openAtLogin)
+  } catch (err) {
+    console.warn('autostart entry failed:', (err as Error).message)
+  }
 }
 
 /** Tray check mark and the switch in „Allgemein“ are the same setting. */
@@ -1151,6 +1295,9 @@ function openSettings(): void {
 
 // --- Window ------------------------------------------------------------------------
 
+/** Only the first window of a run that the system started at login stays hidden. */
+let startHidden = false
+
 function showWindow(): void {
   // macOS keeps running without a window: a notification click or a second launch reopens it.
   if (!win) return createWindow()
@@ -1181,7 +1328,11 @@ function createWindow(): void {
       backgroundThrottling: false,
     },
   })
-  win.once('ready-to-show', () => win?.show())
+  // Started at login: the app waits in the tray (macOS: in the dock) until it is opened.
+  const hidden = startHidden
+  startHidden = false
+  if (!hidden) win.once('ready-to-show', () => win?.show())
+  win.on('show', showTaskbarCount)
   win.on('focus', () => win?.flashFrame(false))
   // However it was entered (call view, green button, F11, menu): the call view shows it.
   win.on('enter-full-screen', () => send({ type: 'windowFullscreen', on: true } satisfies AppEvent))
@@ -1270,6 +1421,7 @@ function registerIpc(): void {
   handle('talk:cachedChat', (r, token: string) => need(r).session.cachedChat(token))
   handle('talk:openChat', (r, token: string) => {
     need(r).openToken = token
+    closeNotices(r!, [token])
     return r!.session.openChat(token)
   })
   handle('talk:closeChat', (r, token: string) => {
@@ -1393,6 +1545,12 @@ function registerIpc(): void {
   ipcMain.handle('talk:setAppearance', (_e, theme: Theme, accent: string) => setAppearance(theme, accent))
   ipcMain.handle('talk:closeToTray', () => settings.closeToTray)
   ipcMain.handle('talk:setCloseToTray', (_e, on: boolean) => setCloseToTray(!!on))
+  ipcMain.handle('talk:openAtLogin', () => (autostartAvailable() ? settings.openAtLogin : null))
+  ipcMain.handle('talk:setOpenAtLogin', (_e, on: boolean) => {
+    settings.openAtLogin = !!on
+    saveSettings()
+    applyOpenAtLogin()
+  })
   ipcMain.handle('talk:appInfo', () => ({
     version: app.getVersion(),
     core: core.coreVersion(),
@@ -1567,6 +1725,7 @@ async function quitAfterOutbox(): Promise<void> {
   if (quitting) return
   quitting = true
   finishRecording()
+  closeAllNotifications()
   const all = [...runtimes.values()]
   if (callOwner && callActive()) {
     // Leave the call properly instead of letting the server time us out.
@@ -1708,6 +1867,9 @@ if (!app.requestSingleInstanceLock()) {
     if (dev.length) startDevAccounts(dev)
     else startStoredAccounts()
     installAutoUpdate()
+    if (process.platform === 'linux' && settings.openAtLogin) applyOpenAtLogin()
+    // Without a tray nothing would bring a hidden window back.
+    startHidden = startedAtLogin() && (process.platform === 'darwin' || tray !== null)
     createWindow()
     nativeTheme.on('updated', () => avatarCache.clear())
     if (process.platform !== 'darwin') {
