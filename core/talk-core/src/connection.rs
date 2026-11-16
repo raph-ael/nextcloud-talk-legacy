@@ -1,24 +1,35 @@
 //! What the server connection looks like to the user (docs/connection.md).
 //!
 //! One failed request is no outage: the state goes to `connecting`, the core retries at
-//! once, and only when the retries fail as well it says `offline`.
+//! once, and only when the retries keep failing it says `offline`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use crate::engine::{Engine, Event};
 use crate::error::Error;
 
-/// First retry after a failed request, then twice as long each time.
-const RETRY_FIRST: Duration = Duration::from_millis(500);
-/// ... but no longer than this, until the server answers.
+/// Retries after a failed request. The first one comes at once: a connection that died
+/// while the app slept is replaced before the platform shows anything (500 ms).
+const RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(100),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+/// ... and then at this pace, until the server answers.
 const RETRY_MAX: Duration = Duration::from_secs(5);
-/// So many failed retries make an outage (3.5 s when requests fail at once, long enough
-/// for a change of network) ...
-const OFFLINE_AFTER_RETRIES: u32 = 3;
+/// A retry that hangs is given up after this long.
+const RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+/// A retry failing this long after the first failure makes an outage (3.6 s when requests
+/// fail at once, long enough for a change of network) ...
+const OFFLINE_AFTER_FAILING: Duration = Duration::from_secs(3);
 /// ... or this long without an answer (requests that hang instead of failing).
 const OFFLINE_AFTER: Duration = Duration::from_secs(8);
+/// The same when the platform said there is no network: nothing can answer.
+const OFFLINE_AFTER_LOST: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,7 +48,8 @@ pub(crate) struct Conn {
     failing: bool,
     /// Counts outages, so the timer of an earlier one changes nothing.
     outage: u64,
-    failed_retries: u32,
+    /// When the first call of this outage failed.
+    since: Option<Instant>,
     /// The retry task is running.
     retrying: bool,
     /// The session was shut down: no more retries.
@@ -46,7 +58,7 @@ pub(crate) struct Conn {
 
 impl Default for Conn {
     fn default() -> Self {
-        Self { state: ConnectionState::Connecting, failing: false, outage: 0, failed_retries: 0, retrying: false, stopped: false }
+        Self { state: ConnectionState::Connecting, failing: false, outage: 0, since: None, retrying: false, stopped: false }
     }
 }
 
@@ -64,7 +76,7 @@ impl Engine {
         {
             let mut c = self.conn.lock().unwrap();
             c.failing = false;
-            c.failed_retries = 0;
+            c.since = None;
             if c.state == ConnectionState::Online {
                 return;
             }
@@ -76,13 +88,24 @@ impl Engine {
     /// A server call got no answer: `connecting`, and retry soon instead of waiting for
     /// the next regular refresh.
     pub(crate) fn unreachable(&self) {
+        self.failing(OFFLINE_AFTER);
+    }
+
+    /// The platform has no network at all: `connecting` now instead of after a request
+    /// that hangs until its timeout (a socket of a network that went away does not always
+    /// fail). Calls and the outbox notice it themselves.
+    pub fn network_lost(&self) {
+        self.failing(OFFLINE_AFTER_LOST);
+    }
+
+    fn failing(&self, deadline: Duration) {
         let outage = {
             let mut c = self.conn.lock().unwrap();
             if c.failing {
                 return;
             }
             c.failing = true;
-            c.failed_retries = 0;
+            c.since = Some(Instant::now());
             c.outage += 1;
             if c.state == ConnectionState::Online {
                 c.state = ConnectionState::Connecting;
@@ -97,7 +120,7 @@ impl Engine {
         };
         let weak = self.weak_self();
         rt.spawn(async move {
-            tokio::time::sleep(OFFLINE_AFTER).await;
+            tokio::time::sleep(deadline).await;
             if let Some(engine) = weak.upgrade() {
                 engine.set_offline(outage);
             }
@@ -105,11 +128,15 @@ impl Engine {
         self.spawn_retries(false);
     }
 
-    /// The platform saw the network come back or change: retry now. While `offline` the
-    /// state stays as it is until a call is answered, so it does not flicker.
+    /// The platform saw the network come back or change, or the app came to the front:
+    /// retry now. While `offline` the state stays as it is until a call is answered, so it
+    /// does not flicker. Without a failure the list is fetched all the same: it is what the
+    /// user looks at next, and a connection that died meanwhile shows now, not in ten seconds.
     pub(crate) fn retry_now(&self) {
         if self.conn.lock().unwrap().failing {
             self.spawn_retries(true);
+        } else {
+            self.spawn_rooms_refresh();
         }
     }
 
@@ -155,7 +182,7 @@ impl Engine {
         });
     }
 
-    /// Fetches the room list after 0.5 s, 1 s, 2 s, 4 s and then every 5 s until the
+    /// Fetches the room list after 0.1 s, 0.5 s, 1 s, 2 s, 4 s and then every 5 s until the
     /// server answers.
     fn spawn_retries(&self, now: bool) {
         let Some(rt) = self.handle() else { return };
@@ -176,12 +203,14 @@ impl Engine {
         let weak = self.weak_self();
         let wake = self.retry_wake.clone();
         rt.spawn(async move {
-            let mut delay = if now { Duration::ZERO } else { RETRY_FIRST };
+            let mut step = 0;
+            let mut at_once = now;
             loop {
-                let woken = tokio::select! {
-                    _ = tokio::time::sleep(delay) => false,
-                    _ = wake.notified() => true,
-                };
+                let delay = if at_once { Duration::ZERO } else { RETRY_DELAYS.get(step).copied().unwrap_or(RETRY_MAX) };
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = wake.notified() => {}
+                }
                 let Some(engine) = weak.upgrade() else { return };
                 let outage = {
                     let c = engine.conn.lock().unwrap();
@@ -189,14 +218,22 @@ impl Engine {
                 };
                 // Another call got through meanwhile (or the session ended).
                 let Some(outage) = outage else { break };
-                if woken {
-                    delay = Duration::ZERO;
+                let answered = tokio::select! {
+                    r = tokio::time::timeout(RETRY_TIMEOUT, engine.refresh_rooms(false)) => {
+                        matches!(r, Ok(Ok(()) | Err(Error::Unauthorized)))
+                    }
+                    // The network is back: do not wait for a request that hangs on the old one.
+                    _ = wake.notified() => {
+                        at_once = true;
+                        continue;
+                    }
+                };
+                if answered {
+                    break;
                 }
-                match engine.refresh_rooms(false).await {
-                    Ok(()) | Err(Error::Unauthorized) => break,
-                    Err(_) => engine.retry_failed(outage),
-                }
-                delay = if delay.is_zero() { RETRY_FIRST } else { (delay * 2).min(RETRY_MAX) };
+                engine.retry_failed(outage);
+                step = if at_once { 1 } else { step + 1 };
+                at_once = false;
             }
             if let Some(engine) = weak.upgrade() {
                 engine.conn.lock().unwrap().retrying = false;
@@ -206,12 +243,11 @@ impl Engine {
 
     fn retry_failed(&self, outage: u64) {
         let offline = {
-            let mut c = self.conn.lock().unwrap();
+            let c = self.conn.lock().unwrap();
             if !c.failing || c.outage != outage {
                 return;
             }
-            c.failed_retries += 1;
-            c.failed_retries >= OFFLINE_AFTER_RETRIES
+            c.since.is_some_and(|t| t.elapsed() >= OFFLINE_AFTER_FAILING)
         };
         if offline {
             self.set_offline(outage);

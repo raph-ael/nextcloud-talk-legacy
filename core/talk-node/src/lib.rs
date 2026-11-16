@@ -723,10 +723,17 @@ impl TalkSession {
         Ok(())
     }
 
-    /// Call when connectivity changes: waiting items are retried at once.
+    /// Call when connectivity returns or changes and when the window gets the focus:
+    /// waiting items are retried at once, the chat list is fetched.
     #[napi]
     pub fn network_changed(&self) {
         self.engine.network_changed();
+    }
+
+    /// Call when the device has no network at all (docs/connection.md).
+    #[napi]
+    pub fn network_lost(&self) {
+        self.engine.network_lost();
     }
 
     /// "online" | "connecting" | "offline" right now (the event only reports changes).

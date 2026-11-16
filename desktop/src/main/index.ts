@@ -121,6 +121,7 @@ interface NativeSession {
   retrySend(referenceId: string): void
   discard(referenceId: string): void
   networkChanged(): void
+  networkLost(): void
   connectionState(): ConnectionState
   outboxUnsent(): number
   waitOutboxIdle(): Promise<{ waiting: number; failed: number }>

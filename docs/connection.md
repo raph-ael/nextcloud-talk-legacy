@@ -16,21 +16,24 @@ Eine Sitzung beginnt als `connecting`. Dafür kommt kein Ereignis: Die Plattform
 
 ### Wie der Kern wechselt
 - **Ein Abruf bekommt keine Antwort** (kein Netz, Zeitüberschreitung, DNS, TLS): `online` wird zu `connecting`.
-  - Der Kern holt die Chatliste nach 0,5 s neu, danach nach 1 s, 2 s und 4 s, dann alle 5 s, bis der Server antwortet.
-  - Schlagen drei Neuversuche fehl oder sind 8 s ohne Antwort vergangen, wird daraus `offline`. Ohne Netz sind das etwa 3,5 s.
+  - Der Kern holt die Chatliste nach 0,1 s neu, danach nach 0,5 s, 1 s, 2 s und 4 s, dann alle 5 s, bis der Server antwortet. Der erste Neuversuch kommt so früh, damit eine Verbindung, die im Hintergrund gestorben ist, ersetzt ist, bevor die Anzeige erscheint.
+  - Scheitert ein Neuversuch später als 3 s nach dem ersten Fehler oder sind 8 s ohne Antwort vergangen, wird daraus `offline`. Ohne Netz sind das etwa 3,6 s.
 - **Ein Abruf wird beantwortet:** `online`, aus jedem Zustand.
 - **`networkChanged()`** löst sofort einen Neuversuch aus. Aus `offline` wird dabei nicht erst `connecting`: Der Zustand bleibt stehen, bis eine Antwort kommt. So flackert die Anzeige nicht, wenn das Gerät ein Netz meldet, das den Server nicht erreicht.
+  - Ist gerade nichts gescheitert, holt der Kern die Chatliste trotzdem sofort. Die Plattform braucht dafür keinen eigenen Abruf.
+- **`networkLost()`** heißt: Das Gerät hat gar kein Netz. Der Kern meldet sofort `connecting` und versucht es wie nach einem gescheiterten Abruf. Antwortet 3 s lang nichts, wird daraus `offline`. Ohne diesen Aufruf fällt der Ausfall erst auf, wenn ein Abruf scheitert, und das kann auf einer alten Verbindung bis zu 30 s dauern.
 - Eine Fehlerantwort des Servers (500, Wartung) ändert den Zustand nicht. Ausnahme ist der Start: Liefert er nur Fehler, zählt das wie „keine Antwort“.
 - Beim Start trägt der Kern erst die Chatliste ein (`roomsChanged`) und meldet dann `online`. Kommt in den ersten 8 s gar keine Antwort, meldet er `offline`.
 
 ### Was die Plattform beisteuert
-- `networkChanged()` bei jedem Netzwechsel und immer, wenn die App in den Vordergrund kommt. Nach dem Aufwachen sind offene Verbindungen oft tot; der erste Abruf scheitert dann, und der Neuversuch soll sofort laufen.
+- `networkChanged()` bei jedem Netzwechsel und immer, wenn die App in den Vordergrund kommt. Nach dem Aufwachen sind offene Verbindungen oft tot; der Abruf zeigt das sofort, und der Neuversuch läuft, bevor jemand etwas sieht.
+- `networkLost()`, wenn das System meldet, dass kein Netz mehr da ist (Flugmodus, WLAN aus ohne Mobilfunk). Nicht bei einem Wechsel von einem Netz ins andere. Der Aufruf fasst Anrufe und Postausgang nicht an.
 - Den Zustand je Konto merken. Beim Kontowechsel zeigt die Anzeige den Zustand des neuen Kontos.
 
 ## Anzeige
 
 ### Chatliste
-- `connecting`: ein Ladekreis neben dem Titel „Chats“.
+- `connecting`: ein Ladekreis neben dem Titel „Chats“. Hat die Plattform einen großen Titel mit eigener Zeile darunter (iOS 26), steht er dort.
 - `offline`: Ladekreis und daneben „Keine Verbindung“ in der gedämpften Textfarbe, als zweite Zeile unter dem Titel oder an der Stelle, die die Kopfzeile der Plattform dafür hat.
 
 ### Chat

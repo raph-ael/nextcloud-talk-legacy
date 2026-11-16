@@ -1195,9 +1195,16 @@ impl TalkSession {
         self.engine.discard(&reference_id);
     }
 
-    /// Call when connectivity returns or changes: waiting messages are retried at once.
+    /// Call when connectivity returns or changes and when the app comes to the front:
+    /// waiting messages are retried at once, the chat list is fetched.
     pub fn network_changed(&self) {
         self.engine.network_changed();
+    }
+
+    /// Call when the device has no network at all (docs/connection.md): the state turns
+    /// `connecting` now, not after a request that hangs.
+    pub fn network_lost(&self) {
+        self.engine.network_lost();
     }
 
     /// The connection state right now (the event only reports changes).

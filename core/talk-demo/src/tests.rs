@@ -550,15 +550,47 @@ async fn a_single_failure_is_no_outage() {
     assert!(engine.refresh_rooms(false).await.is_err());
     assert_eq!(engine.connection_state(), Connecting);
     server.start().await;
-    // The retry after half a second, not the regular refresh after ten.
+    // The retry at once, not the regular refresh after ten seconds.
     let since = std::time::Instant::now();
     until("online again", || engine.connection_state() == Online).await;
-    assert!(since.elapsed() < Duration::from_secs(3), "took {:?}", since.elapsed());
+    assert!(since.elapsed() < Duration::from_secs(1), "took {:?}", since.elapsed());
     assert_eq!(connections(&sink), [Online, Connecting, Online]);
     engine.shutdown();
 }
 
-/// The server stays away: `offline` after three failed retries, a message written meanwhile
+/// The platform says there is no network: `connecting` without waiting for a request to
+/// fail, `offline` when nothing answers, and no outage when the server answers after all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_platform_reports_no_network() {
+    use ConnectionState::*;
+    let mut server = Outage::server().await;
+    let (engine, sink) = server.engine();
+    engine.start().await.unwrap();
+
+    // A false alarm: the first retry is answered before the platform would show anything.
+    engine.network_lost();
+    assert_eq!(engine.connection_state(), Connecting);
+    let since = std::time::Instant::now();
+    until("online again", || engine.connection_state() == Online).await;
+    assert!(since.elapsed() < Duration::from_millis(500), "took {:?}", since.elapsed());
+
+    server.stop().await;
+    engine.network_lost();
+    assert_eq!(engine.connection_state(), Connecting);
+    let since = std::time::Instant::now();
+    until("offline", || engine.connection_state() == Offline).await;
+    assert!(since.elapsed() > Duration::from_secs(2), "took {:?}", since.elapsed());
+    assert!(since.elapsed() < Duration::from_secs(5), "took {:?}", since.elapsed());
+    engine.network_lost();
+    assert_eq!(connections(&sink), [Online, Connecting, Online, Connecting, Offline]);
+
+    server.start().await;
+    engine.network_changed();
+    until("online", || engine.connection_state() == Online).await;
+    engine.shutdown();
+}
+
+/// The server stays away: `offline` when the retries keep failing, a message written meanwhile
 /// waits, and both recover when the platform reports the network.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_outage_and_its_end() {
@@ -570,7 +602,7 @@ async fn an_outage_and_its_end() {
     assert!(engine.refresh_rooms(false).await.is_err());
     let since = std::time::Instant::now();
     until("offline", || engine.connection_state() == Offline).await;
-    // Long enough for a change of network (retries after 0.5 s, 1.5 s and 3.5 s).
+    // Long enough for a change of network (retries after 0.1 s, 0.6 s, 1.6 s and 3.6 s).
     assert!(since.elapsed() > Duration::from_secs(3), "took {:?}", since.elapsed());
     assert_eq!(connections(&sink), [Online, Connecting, Offline]);
 
