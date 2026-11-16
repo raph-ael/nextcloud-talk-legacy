@@ -99,6 +99,52 @@ Nur wenn genau dieser Chat im aktiven Konto offen und die App im Vordergrund ist
 
 Wechselt ins Konto und öffnet den Chat (`docs/accounts.md`). Während eines Anrufs in einem anderen Konto bleibt es beim Toast „Während eines Anrufs nicht möglich“.
 
+### Die Nachricht ist dann schon da
+
+Wer einer Benachrichtigung folgt, sieht die Nachricht im ersten Bild des Chats. Dafür holt der Kern die Nachrichten, sobald etwas gemeldet wird, und nicht erst beim Öffnen.
+
+Aus dem Push allein geht das nicht: Er trägt nur den gekürzten Text und den Chat, keine Nachrichten-ID, keine Zeit, keinen Anhang. Der Push ist der Auslöser, die Nachricht kommt vom Server.
+
+| Auslöser | Was der Kern tut |
+|---|---|
+| `session.handlePush(…)` mit einem Chat-Push (Nachricht, Reaktion, Erwähnung) | Holt die neuen Nachrichten dieses Chats in den Zwischenspeicher. Der Aufruf kehrt zurück, wenn sie dort liegen, spätestens nach 8 s. |
+| Eine neue `messageNotices`-Meldung | Holt die gemeldeten Chats im Hintergrund nach, höchstens fünf je Abruf der Chatliste. |
+| `networkChanged()` nach einer Pause | Die Abfragen der offenen Chats beginnen neu, auf frischen Verbindungen (`docs/connection.md`). |
+
+- Ein offener Chat bekommt die Nachricht über seine laufende Abfrage als `messagesAdded`. Für ihn holt der Kern nichts doppelt. `handlePush` wartet dann, bis die Abfrage etwas gebracht hat, höchstens 3 s.
+- Ein geschlossener Chat bekommt kein Ereignis. Die Nachricht steht in `cachedChat(token)`, das die Plattform beim Öffnen ohnehin zuerst zeigt.
+- Geholt wird immer lückenlos ab dem gespeicherten Stand, ohne Zwischenspeicher die neueste Seite. Einzelne Nachrichten aus dem Push oder aus der Chatliste trägt niemand ein.
+- Öffnet jemand den Chat, während das Nachholen läuft, wartet `openChat` auf diesen einen Abruf.
+- Fehler bleiben still. Das Öffnen fragt den Server ohnehin noch einmal.
+
+**Was die Plattform beisteuert:**
+
+| Plattform | Aufgabe |
+|---|---|
+| Android | Im Push-Dienst zuerst die Benachrichtigung zeigen, dann `handlePush` für den Chat-Push aufrufen und im Zeitfenster des Pushs darauf warten. |
+| iOS | Der Nachrichten-Push trägt zusätzlich `content-available`. Weckt iOS die App damit im Hintergrund, ruft sie `handlePush` auf und hält die Hintergrundzeit, bis der Aufruf zurückkehrt. Die Erweiterung zeigt die Benachrichtigung wie bisher. |
+| Desktop | nichts, der Kern holt nach der Meldung selbst nach |
+
+**War der Chat schon offen,** als die App in den Hintergrund ging, verhält sich das Antippen wie ein neues Öffnen: Die Ansicht steht danach an der Ungelesen-Linie, ohne ungelesene Nachrichten am Ende. Sonst liegt die neue Nachricht unter dem Rand, wenn der Chat vorher nicht am Ende stand.
+
+**Grenzen:**
+- iOS entscheidet selbst, ob es die App weckt: nicht, wenn sie aus der Übersicht gewischt wurde, und bei vielen Pushes gedrosselt. Dann fehlt die Nachricht im ersten Bild und kommt nach einem Abruf auf frischer Verbindung.
+- Tippt jemand schneller, als der Abruf dauert, gilt dasselbe.
+- Ohne Netz beim Push bleibt es beim alten Stand.
+
+**Gemessen vor der Änderung** (0.6.0, Zeit vom Antippen bis die Nachricht zu sehen ist; der Chat selbst steht nach etwa 0,6 s):
+
+| Fall | Android (Galaxy A13) | iOS (Simulator) |
+|---|---|---|
+| Chat war offen, 1 min im Hintergrund | 0,7 s, im ersten Bild | 0,2 s |
+| Chat war offen, Gerät im Stromsparmodus (ab etwa 2 min) | zufällig 0 bis 30 s, gemessen 1,1 s und 18,9 s | nicht nachstellbar |
+| Chatliste oder anderer Chat war offen | 0,6 bis 0,7 s, bis zu 0,15 s nach dem ersten Bild | 0,2 bis 0,8 s |
+| App beendet | 0,7 bis 0,9 s, bis zu 0,35 s nach dem ersten Bild | 3,3 s, etwa 1 s nach dem ersten Bild |
+
+- Die 0 bis 30 s waren die Pause der Chat-Abfrage: Im Stromsparmodus scheitert sie sofort und versuchte es dann nur noch alle 30 s. Nichts weckte sie, auch das Antippen nicht.
+- Der Simulator hält die App im Hintergrund nicht an. Seine Werte für „Chat war offen“ sagen deshalb nichts über ein echtes iPhone.
+- Eine Verbindung, die im echten Geräteschlaf still stirbt, ließ sich in beiden Aufbauten nicht nachstellen.
+
 ## Aktionen (Android, iOS)
 
 | Aktion | Wirkung |
@@ -168,6 +214,7 @@ Neue Aufrufe:
 Geändert:
 
 - Bei jedem vollständigen Abruf der Chatliste liest der Kern den eigenen Status mit („Nicht stören“).
+- `handlePush` holt bei einem Chat-Push die Nachrichten des Chats (Abschnitt „Antippen“). Bisher tat der Aufruf dafür nichts.
 - Meldet notify_push eine neue Benachrichtigung, lädt der Kern die Chatliste sofort nach. `roomsChanged` und `messageNotices` kommen damit nach etwa einer Sekunde statt nach bis zu zehn.
 - `callMissed` kommt auch für Anrufe, die bei nicht laufender App verpasst wurden.
 - Die eigene Kopie der Regel am Desktop (`notifyNewMessages`, `wantsNotification`) entfällt.

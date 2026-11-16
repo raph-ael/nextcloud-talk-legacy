@@ -225,6 +225,10 @@ impl Engine {
                 let Some(outage) = outage else { break };
                 let answered = tokio::select! {
                     r = tokio::time::timeout(RETRY_TIMEOUT, engine.refresh_rooms(false)) => {
+                        if r.is_err() {
+                            // It hung: the kept connection is dead without saying so.
+                            engine.client.fresh_connections();
+                        }
                         matches!(r, Ok(Ok(()) | Err(Error::Unauthorized)))
                     }
                     // The network is back: do not wait for a request that hangs on the old one.

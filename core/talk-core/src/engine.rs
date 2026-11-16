@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
@@ -38,6 +38,16 @@ const ROOMS_FULL_INTERVAL: Duration = Duration::from_secs(60);
 /// notify_push announced something: wait this long, then fetch what changed.
 const NOTIFY_REFRESH_DELAY: Duration = Duration::from_millis(300);
 const POLL_TIMEOUT_S: u32 = 30;
+/// No answer from the server for this long (wall clock: the app may have slept): the kept
+/// connections are suspect. While the app runs, the room list alone answers every 10 s.
+const STALE_AFTER: Duration = Duration::from_secs(20);
+/// Fetching a chat ahead of the user opening it gives up after this long (a push leaves
+/// the app about ten seconds).
+const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(8);
+/// At most this many chats are fetched ahead for one look at the room list.
+const CATCH_UP_MAX: usize = 5;
+/// How long a push waits for the poll of an open chat to bring what it announced.
+const OPEN_CHAT_WAIT: Duration = Duration::from_secs(3);
 const PAGE_SIZE: u32 = 50;
 /// Messages per delta request (the server's limit for `lookIntoFuture`).
 const DELTA_PAGE: usize = 100;
@@ -300,9 +310,18 @@ struct State {
     rooms: HashMap<String, Room>,
     modified_before: Option<i64>,
     last_full: Option<Instant>,
-    chats: HashMap<String, JoinHandle<()>>,
+    chats: HashMap<String, ChatPoll>,
     rooms_task: Option<JoinHandle<()>>,
     notify_task: Option<JoinHandle<()>>,
+}
+
+/// The live poll of an open chat.
+struct ChatPoll {
+    task: JoinHandle<()>,
+    /// The newest message id the poll has handed on: where a restart continues.
+    last: Arc<AtomicI64>,
+    /// The same, set once the messages are in the cache and announced.
+    shown: Arc<AtomicI64>,
 }
 
 pub struct Engine {
@@ -318,6 +337,14 @@ pub struct Engine {
     pub(crate) conn_told: Mutex<ConnectionState>,
     /// Cuts the wait before the next retry short (network changed).
     pub(crate) retry_wake: Arc<tokio::sync::Notify>,
+    /// When the server answered last, by the wall clock (it keeps running while the app
+    /// sleeps, unlike `Instant`).
+    answered: Mutex<Option<SystemTime>>,
+    /// Ends the pause of a chat poll that failed (the network is back).
+    poll_wake: Arc<tokio::sync::Notify>,
+    /// One sync per chat at a time: opening a chat waits for a fetch that is under way
+    /// instead of asking for the same messages again.
+    sync_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     state: Mutex<State>,
     attachment_folder: RwLock<Option<String>>,
     /// Which permission bit allows reactions on this server.
@@ -375,6 +402,9 @@ impl Engine {
             conn: Mutex::default(),
             conn_told: Mutex::new(ConnectionState::Connecting),
             retry_wake: Arc::default(),
+            answered: Mutex::new(None),
+            poll_wake: Arc::default(),
+            sync_locks: Mutex::default(),
             state: Mutex::new(state),
             attachment_folder: RwLock::new(cache.meta("attachment_folder")),
             react_bit: AtomicI64::new(
@@ -708,8 +738,8 @@ impl Engine {
         if let Some(t) = st.notify_task.take() {
             t.abort();
         }
-        for (_, t) in st.chats.drain() {
-            t.abort();
+        for (_, poll) in st.chats.drain() {
+            poll.task.abort();
         }
     }
 
@@ -827,10 +857,38 @@ impl Engine {
             })
             .collect();
         let since_start = scan.since_start;
+        // What gets announced gets fetched: the chat shows the message when the user
+        // follows the notification. Only where the cache is behind the room list.
+        let behind: Vec<String> = scan
+            .notify
+            .iter()
+            .filter_map(|token| rooms.iter().find(|r| r.token == *token))
+            .filter(|r| {
+                let newest = r.last_message.as_ref().map_or(0, |m| m.id);
+                self.cache.range(&r.token).is_none_or(|range| range.newest_id < newest)
+            })
+            .map(|r| r.token.clone())
+            .take(CATCH_UP_MAX)
+            .collect();
         self.after_scan(scan);
         if !items.is_empty() {
             self.sink.emit(Event::MessageNotices { items, since_start });
         }
+        self.spawn_catch_up(behind);
+    }
+
+    fn spawn_catch_up(&self, tokens: Vec<String>) {
+        if tokens.is_empty() || !self.cache.enabled() {
+            return;
+        }
+        let Some(rt) = self.runtime.get().cloned().or_else(|| tokio::runtime::Handle::try_current().ok()) else { return };
+        let weak = self.weak_self();
+        rt.spawn(async move {
+            for token in tokens {
+                let Some(engine) = weak.upgrade() else { return };
+                engine.catch_up(&token).await;
+            }
+        });
     }
 
     /// A conversation changed here (read, sent, archived): its notification may be
@@ -911,6 +969,8 @@ impl Engine {
     /// Offline, the error is returned but live updates still start from the cached state,
     /// so the chat catches up once the server is reachable.
     pub async fn open_chat(self: &Arc<Self>, token: &str) -> Result<ChatPage> {
+        // Opened right after a pause (from a notification): not on a dead connection.
+        self.revive();
         let synced = if self.cache.enabled() {
             self.sync_chat(token).await
         } else {
@@ -936,18 +996,123 @@ impl Engine {
     }
 
     fn start_poll(self: &Arc<Self>, token: &str, newest: i64) {
-        let weak = Arc::downgrade(self);
-        let tok = token.to_string();
-        let task = tokio::spawn(async move { poll_loop(weak, tok, newest).await });
-        if let Some(old) = self.state.lock().unwrap().chats.insert(token.to_string(), task) {
-            old.abort();
+        // Under the lock: the poll finds itself in the map when its first answer comes.
+        let mut st = self.state.lock().unwrap();
+        if let Some(old) = st.chats.insert(token.to_string(), self.spawn_poll(token, newest)) {
+            old.task.abort();
         }
     }
 
-    pub fn close_chat(&self, token: &str) {
-        if let Some(t) = self.state.lock().unwrap().chats.remove(token) {
-            t.abort();
+    fn spawn_poll(self: &Arc<Self>, token: &str, newest: i64) -> ChatPoll {
+        let weak = Arc::downgrade(self);
+        let tok = token.to_string();
+        let last = Arc::new(AtomicI64::new(newest));
+        let shown = Arc::new(AtomicI64::new(newest));
+        let (seen, done) = (last.clone(), shown.clone());
+        let task = tokio::spawn(async move { poll_loop(weak, tok, seen, done).await });
+        ChatPoll { task, last, shown }
+    }
+
+    /// Whether this poll is still the one of its chat, and if so, how far it has come. A
+    /// poll that was replaced while its answer arrived hands nothing on: its successor
+    /// asks for the same messages, and they must not show up twice.
+    fn poll_goes_on(&self, token: &str, seen: &Arc<AtomicI64>, last: i64) -> bool {
+        let st = self.state.lock().unwrap();
+        let current = st.chats.get(token).is_some_and(|poll| Arc::ptr_eq(&poll.last, seen));
+        if current {
+            seen.store(last, Ordering::SeqCst);
         }
+        current
+    }
+
+    pub fn close_chat(&self, token: &str) {
+        if let Some(poll) = self.state.lock().unwrap().chats.remove(token) {
+            poll.task.abort();
+        }
+    }
+
+    /// The polls of the open chats start over where they are: a long poll that hangs on a
+    /// dead connection would otherwise wait for its timeout (45 s) before it notices.
+    fn restart_polls(self: &Arc<Self>) {
+        let mut st = self.state.lock().unwrap();
+        for (token, poll) in st.chats.iter_mut() {
+            poll.task.abort();
+            *poll = self.spawn_poll(token, poll.last.load(Ordering::SeqCst));
+        }
+    }
+
+    /// After a pause without any answer (the app slept, the network was gone) the kept
+    /// connections may be dead without anything saying so: new ones from here on, and the
+    /// open chats ask again at once. Does nothing while the server keeps answering.
+    pub(crate) fn revive(self: &Arc<Self>) {
+        {
+            let mut answered = self.answered.lock().unwrap();
+            let now = SystemTime::now();
+            // Never answered: nothing is pooled yet. A clock that went backwards counts as a pause.
+            let stale = answered.is_some_and(|t| now.duration_since(t).map_or(true, |d| d >= STALE_AFTER));
+            if !stale {
+                return;
+            }
+            // Once per pause.
+            *answered = Some(now);
+        }
+        self.client.fresh_connections();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.restart_polls();
+        } else if let Some(rt) = self.runtime.get() {
+            let _in_runtime = rt.enter();
+            self.restart_polls();
+        }
+    }
+
+    /// For tests: as if the server had not answered for a long while (the app slept).
+    #[doc(hidden)]
+    pub fn pretend_paused(&self) {
+        *self.answered.lock().unwrap() = Some(SystemTime::UNIX_EPOCH);
+    }
+
+    /// The network is back or the app returned: a chat poll that pauses after a failure
+    /// tries again now, and after a longer pause everything starts on new connections.
+    pub(crate) fn wake_chats(&self) {
+        if let Some(engine) = self.weak.upgrade() {
+            engine.revive();
+        }
+        self.poll_wake.notify_waiters();
+    }
+
+    /// Something new was announced for this chat (a push, a notice): have it in the cache
+    /// before the user opens the chat, so its first frame shows the message. An open chat
+    /// gets it from its poll. Quiet about failures: opening the chat asks again.
+    ///
+    /// Returns when the message is there or the wait is over: a platform that is only awake
+    /// for the push (iOS in the background) stays awake as long as this runs.
+    pub(crate) async fn catch_up(self: &Arc<Self>, token: &str) {
+        let before = self.poll_seen(token);
+        self.revive();
+        self.poll_wake.notify_waiters();
+        if before.is_some() {
+            // The poll may have brought it already; then this waits for nothing, briefly.
+            let _ = tokio::time::timeout(OPEN_CHAT_WAIT, async {
+                while self.poll_seen(token) == before {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await;
+            return;
+        }
+        if !self.cache.enabled() {
+            return;
+        }
+        let _ = tokio::time::timeout(CATCH_UP_TIMEOUT, self.sync_chat(token)).await;
+    }
+
+    /// The newest message id the poll of an open chat has delivered; `None` for a closed chat.
+    fn poll_seen(&self, token: &str) -> Option<i64> {
+        self.state.lock().unwrap().chats.get(token).map(|poll| poll.shown.load(Ordering::SeqCst))
+    }
+
+    fn sync_lock(&self, token: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.sync_locks.lock().unwrap().entry(token.to_string()).or_default().clone()
     }
 
     /// Whether the chat is being live-polled (its echoes will arrive).
@@ -958,6 +1123,8 @@ impl Engine {
     /// Fetches the delta since the cached state (or the newest page) into the cache and
     /// returns the newest page from it plus the newest message id.
     async fn sync_chat(&self, token: &str) -> Result<(ChatPage, i64)> {
+        let lock = self.sync_lock(token);
+        let _one_at_a_time = lock.lock().await;
         let cached = self.cache.range(token);
         let delta = match cached {
             Some(r) => self.fetch_delta(token, r.newest_id).await?,
@@ -1454,6 +1621,10 @@ impl Engine {
     }
 
     fn track<T>(&self, r: &Result<T>) {
+        // Any answer, an error from the server too, shows that the connection lives.
+        if !matches!(r, Err(Error::Network(_))) {
+            *self.answered.lock().unwrap() = Some(SystemTime::now());
+        }
         match r {
             Ok(_) => self.reached(),
             Err(Error::Unauthorized) => self.sink.emit(Event::AuthFailed),
@@ -1785,12 +1956,16 @@ fn parent_updates(messages: &[ChatMessage]) -> Vec<ChatMessage> {
         .collect()
 }
 
-async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64) {
+/// `seen`: the newest message id handed on, kept outside so a restart continues there.
+/// `shown`: the same once the batch is applied, for whoever waits for the message.
+async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, seen: Arc<AtomicI64>, shown: Arc<AtomicI64>) {
     let mut backoff = Duration::from_secs(1);
     let mut last_read: Option<i64> = None;
+    let mut last = seen.load(Ordering::SeqCst);
     loop {
         let Some(e) = engine.upgrade() else { return };
         let client = e.client.clone();
+        let wake = e.poll_wake.clone();
         drop(e); // don't keep the engine alive across the long poll
         let result = client.poll_messages(&token, last, POLL_TIMEOUT_S).await;
         let Some(e) = engine.upgrade() else { return };
@@ -1799,6 +1974,10 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
                 backoff = Duration::from_secs(1);
                 if let Some(id) = batch.last_given.or(batch.messages.last().map(|m| m.id)) {
                     last = last.max(id);
+                }
+                // No await between here and `apply_live`: a restart never loses or repeats a batch.
+                if !e.poll_goes_on(&token, &seen, last) {
+                    return;
                 }
                 if let Some(r) = batch.last_common_read {
                     if last_read != Some(r) {
@@ -1810,7 +1989,9 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
                         });
                     }
                 }
-                if e.apply_live(&token, batch.messages) {
+                let refresh = e.apply_live(&token, batch.messages);
+                shown.store(last, Ordering::SeqCst);
+                if refresh {
                     let _ = e.refresh_rooms(true).await;
                 }
             }
@@ -1819,7 +2000,10 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
             Err(Error::NotFound) => {
                 let _ = e.refresh_rooms(true).await;
                 if e.state_room(&token).is_none() {
-                    e.state.lock().unwrap().chats.remove(&token);
+                    let mut st = e.state.lock().unwrap();
+                    if st.chats.get(&token).is_some_and(|poll| Arc::ptr_eq(&poll.last, &seen)) {
+                        st.chats.remove(&token);
+                    }
                     return;
                 }
                 drop(e);
@@ -1829,8 +2013,11 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, mut last: i64
             Err(err) => {
                 tracing::warn!(%token, "chat poll failed: {err}");
                 drop(e);
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(30));
+                // The network coming back ends the pause.
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => backoff = (backoff * 2).min(Duration::from_secs(30)),
+                    _ = wake.notified() => backoff = Duration::from_secs(1),
+                }
             }
         }
     }

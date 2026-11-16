@@ -126,24 +126,46 @@ pub struct UserHit {
 
 #[derive(Clone)]
 pub struct TalkClient {
-    http: reqwest::Client,
+    /// Shared by every clone, and swapped for a new one when its pooled connections are
+    /// suspect ([`Self::fresh_connections`]).
+    http: Arc<std::sync::RwLock<reqwest::Client>>,
+    /// Outlives the swap, so the server session stays.
+    cookies: Arc<reqwest::cookie::Jar>,
     /// HTTP/1.1 only, for websocket upgrades.
     ws_http: reqwest::Client,
     account: Account,
+    platform: Platform,
 }
 
 impl TalkClient {
     pub fn new(account: Account, platform: Platform) -> Result<Self> {
-        let http = base_http_builder(platform).cookie_store(true).build()?;
+        let cookies = Arc::new(reqwest::cookie::Jar::default());
+        let http = base_http_builder(platform).cookie_provider(cookies.clone()).build()?;
         let ws_http = ws_http_builder(platform).build()?;
         Ok(Self {
-            http,
+            http: Arc::new(std::sync::RwLock::new(http)),
+            cookies,
             ws_http,
             account: Account {
                 server: account.server.trim_end_matches('/').to_string(),
                 ..account
             },
+            platform,
         })
+    }
+
+    fn http(&self) -> reqwest::Client {
+        self.http.read().unwrap().clone()
+    }
+
+    /// Drops the pooled connections: the next request opens a new one. For the moment
+    /// after a pause (the app slept, the device changed networks), when a kept connection
+    /// may be dead without anything saying so and a request on it hangs until its timeout.
+    /// Requests that are under way keep their connection.
+    pub fn fresh_connections(&self) {
+        if let Ok(http) = base_http_builder(self.platform).cookie_provider(self.cookies.clone()).build() {
+            *self.http.write().unwrap() = http;
+        }
     }
 
     pub fn account(&self) -> &Account {
@@ -151,7 +173,7 @@ impl TalkClient {
     }
 
     fn request(&self, method: Method, path: &str) -> RequestBuilder {
-        self.http
+        self.http()
             .request(method, format!("{}{}", self.account.server, path))
             .basic_auth(&self.account.user, Some(&self.account.app_password))
             .header("OCS-APIRequest", "true")
@@ -629,7 +651,7 @@ impl TalkClient {
     }
 
     fn dav(&self, method: Method, user_id: &str, path: &str) -> RequestBuilder {
-        self.http
+        self.http()
             .request(method, self.dav_url(user_id, path))
             .basic_auth(&self.account.user, Some(&self.account.app_password))
     }
@@ -645,7 +667,7 @@ impl TalkClient {
             url.push('/');
             url.push_str(&encode_segment(i));
         }
-        self.http
+        self.http()
             .request(method, url)
             .basic_auth(&self.account.user, Some(&self.account.app_password))
     }
@@ -1103,7 +1125,7 @@ impl TalkClient {
 
     pub async fn register_at_proxy(&self, proxy: &str, push_token: &str, device: &str, signature: &str, user_key: &str) -> Result<()> {
         let resp = self
-            .http
+            .http()
             .post(format!("{proxy}/devices"))
             .form(&[
                 ("pushToken", push_token),
@@ -1119,7 +1141,7 @@ impl TalkClient {
 
     pub async fn unregister_at_proxy(&self, proxy: &str, device: &str, signature: &str, user_key: &str) -> Result<()> {
         let resp = self
-            .http
+            .http()
             .delete(format!("{proxy}/devices"))
             .form(&[("deviceIdentifier", device), ("deviceIdentifierSignature", signature), ("userPublicKey", user_key)])
             .send()

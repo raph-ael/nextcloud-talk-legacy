@@ -360,8 +360,9 @@ impl crate::Engine {
     }
 
     /// Acts on a decrypted push: a call rings (with `call_id` if the platform already
-    /// reported it, iOS/CallKit), a delete makes a ringing call re-check at once.
-    /// Returns whether a call rings now.
+    /// reported it, iOS/CallKit), a delete makes a ringing call re-check at once, and for
+    /// a message the chat is fetched (the call returns when it is in the cache, after 8 s
+    /// at the latest). Returns whether a call rings now.
     pub async fn handle_push(&self, message: PushMessage, call_id: Option<String>) -> bool {
         match message {
             PushMessage::Call { token, notification_id, subject } => {
@@ -376,6 +377,14 @@ impl crate::Engine {
             }
             PushMessage::Delete { .. } | PushMessage::DeleteAll => {
                 self.calls.recheck_ring();
+                false
+            }
+            // A message or a reaction: fetch the chat now, so it is there when the user
+            // follows the notification (docs/notifications.md, "Nach dem Antippen").
+            PushMessage::Chat { token, .. } => {
+                if let Some(engine) = self.weak_self().upgrade() {
+                    engine.catch_up(&token).await;
+                }
                 false
             }
             _ => false,

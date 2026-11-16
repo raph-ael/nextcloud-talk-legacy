@@ -436,6 +436,8 @@ impl Engine {
 
     /// The platform saw the network come back (or change): retry now.
     pub fn network_changed(&self) {
+        // First: what follows runs on new connections after a pause.
+        self.wake_chats();
         self.outbox.wake();
         self.calls.network_changed();
         self.retry_now();

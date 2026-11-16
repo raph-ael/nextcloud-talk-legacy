@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::Value;
 use talk_core::{
     Account, ChatMessage, ConnectionState, ConversationTag, Engine, Event, EventSink, MessageOp, MessageView, Participant,
-    Platform, Reactions, Room, TalkClient, message_error_text,
+    Platform, PushMessage, Reactions, Room, TalkClient, message_error_text,
 };
 
 use crate::state::State;
@@ -945,4 +945,154 @@ async fn editing_without_the_server() {
     let err = engine.delete_message("lena", own).await.unwrap_err();
     assert_eq!(message_error_text(MessageOp::Delete, &err), "Keine Verbindung – Nachricht nicht gelöscht");
     engine.shutdown();
+}
+
+/// Somebody else writes into a conversation (test hook of the demo server).
+async fn incoming(server: &str, token: &str, text: &str) {
+    let r = reqwest::Client::new().post(format!("{server}/demo/incoming")).form(&[("token", token), ("text", text)]).send().await.unwrap();
+    assert_eq!(r.status(), 201);
+}
+
+/// How often the platform was handed a message with this text as new.
+fn added(sink: &Sink, text: &str) -> usize {
+    let events = sink.0.lock().unwrap();
+    let all = events.iter().filter_map(|e| match e {
+        Event::MessagesAdded { messages, .. } => Some(messages.iter().filter(|m| m.text == text).count()),
+        _ => None,
+    });
+    all.sum()
+}
+
+fn chat_push(token: &str) -> PushMessage {
+    PushMessage::Chat { token: token.into(), notification_id: 1, subject: String::new() }
+}
+
+/// docs/notifications.md „Nach dem Antippen“: the push for a message fetches the chat, so
+/// its first frame shows the message when the user follows the notification.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_fetches_the_chat_ahead() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let texts = |token: &str, text: &str| engine.cached_chat(token).messages.iter().filter(|m| m.text == text).count();
+
+    // A chat that was open before: its cache ends with the last visit.
+    engine.open_chat("garten").await.unwrap();
+    engine.close_chat("garten");
+    incoming(&server, "garten", "Wer gießt morgen?").await;
+    assert_eq!(texts("garten", "Wer gießt morgen?"), 0, "nothing fetches a closed chat by itself");
+    // The app slept meanwhile: the push is the first thing that happens.
+    engine.pretend_paused();
+    engine.handle_push(chat_push("garten"), None).await;
+    assert_eq!(texts("garten", "Wer gießt morgen?"), 1, "the cache has the message when the call returns");
+    // Opening the chat shows it once and announces nothing as new.
+    let page = engine.open_chat("garten").await.unwrap();
+    assert_eq!(page.messages.iter().filter(|m| m.text == "Wer gießt morgen?").count(), 1);
+    assert!(!page.reset);
+    assert_eq!(added(&sink, "Wer gießt morgen?"), 0);
+
+    // The chat is open and the app slept: its poll starts over and brings the message, and
+    // the call returns when it is there. The push adds nothing to it.
+    engine.pretend_paused();
+    incoming(&server, "garten", "Ich kann am Abend.").await;
+    engine.handle_push(chat_push("garten"), None).await;
+    assert_eq!(added(&sink, "Ich kann am Abend."), 1, "the open chat has the message when the call returns");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(added(&sink, "Ich kann am Abend."), 1);
+    engine.close_chat("garten");
+
+    // A change comes the same way: somebody edits their message while the chat is closed.
+    let theirs = engine.cached_chat("garten").messages.iter().find(|m| m.text == "Wer gießt morgen?").unwrap().id;
+    let r = reqwest::Client::new()
+        .post(format!("{server}/demo/edit"))
+        .form(&[("token", "garten"), ("id", &theirs.to_string()), ("text", "Wer gießt übermorgen?")])
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    engine.handle_push(chat_push("garten"), None).await;
+    assert_eq!(engine.cached_chat("garten").messages.iter().find(|m| m.id == theirs).unwrap().text, "Wer gießt übermorgen?");
+
+    // A chat that was never opened has no cache: the push fetches its newest page.
+    assert!(engine.cached_chat("familie").messages.is_empty());
+    incoming(&server, "familie", "Sonntag bei uns?").await;
+    engine.handle_push(chat_push("familie"), None).await;
+    let cached = engine.cached_chat("familie");
+    assert_eq!(cached.messages.last().unwrap().text, "Sonntag bei uns?");
+    assert!(cached.messages.len() > 1, "the page, not the one message: nothing is missing before it");
+
+    // A push for a chat the server does not know changes nothing and does not fail.
+    engine.handle_push(chat_push("gibtesnicht"), None).await;
+    assert!(engine.cached_chat("gibtesnicht").messages.is_empty());
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Without push (desktop) the room list announces the message: what is announced is
+/// fetched, so a click on the notification finds it in the chat.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_notice_fetches_the_chat_ahead() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    engine.check_incoming_calls().await;
+
+    incoming(&server, "hilde", "Bist du morgen da?").await;
+    engine.refresh_rooms(false).await.unwrap();
+    assert_eq!(announced(&sink).0, ["hilde"]);
+    until("the announced chat is in the cache", || {
+        engine.cached_chat("hilde").messages.iter().any(|m| m.text == "Bist du morgen da?")
+    })
+    .await;
+    // The chat was closed all along: nothing was handed on as new.
+    assert_eq!(added(&sink, "Bist du morgen da?"), 0);
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An open chat after a pause: its poll starts over on a new connection and neither
+/// loses nor repeats a message. And a poll that pauses after failures tries again as
+/// soon as the platform says the network is back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_chat_catches_up_when_the_app_returns() {
+    let mut outage = Outage::server().await;
+    let server = outage.url();
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    engine.open_chat("garten").await.unwrap();
+
+    // The app comes back after a pause while a message is under way.
+    engine.pretend_paused();
+    incoming(&server, "garten", "Eins").await;
+    engine.network_changed();
+    incoming(&server, "garten", "Zwei").await;
+    arrived(&sink, "Eins").await;
+    arrived(&sink, "Zwei").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!((added(&sink, "Eins"), added(&sink, "Zwei")), (1, 1));
+
+    // The server goes away with the chat closed, and the chat is opened without it: the
+    // poll fails and pauses longer each time (1 s, 2 s, 4 s, then 8 s).
+    engine.close_chat("garten");
+    outage.stop().await;
+    assert!(engine.open_chat("garten").await.is_err());
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    outage.start().await;
+    incoming(&server, "garten", "Drei").await;
+    engine.network_changed();
+    // Without the wake-up the poll would sleep on for several seconds.
+    let woke = tokio::time::timeout(Duration::from_millis(2500), arrived(&sink, "Drei")).await;
+    assert!(woke.is_ok(), "the poll waited out its pause");
+    assert_eq!(added(&sink, "Drei"), 1);
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
 }
