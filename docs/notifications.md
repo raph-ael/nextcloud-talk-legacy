@@ -121,7 +121,7 @@ Aus dem Push allein geht das nicht: Er trägt nur den gekürzten Text und den Ch
 
 | Plattform | Aufgabe |
 |---|---|
-| Android | Im Push-Dienst zuerst die Benachrichtigung zeigen, dann `handlePush` für den Chat-Push aufrufen und im Zeitfenster des Pushs darauf warten. |
+| Android | Im Push-Dienst zuerst die Benachrichtigung zeigen, dann `handlePush` für den Chat-Push aufrufen und im Zeitfenster des Pushs darauf warten, höchstens 4 s. Der Dienst arbeitet Pushes nacheinander ab, ein Anruf dahinter soll nicht länger warten. |
 | iOS | Der Nachrichten-Push trägt zusätzlich `content-available`. Weckt iOS die App damit im Hintergrund, ruft sie `handlePush` auf und hält die Hintergrundzeit, bis der Aufruf zurückkehrt. Die Erweiterung zeigt die Benachrichtigung wie bisher. |
 | Desktop | nichts, der Kern holt nach der Meldung selbst nach |
 
@@ -133,18 +133,21 @@ Aus dem Push allein geht das nicht: Er trägt nur den gekürzten Text und den Ch
 - Ohne Netz beim Push bleibt es beim alten Stand.
 - Desktop: War der Chat in dieser Sitzung schon einmal offen, zeigt das Fenster beim Öffnen ein Bild lang (14 bis 33 ms) seinen eigenen alten Stand, dann den Zwischenspeicher. Das gilt für jedes Öffnen und bleibt so.
 
-**Gemessen vor der Änderung** (0.6.0, Zeit vom Antippen bis die Nachricht zu sehen ist; der Chat selbst steht nach etwa 0,6 s):
+**Gemessen** (Zeit vom Antippen bis die Nachricht zu sehen ist; der Chat selbst steht nach etwa 0,6 s):
 
-| Fall | Android (Galaxy A13) | iOS (Simulator) |
-|---|---|---|
-| Chat war offen, 1 min im Hintergrund | 0,7 s, im ersten Bild | 0,2 s |
-| Chat war offen, Gerät im Stromsparmodus (ab etwa 2 min) | zufällig 0 bis 30 s, gemessen 1,1 s und 18,9 s | nicht nachstellbar |
-| Chatliste oder anderer Chat war offen | 0,6 bis 0,7 s, bis zu 0,15 s nach dem ersten Bild | 0,2 bis 0,8 s |
-| App beendet | 0,7 bis 0,9 s, bis zu 0,35 s nach dem ersten Bild | 3,3 s, etwa 1 s nach dem ersten Bild |
+| Fall | Android (Galaxy A13) vorher | nachher | iOS (Simulator) vorher | nachher |
+|---|---|---|---|---|
+| Chat war offen, 1 min im Hintergrund | 0,7 s | 0,7 s | 0,2 s | 0,2 s |
+| Chat war offen, Gerät im Stromsparmodus (ab etwa 2 min) | zufällig 0 bis 30 s, gemessen 18,9 s | 0,65 s | nicht nachstellbar | – |
+| Chat war offen und stand nicht am Ende | 84 s unter dem Rand | 0,7 s, an der Ungelesen-Linie | unter dem Rand | 0,5 s |
+| Chatliste oder anderer Chat war offen | 0,6 bis 0,7 s, bis zu 0,15 s nach dem ersten Bild | 0,65 s, im ersten Bild | 0,2 bis 0,8 s | 0,2 bis 0,7 s |
+| App beendet | 0,7 bis 0,9 s, bis zu 0,35 s nach dem ersten Bild | 0,65 s, im ersten Bild | 3,3 s | 3,5 bis 4,4 s |
 
+- Android nachher: Die Nachricht stand in jedem Lauf im ersten Bild, der Push kam 9 bis 13 s vor dem Antippen. Die Benachrichtigung selbst kommt nicht später als vorher.
 - Die 0 bis 30 s waren die Pause der Chat-Abfrage: Im Stromsparmodus scheitert sie sofort und versuchte es dann nur noch alle 30 s. Nichts weckte sie, auch das Antippen nicht.
-- Der Simulator hält die App im Hintergrund nicht an. Seine Werte für „Chat war offen“ sagen deshalb nichts über ein echtes iPhone.
-- Eine Verbindung, die im echten Geräteschlaf still stirbt, ließ sich in beiden Aufbauten nicht nachstellen.
+- Desktop nachher (Linux, macOS): Nachricht 2 bis 71 ms nach dem Klick im Chat.
+- Der Simulator hält die App im Hintergrund nicht an und weckt sie nicht per Push. Seine Werte sagen deshalb wenig über ein echtes iPhone; bei beendeter App bestimmt der Kaltstart die Zeit.
+- Nicht nachgestellt: eine Verbindung, die im echten Geräteschlaf still stirbt, Antippen weniger als 2 s nach dem Push, das Wecken der iOS-App per Push am Gerät.
 
 ## Aktionen (Android, iOS)
 
