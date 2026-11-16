@@ -173,7 +173,14 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     val unreadLabel = if (unreadCount == 1) "1 ungelesene Nachricht" else "$unreadCount ungelesene Nachrichten"
     // Opening at the line: until positioned, neither the read marker nor the autoscroll interferes.
     var opening by remember(room.token) { mutableStateOf(unreadLine != null) }
-    LaunchedEffect(room.token) {
+    // A tap on a notification of this chat while it was open: the view starts over, first at
+    // the end as a new opening would, then at the line if there is one (docs/notifications.md).
+    val followedAtOpen = remember(room.token) { state.chatFollowed }
+    LaunchedEffect(room.token, state.chatFollowed) {
+        if (state.chatFollowed != followedAtOpen) {
+            opening = true
+            listState.scrollToItem(0)
+        }
         if (opening) {
             positionAtUnreadLine(sessions, listState, room.token)
             opening = false

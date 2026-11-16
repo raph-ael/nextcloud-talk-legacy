@@ -156,6 +156,8 @@ data class UiState(
     val connectionSince: Long = 0,
     val activeToken: String? = null,
     val unreadLine: UnreadLine? = null,
+    /** Counts taps on a notification of the chat that was open already: its view starts over. */
+    val chatFollowed: Int = 0,
     /** All signed-in accounts in the order they signed in (the active one included). */
     val accounts: List<AccountView> = emptyList(),
 )
@@ -619,7 +621,8 @@ class SessionManager(private val context: Context) {
     /**
      * A push arrived (FCM thread, process possibly just started; all runtimes exist since
      * the application started). The key that decrypts names the account. Returns once a
-     * call rings here, so the ringing foreground service runs before FCM's window closes.
+     * call rings here, so the ringing foreground service runs before FCM's window closes,
+     * and for a chat once its new messages are fetched.
      */
     suspend fun handlePush(subject: String) {
         val keys = store.accounts().mapNotNull { a ->
@@ -653,7 +656,12 @@ class SessionManager(private val context: Context) {
                 MessageNotifications.clear(context, rt.id)
                 s.handlePush(message, null)
             }
-            is PushMessage.Chat -> showPushed(rt, message)
+            // First the notification, then the messages themselves, so the chat shows them in
+            // its first frame (docs/notifications.md). The service's window is the limit.
+            is PushMessage.Chat -> {
+                showPushed(rt, message)
+                s.handlePush(message, null)
+            }
             is PushMessage.Other -> MessageNotifications.showOther(context, rt.id, label(rt), message.subject)
         }
     }
@@ -1286,18 +1294,29 @@ class SessionManager(private val context: Context) {
 
     // --- chat actions ----------------------------------------------------------------
 
-    fun openRoom(token: String) {
+    /**
+     * Opens a chat. [followed] is a tap on its notification: if the chat is open already it
+     * keeps its messages and its poll, but the view stands as after a new opening, at the
+     * Ungelesen-Linie or at the end (docs/notifications.md „War der Chat schon offen“).
+     */
+    fun openRoom(token: String, followed: Boolean = false) {
         val rt = active ?: return
         val s = rt.session
         val previous = _state.value.activeToken
         MessageNotifications.cancel(context, rt.id, token)
-        if (previous == token) return
-        previous?.let { s.closeChat(it) }
-        // Cached messages and unsent ones (both survive restarts): shown in the first frame.
-        val cached = s.cachedChat(token)
         // Snapshot before anything can set the read marker (docs/chat.md).
         val line = _state.value.rooms.find { it.token == token }?.takeIf { it.lastReadMessage > 0 }
             ?.let { UnreadLine(token, it.lastReadMessage, it.unreadMessages.toInt()) }
+        if (previous == token) {
+            if (followed) {
+                chatAtBottom = true
+                _state.update { it.copy(unreadLine = line, chatFollowed = it.chatFollowed + 1) }
+            }
+            return
+        }
+        previous?.let { s.closeChat(it) }
+        // Cached messages and unsent ones (both survive restarts): shown in the first frame.
+        val cached = s.cachedChat(token)
         chatAtBottom = true
         _state.update { st ->
             val chat = st.chats[token] ?: ChatState()

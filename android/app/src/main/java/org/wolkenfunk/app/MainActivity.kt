@@ -74,7 +74,7 @@ class MainActivity : ComponentActivity() {
         if (account != null && !sessions.switchAccount(account)) return
         // Only an account (the closed group of its message notifications): its chat list.
         if (token == null || intent == null) return
-        sessions.openRoom(token)
+        sessions.openRoom(token, followed = true)
         // Debug builds only (adb tests): `--ez org.wolkenfunk.app.CALL_SILENT true` starts a
         // silent call in that conversation; nobody is rung.
         val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
