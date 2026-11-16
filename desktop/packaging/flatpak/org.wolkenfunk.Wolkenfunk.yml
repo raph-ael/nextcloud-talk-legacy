@@ -90,8 +90,8 @@ modules:
       # Flathub: a fixed release instead of the working tree.
       # - type: git
       #   url: https://github.com/raph-ael/nextcloud-talk-legacy.git
-      #   tag: v0.4.1
-      #   commit: 3c5510d11a9a03378076691beac6a44c0abefaf1
+      #   tag: v0.5.0
+      #   commit: 73bcded0d149d5920a257a06c24d7ba50c735e50
       - generated-sources.json
       - cargo-sources.json
       - type: file
