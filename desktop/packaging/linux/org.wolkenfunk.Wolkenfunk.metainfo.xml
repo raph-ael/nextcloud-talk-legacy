@@ -81,6 +81,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.1" date="2026-11-16" type="development">
+      <description>
+        <p>Nach dem Antippen einer Benachrichtigung ist die neue Nachricht sofort im Chat zu sehen. Die App holt sie schon, wenn die Benachrichtigung eintrifft, und nicht erst beim Öffnen.</p>
+        <p>Behoben: War der Chat schon offen, als die App in den Hintergrund ging, erschienen neue Nachrichten nach der Rückkehr teils erst nach bis zu 30 Sekunden. Sie kommen jetzt sofort, auch nach dem Aufwachen des Rechners.</p>
+        <p>Stand der offene Chat nicht am Ende, springt die Ansicht nach dem Antippen der Benachrichtigung zur ersten ungelesenen Nachricht.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-16" type="development">
       <description>
         <p>Nachrichten bearbeiten und löschen: Eigene Nachrichten lassen sich 24 Stunden lang bearbeiten und jederzeit löschen, über das Menü der Nachricht. Pfeil nach oben im leeren Eingabefeld bearbeitet die letzte eigene Nachricht. Moderatoren können in Gruppen auch Nachrichten anderer löschen.</p>
