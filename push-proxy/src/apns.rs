@@ -164,13 +164,15 @@ fn request(kind: Kind, topic: &str, subject: &str, signature: &str, now: u64) ->
         },
         // A message: waits for the device. The app's notification service extension
         // decrypts `subject` and replaces the placeholder; without a title iOS shows
-        // the app's name.
+        // the app's name. `content-available` also wakes the app in the background when
+        // iOS allows it, so it can fetch the chat before the notification is tapped.
         Kind::Alert => Request {
             push_type: "alert",
             topic: topic.to_string(),
             priority: "10",
             expiration: now + ALERT_LIFETIME.as_secs(),
-            body: json!({"aps": {"mutable-content": 1, "sound": "default", "alert": {"body": "Neue Nachricht"}},
+            body: json!({"aps": {"mutable-content": 1, "content-available": 1, "sound": "default",
+                                 "alert": {"body": "Neue Nachricht"}},
                          "subject": subject, "signature": signature, "type": "alert"}),
         },
     }
@@ -195,6 +197,7 @@ mod tests {
         assert_eq!((message.push_type, message.priority), ("alert", "10"));
         assert_eq!(message.expiration, now + 24 * 60 * 60);
         assert_eq!(message.body["aps"]["mutable-content"], 1);
+        assert_eq!(message.body["aps"]["content-available"], 1);
         assert_eq!(message.body["aps"]["sound"], "default");
         assert_eq!(message.body["aps"]["alert"]["body"], "Neue Nachricht");
         assert!(message.body["aps"]["alert"].get("title").is_none());
