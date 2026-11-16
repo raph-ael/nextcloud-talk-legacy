@@ -12,10 +12,11 @@ use crate::error::Error;
 
 /// First retry after a failed request, then twice as long each time.
 const RETRY_FIRST: Duration = Duration::from_millis(500);
-/// Quick retries per outage; after that the regular room list refresh keeps trying.
-const RETRIES: u32 = 4;
-/// So many failed retries make an outage ...
-const OFFLINE_AFTER_RETRIES: u32 = 2;
+/// ... but no longer than this, until the server answers.
+const RETRY_MAX: Duration = Duration::from_secs(5);
+/// So many failed retries make an outage (3.5 s when requests fail at once, long enough
+/// for a change of network) ...
+const OFFLINE_AFTER_RETRIES: u32 = 3;
 /// ... or this long without an answer (requests that hang instead of failing).
 const OFFLINE_AFTER: Duration = Duration::from_secs(8);
 
@@ -39,11 +40,13 @@ pub(crate) struct Conn {
     failed_retries: u32,
     /// The retry task is running.
     retrying: bool,
+    /// The session was shut down: no more retries.
+    stopped: bool,
 }
 
 impl Default for Conn {
     fn default() -> Self {
-        Self { state: ConnectionState::Connecting, failing: false, outage: 0, failed_retries: 0, retrying: false }
+        Self { state: ConnectionState::Connecting, failing: false, outage: 0, failed_retries: 0, retrying: false, stopped: false }
     }
 }
 
@@ -110,6 +113,12 @@ impl Engine {
         }
     }
 
+    /// The session ends: the retries stop with it.
+    pub(crate) fn stop_retries(&self) {
+        self.conn.lock().unwrap().stopped = true;
+        self.retry_wake.notify_one();
+    }
+
     fn handle(&self) -> Option<tokio::runtime::Handle> {
         self.runtime.get().cloned().or_else(|| tokio::runtime::Handle::try_current().ok())
     }
@@ -125,11 +134,36 @@ impl Engine {
         self.announce();
     }
 
-    /// Fetches the room list after 0.5 s, 1 s, 2 s and 4 s until the server answers.
+    /// A session starts: `offline` if nothing was answered in time (a server that accepts
+    /// the connection and then hangs fails only after the request timeout).
+    pub(crate) fn await_first_answer(&self) {
+        self.conn.lock().unwrap().stopped = false;
+        let Some(rt) = self.handle() else { return };
+        let weak = self.weak_self();
+        rt.spawn(async move {
+            tokio::time::sleep(OFFLINE_AFTER).await;
+            let Some(engine) = weak.upgrade() else { return };
+            {
+                let mut c = engine.conn.lock().unwrap();
+                // Still the first state: nothing answered, nothing failed.
+                if c.state != ConnectionState::Connecting || c.failing || c.outage != 0 {
+                    return;
+                }
+                c.state = ConnectionState::Offline;
+            }
+            engine.announce();
+        });
+    }
+
+    /// Fetches the room list after 0.5 s, 1 s, 2 s, 4 s and then every 5 s until the
+    /// server answers.
     fn spawn_retries(&self, now: bool) {
         let Some(rt) = self.handle() else { return };
         {
             let mut c = self.conn.lock().unwrap();
+            if c.stopped {
+                return;
+            }
             if c.retrying {
                 drop(c);
                 if now {
@@ -143,8 +177,7 @@ impl Engine {
         let wake = self.retry_wake.clone();
         rt.spawn(async move {
             let mut delay = if now { Duration::ZERO } else { RETRY_FIRST };
-            let mut left = RETRIES;
-            while left > 0 {
+            loop {
                 let woken = tokio::select! {
                     _ = tokio::time::sleep(delay) => false,
                     _ = wake.notified() => true,
@@ -152,20 +185,18 @@ impl Engine {
                 let Some(engine) = weak.upgrade() else { return };
                 let outage = {
                     let c = engine.conn.lock().unwrap();
-                    c.failing.then_some(c.outage)
+                    (c.failing && !c.stopped).then_some(c.outage)
                 };
-                // Another call got through meanwhile.
+                // Another call got through meanwhile (or the session ended).
                 let Some(outage) = outage else { break };
                 if woken {
-                    left = RETRIES;
                     delay = Duration::ZERO;
                 }
                 match engine.refresh_rooms(false).await {
                     Ok(()) | Err(Error::Unauthorized) => break,
                     Err(_) => engine.retry_failed(outage),
                 }
-                left -= 1;
-                delay = if delay.is_zero() { RETRY_FIRST } else { delay * 2 };
+                delay = if delay.is_zero() { RETRY_FIRST } else { (delay * 2).min(RETRY_MAX) };
             }
             if let Some(engine) = weak.upgrade() {
                 engine.conn.lock().unwrap().retrying = false;

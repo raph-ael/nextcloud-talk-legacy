@@ -402,6 +402,7 @@ impl Engine {
                 e.voice.prune_files();
             }
         });
+        self.await_first_answer();
         // User id, room list and server features in parallel: saves round trips on cold start.
         let (user, rooms, caps, tags, _) = tokio::join!(
             self.client.current_user(),
@@ -679,6 +680,7 @@ impl Engine {
     pub fn shutdown(&self) {
         self.calls.hang_up();
         self.outbox.abort_all();
+        self.stop_retries();
         let mut st = self.state.lock().unwrap();
         if let Some(t) = st.rooms_task.take() {
             t.abort();

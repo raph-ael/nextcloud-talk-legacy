@@ -16,13 +16,12 @@ Eine Sitzung beginnt als `connecting`. Dafür kommt kein Ereignis: Die Plattform
 
 ### Wie der Kern wechselt
 - **Ein Abruf bekommt keine Antwort** (kein Netz, Zeitüberschreitung, DNS, TLS): `online` wird zu `connecting`.
-  - Der Kern holt die Chatliste nach 0,5 s neu, danach nach 1 s, 2 s und 4 s.
-  - Schlagen zwei Neuversuche fehl oder sind 8 s ohne Antwort vergangen, wird daraus `offline`. Ohne Netz sind das etwa 1,5 s.
-  - Danach versucht es der gewöhnliche Abgleich weiter, alle 10 s.
+  - Der Kern holt die Chatliste nach 0,5 s neu, danach nach 1 s, 2 s und 4 s, dann alle 5 s, bis der Server antwortet.
+  - Schlagen drei Neuversuche fehl oder sind 8 s ohne Antwort vergangen, wird daraus `offline`. Ohne Netz sind das etwa 3,5 s.
 - **Ein Abruf wird beantwortet:** `online`, aus jedem Zustand.
 - **`networkChanged()`** löst sofort einen Neuversuch aus. Aus `offline` wird dabei nicht erst `connecting`: Der Zustand bleibt stehen, bis eine Antwort kommt. So flackert die Anzeige nicht, wenn das Gerät ein Netz meldet, das den Server nicht erreicht.
 - Eine Fehlerantwort des Servers (500, Wartung) ändert den Zustand nicht. Ausnahme ist der Start: Liefert er nur Fehler, zählt das wie „keine Antwort“.
-- Beim Start trägt der Kern erst die Chatliste ein (`roomsChanged`) und meldet dann `online`.
+- Beim Start trägt der Kern erst die Chatliste ein (`roomsChanged`) und meldet dann `online`. Kommt in den ersten 8 s gar keine Antwort, meldet er `offline`.
 
 ### Was die Plattform beisteuert
 - `networkChanged()` bei jedem Netzwechsel und immer, wenn die App in den Vordergrund kommt. Nach dem Aufwachen sind offene Verbindungen oft tot; der erste Abruf scheitert dann, und der Neuversuch soll sofort laufen.

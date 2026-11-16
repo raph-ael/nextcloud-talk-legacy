@@ -558,7 +558,7 @@ async fn a_single_failure_is_no_outage() {
     engine.shutdown();
 }
 
-/// The server stays away: `offline` after two failed retries, a message written meanwhile
+/// The server stays away: `offline` after three failed retries, a message written meanwhile
 /// waits, and both recover when the platform reports the network.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_outage_and_its_end() {
@@ -568,7 +568,10 @@ async fn an_outage_and_its_end() {
     engine.start().await.unwrap();
     server.stop().await;
     assert!(engine.refresh_rooms(false).await.is_err());
+    let since = std::time::Instant::now();
     until("offline", || engine.connection_state() == Offline).await;
+    // Long enough for a change of network (retries after 0.5 s, 1.5 s and 3.5 s).
+    assert!(since.elapsed() > Duration::from_secs(3), "took {:?}", since.elapsed());
     assert_eq!(connections(&sink), [Online, Connecting, Offline]);
 
     let pending = engine.enqueue_text("lena", "Bis gleich!", None, "ref-outage");
@@ -587,6 +590,17 @@ async fn an_outage_and_its_end() {
     assert!(since.elapsed() < Duration::from_secs(2), "took {:?}", since.elapsed());
     until("message sent", || engine.outbox_unsent() == 0).await;
     assert_eq!(connections(&sink), [Online, Connecting, Offline, Online]);
+
+    // Without a word from the platform the retries find the server themselves, sooner
+    // than the regular refresh would.
+    server.stop().await;
+    assert!(engine.refresh_rooms(false).await.is_err());
+    until("offline", || engine.connection_state() == Offline).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    server.start().await;
+    let since = std::time::Instant::now();
+    until("online by itself", || engine.connection_state() == Online).await;
+    assert!(since.elapsed() < Duration::from_secs(6), "took {:?}", since.elapsed());
     engine.shutdown();
 }
 
@@ -609,5 +623,36 @@ async fn a_start_without_the_server() {
     until("online", || engine.connection_state() == Online).await;
     assert!(!engine.rooms().is_empty());
     assert_eq!(connections(&sink), [Offline, Online]);
+    engine.shutdown();
+}
+
+/// A server that takes the connection and never answers: the first requests only fail
+/// after their timeout, the state says `offline` long before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_with_a_server_that_hangs() {
+    use ConnectionState::*;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    let hanging = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let account = Account { server, user: "demo".into(), app_password: "demo".into() };
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), None);
+    let starting = tokio::spawn({
+        let engine = engine.clone();
+        async move { engine.start().await }
+    });
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(engine.connection_state(), Connecting);
+    assert!(connections(&sink).is_empty());
+    until("offline", || engine.connection_state() == Offline).await;
+    assert_eq!(connections(&sink), [Offline]);
+    assert!(!starting.is_finished(), "the requests still hang");
+    starting.abort();
+    hanging.abort();
     engine.shutdown();
 }
