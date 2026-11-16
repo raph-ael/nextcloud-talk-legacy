@@ -10,7 +10,7 @@ Der Kern meldet den Zustand je Konto als `connection { state }` und beantwortet 
 |---|---|---|
 | `online` | Der letzte Abruf wurde beantwortet. | nichts |
 | `connecting` | Die Sitzung ist gestartet und hat noch keine Antwort, oder ein Abruf ist gerade fehlgeschlagen und der Kern versucht es neu. | Ladekreis |
-| `offline` | Auch die Neuversuche sind fehlgeschlagen. | Ladekreis und „Keine Verbindung“ |
+| `offline` | Auch die Neuversuche sind fehlgeschlagen. | „Keine Verbindung“, in der Chatliste mit Ladekreis |
 
 Eine Sitzung beginnt als `connecting`. Dafür kommt kein Ereignis: Die Plattform setzt den Anfangswert selbst oder fragt `connectionState()`.
 
@@ -36,16 +36,16 @@ Eine Sitzung beginnt als `connecting`. Dafür kommt kein Ereignis: Die Plattform
 
 ### Chat
 - `connecting`: ein Ladekreis neben dem Namen.
-- `offline`: „Keine Verbindung“ in der gedämpften Textfarbe unter dem Namen. Eine Beschreibungszeile, die dort sonst steht, weicht solange.
+- `offline`: „Keine Verbindung“ in der gedämpften Textfarbe unter dem Namen, ohne Ladekreis. Eine Beschreibungszeile, die dort sonst steht, weicht solange.
 
 ### Leere Chatliste
-- `connecting`: ein Ladekreis in der Mitte. Die Liste lädt noch.
+- `connecting`: ein Ladekreis in der Mitte, in der Größe, die die Plattform sonst für ladende Inhalte nutzt. Die Liste lädt noch. Der Ladekreis in der Kopfzeile entfällt solange, es steht nie zweimal derselbe da.
 - `online`: „Noch keine Chats“.
 - `offline`: nichts in der Mitte. Die Kopfzeile sagt, was los ist.
 
 ### Regeln für alle
-- Der Ladekreis ist klein (14 bis 16 Punkte), dünn und in der gedämpften Textfarbe, nicht in der Akzentfarbe.
-- Er blendet erst ein, wenn der Zustand 500 ms angehalten hat. Kürzere Phasen bleiben unsichtbar. Das Ausblenden geht sofort.
+- Der Ladekreis in der Kopfzeile ist klein (14 bis 16 Punkte) und dünn. Jeder Ladekreis hier hat die gedämpfte Textfarbe, nicht die Akzentfarbe.
+- Er blendet erst ein, wenn der Zustand 500 ms angehalten hat, auch der in der leeren Liste. Kürzere Phasen bleiben unsichtbar. Das Ausblenden geht sofort.
 - Kopfzeile und Liste springen nicht: Der Platz für Ladekreis und Text ist reserviert oder liegt so, dass nichts verrutscht.
 - Für Vorlesefunktionen heißt der Ladekreis „Verbinde …“.
 - Farben kommen aus den vorhandenen Tönen des Designs, hell und dunkel.
