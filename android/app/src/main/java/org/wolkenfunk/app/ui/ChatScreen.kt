@@ -133,6 +133,10 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     val isGroup = room.roomType.toInt() !in setOf(1, 6)
     val lastCommonRead = maxOf(chat?.lastCommonRead ?: 0, room.lastCommonReadMessage)
     var replyTo by remember(room.token) { mutableStateOf<MessageView?>(null) }
+    // Edit mode and the question before deleting (docs/chat.md „Bearbeiten und Löschen“).
+    var editing by remember(room.token) { mutableStateOf<EditTarget?>(null) }
+    var savingId by remember(room.token) { mutableStateOf<Long?>(null) }
+    var deleting by remember(room.token) { mutableStateOf<MessageView?>(null) }
     var overlay by remember(room.token) { mutableStateOf<Overlay?>(null) }
     var reactionSheet by remember(room.token) { mutableStateOf<ReactionSheet?>(null) }
     val haptics = LocalHapticFeedback.current
@@ -148,6 +152,14 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     DarkSystemBars(overlay != null)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // The edit mode ends when the message was deleted meanwhile.
+    val editedId = editing?.msg?.id
+    LaunchedEffect(editedId, messages) {
+        if (editedId != null && messages.any { it.status == null && it.msg.id == editedId && it.msg.kind == MessageKind.DELETED }) {
+            editing = null
+        }
+    }
 
     // Reverse layout: index 0 is the newest message at the bottom.
     val reversed = remember(messages) { messages.asReversed() }
@@ -256,7 +268,15 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                             read = m.msg.isOwn && m.status == null && m.msg.id <= lastCommonRead,
                             unreadLabel = if (m.key == unreadKey) unreadLabel else null,
                             canReact = room.canReact,
+                            canChat = room.canChat,
+                            canDeleteOthers = room.canDeleteOthers,
                             onReply = { replyTo = it },
+                            onEdit = { msg ->
+                                scope.launch {
+                                    editing = EditTarget(msg, sessions.editSource(room.token, msg.id) ?: msg.text)
+                                }
+                            },
+                            onDelete = { deleting = it },
                             onReact = react,
                             onMoreReactions = { reactionSheet = ReactionSheet.Picker(it.id) },
                             onShowReactions = { reactionSheet = ReactionSheet.Who(it.id) },
@@ -294,6 +314,20 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     token = room.token,
                     replyTo = replyTo,
                     onCancelReply = { replyTo = null },
+                    editing = editing,
+                    saving = savingId != null && savingId == editing?.msg?.id,
+                    onCancelEdit = { editing = null },
+                    onSaveEdit = { text ->
+                        val id = editing?.msg?.id
+                        if (id != null) {
+                            savingId = id
+                            sessions.editMessage(room.token, id, text) { error ->
+                                if (savingId == id) savingId = null
+                                // On an error the mode stays open with the text; the toast says why.
+                                if (error == null && editing?.msg?.id == id) editing = null
+                            }
+                        }
+                    },
                     onSend = { text ->
                         sessions.send(room.token, text, replyTo)
                         replyTo = null
@@ -343,6 +377,16 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
             },
         )
         is Overlay.Viewer -> ImageViewer(sessions, o.fileId, o.initial, onClose = { overlay = null })
+    }
+    deleting?.let { d ->
+        val text = buildString {
+            append(if (d.isOwn) "Sie wird für alle im Chat gelöscht." else "Die Nachricht von ${d.author} wird für alle im Chat gelöscht.")
+            if (d.attachment != null) append(" Die Datei selbst bleibt erhalten.")
+        }
+        ConfirmDialog("Nachricht löschen?", text, "Löschen", onDismiss = { deleting = null }) {
+            deleting = null
+            sessions.deleteMessage(room.token, d.id)
+        }
     }
     when (val r = reactionSheet) {
         null -> Unit
@@ -630,7 +674,11 @@ private fun MessageRow(
     read: Boolean,
     unreadLabel: String?,
     canReact: Boolean,
+    canChat: Boolean,
+    canDeleteOthers: Boolean,
     onReply: (MessageView) -> Unit,
+    onEdit: (MessageView) -> Unit,
+    onDelete: (MessageView) -> Unit,
     onReact: (MessageView, String) -> Unit,
     onMoreReactions: (MessageView) -> Unit,
     onShowReactions: (MessageView) -> Unit,
@@ -835,6 +883,10 @@ private fun MessageRow(
                                 metaColor,
                                 own,
                                 Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
+                                onLongPress = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    menu = true
+                                },
                                 meta = if (metaInVoice && showMeta) {
                                     { MessageMeta(m, own, read, metaColor, colors.danger) }
                                 } else {
@@ -842,7 +894,15 @@ private fun MessageRow(
                                 },
                             )
                         } else if (attachment != null) {
-                            FileRow(attachment, textColor, Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp))
+                            FileRow(
+                                attachment,
+                                textColor,
+                                Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
+                                onLongPress = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    menu = true
+                                },
+                            )
                         }
                         when {
                             image && msg.text.isEmpty() -> Unit
@@ -885,13 +945,24 @@ private fun MessageRow(
                         }
                     }
                     if (menu) {
+                        // What is allowed is worked out when the menu opens (docs/chat.md „Bearbeiten und Löschen“).
+                        val now = remember { System.currentTimeMillis() / 1000 }
+                        val delivered = m.status == null
+                        val editable = delivered && msg.editable && canChat && (msg.editUntil?.let { now < it } ?: true)
+                        val deletable = delivered && msg.deletable && if (own) canChat else canDeleteOthers
                         val actions = buildList {
                             if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
                                 add(MenuAction("Erneut senden") { onRetry(msg) })
                             }
-                            if (m.status != null) add(MenuAction("Löschen") { onDiscard(msg) })
                             if (replyable) add(MenuAction("Antworten") { onReply(msg) })
+                            if (editable) add(MenuAction("Bearbeiten") { onEdit(msg) })
                             if (msg.text.isNotEmpty()) add(MenuAction("Kopieren") { clipboard.setText(AnnotatedString(msg.text)) })
+                            // In the outbox „Löschen“ only discards locally, without asking.
+                            if (!delivered) {
+                                add(MenuAction("Löschen", danger = true) { onDiscard(msg) })
+                            } else if (deletable) {
+                                add(MenuAction("Löschen", danger = true) { onDelete(msg) })
+                            }
                         }
                         MessageMenu(
                             own = own,

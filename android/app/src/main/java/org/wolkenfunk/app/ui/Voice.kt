@@ -137,7 +137,10 @@ private fun voicePalette(own: Boolean, textColor: Color, active: Boolean): Voice
     }
 }
 
-/** Bars with the played part highlighted and a position line; tap or drag to seek. */
+/**
+ * Bars with the played part highlighted and a position line; tap or drag to seek. A long
+ * press goes to [onLongPress] (the message menu), so it works on the whole bubble.
+ */
 @Composable
 private fun Waveform(
     levels: ByteArray?,
@@ -145,13 +148,15 @@ private fun Waveform(
     played: Color,
     unplayed: Color,
     modifier: Modifier,
+    onLongPress: () -> Unit = {},
     onSeek: (Float) -> Unit,
 ) {
     val seek by rememberUpdatedState(onSeek)
+    val longPress by rememberUpdatedState(onLongPress)
     Canvas(
         modifier
             .height(ThumbHeight + 4.dp)
-            .pointerInput(Unit) { detectTapGestures { seek(it.x / size.width) } }
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { longPress() }) { seek(it.x / size.width) } }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures { change, _ -> seek(change.position.x / size.width) }
             },
@@ -253,6 +258,7 @@ fun VoiceBubble(
     metaColor: Color,
     own: Boolean,
     modifier: Modifier = Modifier,
+    onLongPress: () -> Unit = {},
     meta: (@Composable () -> Unit)? = null,
 ) {
     val a = m.msg.attachment ?: return
@@ -299,6 +305,7 @@ fun VoiceBubble(
                 p.played,
                 p.unplayed,
                 Modifier.weight(1f).padding(start = 11.dp, end = 8.dp),
+                onLongPress = onLongPress,
             ) { voice.seek(m, it) }
         }
         // Compact line height: the theme's body style would make the footer 28 dp tall.

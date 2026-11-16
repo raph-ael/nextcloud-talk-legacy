@@ -1396,6 +1396,31 @@ class SessionManager(private val context: Context) {
         }
     }
 
+    /** The text for the input field when editing (docs/chat.md „Bearbeiten und Löschen“); `null`: take `MessageView.text`. */
+    suspend fun editSource(token: String, messageId: Long): String? = session?.editSource(token, messageId)
+
+    /**
+     * Saves an edited message; the new version arrives as `MessagesUpdated` before [onDone].
+     * An error becomes a toast and is handed to [onDone], so the caller keeps the edit mode open.
+     * Runs in the manager's scope: leaving the chat does not cut the request off.
+     */
+    fun editMessage(token: String, messageId: Long, text: String, onDone: (error: String?) -> Unit) {
+        val s = session ?: return onDone(null)
+        scope.launch {
+            val error = s.editMessage(token, messageId, text)
+            error?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+            onDone(error)
+        }
+    }
+
+    /** Deletes a message for everybody; the deleted bubble comes from the core, errors become a toast. */
+    fun deleteMessage(token: String, messageId: Long) {
+        val s = session ?: return
+        scope.launch {
+            s.deleteMessage(token, messageId)?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
     /** Who reacted, own first; `null` when it could not be loaded. */
     suspend fun reactions(token: String, messageId: Long): List<ReactionView>? {
         val s = session ?: return null

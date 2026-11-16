@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -113,19 +112,24 @@ fun ChatImage(
 }
 
 /** A non-image file or voice message: icon, name, size. Tapping opens it in the browser for now. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FileRow(a: FileAttachment, textColor: Color, modifier: Modifier = Modifier) {
+fun FileRow(a: FileAttachment, textColor: Color, modifier: Modifier = Modifier, onLongPress: () -> Unit = {}) {
     val context = LocalContext.current
     Row(
         modifier
             .clip(RoundedCornerShape(10.dp))
-            .clickable {
-                if (a.link.isNotEmpty()) {
-                    runCatching {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(a.link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // A long press belongs to the message menu, like on the rest of the bubble.
+            .combinedClickable(
+                onClick = {
+                    if (a.link.isNotEmpty()) {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(a.link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
                     }
-                }
-            }
+                },
+                onLongClick = onLongPress,
+            )
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

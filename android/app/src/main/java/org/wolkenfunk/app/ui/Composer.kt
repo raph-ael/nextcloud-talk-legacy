@@ -41,6 +41,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +73,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -82,6 +86,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.emoji2.emojipicker.EmojiPickerView
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.runtime.DisposableEffect
@@ -97,6 +102,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.wolkenfunk.app.VoiceManager
 import uniffi.talk_ffi.MessageView
+
+/** A message being edited: [source] is what the input field starts with (`editSource()`). */
+class EditTarget(val msg: MessageView, val source: String)
 
 /** What replaces the keyboard below the input row. */
 enum class InputPanel { NONE, EMOJI, ATTACH }
@@ -115,6 +123,11 @@ fun Composer(
     token: String,
     replyTo: MessageView?,
     onCancelReply: () -> Unit,
+    /** Edit mode (docs/chat.md „Bearbeiten und Löschen“): the bar replaces the reply bar meanwhile. */
+    editing: EditTarget?,
+    saving: Boolean,
+    onCancelEdit: () -> Unit,
+    onSaveEdit: (String) -> Unit,
     onSend: (String) -> Unit,
     onOpenCamera: () -> Unit,
     onImagePicked: (Uri) -> Unit,
@@ -126,6 +139,18 @@ fun Composer(
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
     var value by rememberSaveable(token, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    // The text being edited lives next to the draft: it never becomes the draft, and the draft
+    // (like a started reply) is back untouched once the edit mode ends.
+    var editValue by remember(editing?.msg?.id) {
+        val source = editing?.source.orEmpty()
+        mutableStateOf(TextFieldValue(source, TextRange(source.length)))
+    }
+    val field = if (editing != null) editValue else value
+    fun setField(v: TextFieldValue) {
+        if (editing != null) editValue = v else value = v
+    }
+    val editText = editValue.text.trim()
+    val canSave = editing != null && !saving && editText.isNotEmpty() && editText != editing.source.trim()
     var panel by rememberSaveable(token) { mutableStateOf(InputPanel.NONE) }
     // Keeps the panel's space while the keyboard slides in, so the input row does not jump.
     var reserve by remember { mutableStateOf(false) }
@@ -160,6 +185,8 @@ fun Composer(
         snapshotFlow { ime.getBottom(density) - nav.getBottom(density) >= panelHeight - 4 }
             .collect { if (it) reserve = false }
     }
+    // Back cancels the edit mode before it leaves the chat; an open panel closes first.
+    BackHandler(enabled = editing != null, onBack = onCancelEdit)
     BackHandler(enabled = panel != InputPanel.NONE) { panel = InputPanel.NONE }
 
     fun open(p: InputPanel) {
@@ -182,7 +209,7 @@ fun Composer(
         }
     }
 
-    val hasText = value.text.isNotBlank()
+    val hasText = field.text.isNotBlank()
 
     // --- voice messages ---------------------------------------------------------------
     val voiceUi by voice.state.collectAsStateWithLifecycle()
@@ -217,33 +244,39 @@ fun Composer(
         onCancelReply()
         onVoiceSent()
     }
+    // Entering the edit mode: a running recording becomes its draft, the keyboard opens.
+    val windowInfo = LocalWindowInfo.current
+    LaunchedEffect(editing?.msg?.id) {
+        if (editing == null) return@LaunchedEffect
+        voice.interrupt()
+        panel = InputPanel.NONE
+        // The message menu is a window of its own: the keyboard opens once ours has the focus again.
+        snapshotFlow { windowInfo.isWindowFocused }.first { it }
+        focus.requestFocus()
+        keyboard?.show()
+    }
 
     Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
-        replyTo?.let { r ->
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.chip)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    Text(if (r.isOwn) "Du" else r.author, color = colors.accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    Text(
-                        withAttachment(r.text, r.attachment),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 13.sp,
-                    )
-                }
-                IconButton(onClick = onCancelReply) { Icon(TalkIcons.Close, "Antwort abbrechen") }
-            }
+        if (editing != null) {
+            ContextBar(
+                title = "Nachricht bearbeiten",
+                icon = Icons.Filled.Edit,
+                // A file without caption shows its name.
+                text = editing.msg.text.ifEmpty { editing.msg.attachment?.name.orEmpty() },
+                closeLabel = "Bearbeiten abbrechen",
+                onClose = onCancelEdit,
+            )
+        } else if (replyTo != null) {
+            ContextBar(
+                title = if (replyTo.isOwn) "Du" else replyTo.author,
+                icon = null,
+                text = withAttachment(replyTo.text, replyTo.attachment),
+                closeLabel = "Antwort abbrechen",
+                onClose = onCancelReply,
+            )
         }
 
-        if (rec?.locked == true) {
+        if (editing == null && rec?.locked == true) {
             LockedRecordingBar(
                 rec,
                 onCancel = {
@@ -252,7 +285,7 @@ fun Composer(
                 },
                 onSend = { voice.sendRecording(replyTo, ::voiceSent) },
             )
-        } else if (rec == null && draft != null) {
+        } else if (editing == null && rec == null && draft != null) {
             VoiceDraftBar(
                 voice,
                 draft,
@@ -273,7 +306,7 @@ fun Composer(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                if (rec != null) {
+                if (rec != null && editing == null) {
                     HeldRecording(rec, drag.x, Modifier.weight(1f))
                 } else {
                 PillIcon(
@@ -283,8 +316,8 @@ fun Composer(
                     onClick = { open(InputPanel.EMOJI) },
                 )
                 BasicTextField(
-                    value = value,
-                    onValueChange = { value = it },
+                    value = field,
+                    onValueChange = { setField(it) },
                     textStyle = TextStyle(fontSize = 16.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(colors.accent),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -293,15 +326,15 @@ fun Composer(
                         .weight(1f)
                         .focusRequester(focus)
                         .heightIn(min = 44.dp)
-                        .padding(top = 10.dp, bottom = 10.dp, end = if (hasText) 12.dp else 0.dp),
+                        .padding(top = 10.dp, bottom = 10.dp, end = if (hasText || editing != null) 12.dp else 0.dp),
                     decorationBox = { inner ->
                         Box {
-                            if (value.text.isEmpty()) Text("Nachricht", color = colors.muted, fontSize = 16.sp, lineHeight = 21.sp)
+                            if (field.text.isEmpty()) Text("Nachricht", color = colors.muted, fontSize = 16.sp, lineHeight = 21.sp)
                             inner()
                         }
                     },
                 )
-                AnimatedVisibility(visible = !hasText, enter = fadeIn(), exit = fadeOut()) {
+                AnimatedVisibility(visible = !hasText && editing == null, enter = fadeIn(), exit = fadeOut()) {
                     PillIcon(TalkIcons.Camera, "Kamera", width = 40.dp, endPadding = 16.dp, onClick = {
                         panel = InputPanel.NONE
                         onOpenCamera()
@@ -309,7 +342,7 @@ fun Composer(
                 }
                 }
                 // Same call site while holding, so the press gesture survives the swap above.
-                AnimatedVisibility(visible = !hasText, enter = fadeIn(), exit = fadeOut()) {
+                AnimatedVisibility(visible = !hasText && editing == null, enter = fadeIn(), exit = fadeOut()) {
                     MicButton(
                         onPress = {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
@@ -348,9 +381,12 @@ fun Composer(
                     .padding(bottom = 2.dp)
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(colors.accent)
-                    .clickable {
-                        if (hasText) {
+                    // The check mark is off while there is nothing to save.
+                    .background(colors.accent.copy(alpha = if (editing != null && !canSave) 0.4f else 1f))
+                    .clickable(enabled = editing == null || canSave) {
+                        if (editing != null) {
+                            onSaveEdit(editText)
+                        } else if (hasText) {
                             val text = value.text.trim()
                             value = TextFieldValue()
                             onSend(text)
@@ -361,14 +397,14 @@ fun Composer(
                 contentAlignment = Alignment.Center,
             ) {
                 AnimatedContent(
-                    targetState = hasText,
+                    targetState = if (editing != null) SendButton.SAVE else if (hasText) SendButton.SEND else SendButton.ATTACH,
                     transitionSpec = { (scaleIn() + fadeIn()) togetherWith (scaleOut() + fadeOut()) },
                     label = "send",
-                ) { send ->
-                    if (send) {
-                        Icon(TalkIcons.Send, "Senden", tint = Color.White, modifier = Modifier.size(22.dp))
-                    } else {
-                        Icon(TalkIcons.Plus, "Anhang", tint = Color.White, modifier = Modifier.size(22.dp).rotate(rotation))
+                ) { button ->
+                    when (button) {
+                        SendButton.SAVE -> Icon(Icons.Filled.Check, "Änderung speichern", tint = Color.White, modifier = Modifier.size(22.dp))
+                        SendButton.SEND -> Icon(TalkIcons.Send, "Senden", tint = Color.White, modifier = Modifier.size(22.dp))
+                        SendButton.ATTACH -> Icon(TalkIcons.Plus, "Anhang", tint = Color.White, modifier = Modifier.size(22.dp).rotate(rotation))
                     }
                 }
             }
@@ -393,8 +429,8 @@ fun Composer(
             ) {
                 when (panel) {
                     InputPanel.EMOJI -> EmojiPanel(
-                        onEmoji = { value = value.insert(it) },
-                        onBackspace = { value = value.backspace() },
+                        onEmoji = { setField(field.insert(it)) },
+                        onBackspace = { setField(field.backspace()) },
                     )
                     InputPanel.ATTACH -> AttachPanel(
                         onImage = { uri ->
@@ -409,6 +445,37 @@ fun Composer(
                 }
             }
         }
+    }
+}
+
+/** What the round button next to the input pill does. */
+private enum class SendButton { ATTACH, SEND, SAVE }
+
+/** The bar above the input row: what is being answered, or the message being edited. */
+@Composable
+private fun ContextBar(title: String, icon: ImageVector?, text: String, closeLabel: String, onClose: () -> Unit) {
+    val colors = LocalTalkColors.current
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.chip)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (icon != null) {
+                    Icon(icon, null, tint = colors.accent, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(title, color = colors.accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+            Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+        }
+        IconButton(onClick = onClose) { Icon(TalkIcons.Close, closeLabel) }
     }
 }
 

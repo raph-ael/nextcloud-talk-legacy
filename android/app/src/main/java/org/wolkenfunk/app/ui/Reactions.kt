@@ -53,6 +53,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -99,7 +101,8 @@ fun sortedReactions(reactions: Map<String, Long>): List<Pair<String, Long>> =
     reactions.entries.sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
         .map { it.key to it.value }
 
-class MenuAction(val label: String, val run: () -> Unit)
+/** One entry of the long-press menu; [danger] entries (delete) are red. */
+class MenuAction(val label: String, val danger: Boolean = false, val run: () -> Unit)
 
 /**
  * Long-press menu: the quick reaction bar floats above the bubble, the actions sit below it,
@@ -160,7 +163,10 @@ fun MessageMenu(
                     ) {
                         Column(Modifier.width(IntrinsicSize.Max).padding(vertical = 8.dp)) {
                             actions.forEach { a ->
-                                DropdownMenuItem(text = { Text(a.label) }, onClick = { onDismiss(); a.run() })
+                                DropdownMenuItem(
+                                    text = { Text(a.label, color = if (a.danger) LocalTalkColors.current.danger else Color.Unspecified) },
+                                    onClick = { onDismiss(); a.run() },
+                                )
                             }
                         }
                     }
@@ -176,21 +182,29 @@ fun MessageMenu(
                 val loc = IntArray(2).also { host.getLocationOnScreen(it) }
                 val a = anchor?.translate(loc[0] - o.x, loc[1] - o.y) ?: return@layout
                 val w = constraints.maxWidth
-                val h = minOf(constraints.maxHeight, window.height.takeIf { it > 0 } ?: constraints.maxHeight)
+                // The window may reach below the navigation bar: nothing is placed there.
+                val root = host.rootView
+                val rootLoc = IntArray(2).also { root.getLocationOnScreen(it) }
+                val navBar = ViewCompat.getRootWindowInsets(host)?.getInsets(WindowInsetsCompat.Type.systemBars())?.bottom ?: 0
+                val h = minOf(
+                    constraints.maxHeight,
+                    window.height.takeIf { it > 0 } ?: constraints.maxHeight,
+                    rootLoc[1] + root.height - navBar - o.y,
+                )
                 val gap = 8.dp.roundToPx()
                 val margin = 8.dp.roundToPx()
                 fun x(width: Int) = (if (own) a.right - width else a.left).coerceIn(margin, maxOf(margin, w - width - margin))
-                var barBottom = Int.MIN_VALUE
-                if (bar != null) {
-                    val y = (a.top - gap - bar.height).coerceIn(margin, maxOf(margin, h - bar.height - margin))
-                    bar.place(x(bar.width), y)
-                    barBottom = y + bar.height
-                }
+                // The actions go below the bubble, or as far up as they need to fit; the bar
+                // stays above the bubble and moves up with them.
+                var menuTop = Int.MAX_VALUE
                 if (menu != null) {
-                    var y = a.bottom + gap
-                    if (y + menu.height > h - margin) y = h - margin - menu.height
-                    y = maxOf(y, barBottom + gap, margin)
-                    menu.place(x(menu.width), y)
+                    val top = margin + (bar?.let { it.height + gap } ?: 0)
+                    menuTop = maxOf(minOf(a.bottom + gap, h - margin - menu.height), top)
+                    menu.place(x(menu.width), menuTop)
+                }
+                if (bar != null) {
+                    val y = minOf(a.top - gap - bar.height, menuTop - gap - bar.height, h - bar.height - margin)
+                    bar.place(x(bar.width), maxOf(y, margin))
                 }
             }
         }
