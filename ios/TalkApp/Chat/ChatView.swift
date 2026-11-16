@@ -8,6 +8,9 @@ struct ChatView: View {
     let token: String
 
     @State private var replyTo: MessageView?
+    /// docs/chat.md "Bearbeiten und Löschen": the message in the input field, the one asked about.
+    @State private var editing: EditTarget?
+    @State private var deleting: MessageView?
     /// Long-pressed message (menu overlay open) and the message whose reactions are listed.
     @State private var menuFor: MessageMenuTarget?
     @State private var reactionsFor: ReactionsTarget?
@@ -46,6 +49,10 @@ struct ChatView: View {
             if let unread { return .row(unread.row.key) }
             return line.base > 0 ? .oldest : .bottom
         }()
+        // Editing ends once the message was deleted meanwhile.
+        let editedGone = editing.map { e in
+            messages.contains { $0.status == nil && $0.msg.id == e.msg.id && $0.msg.kind == .deleted }
+        } ?? false
 
         VStack(spacing: 0) {
             RecordingBanners(notices: store.recordingNotices(for: token))
@@ -112,12 +119,14 @@ struct ChatView: View {
                 Composer(
                     token: token,
                     replyTo: $replyTo,
+                    editing: $editing,
                     panelOpen: $panelOpen,
                     onSend: { text in
                         store.send(token, text: text, replyTo: replyTo)
                         replyTo = nil
                         scrollTick += 1
                     },
+                    onSaveEdit: saveEdit,
                     onOpenCamera: { camera = true },
                     onVoiceSent: {
                         store.clearUnreadLine(token)
@@ -140,7 +149,43 @@ struct ChatView: View {
         .background(Talk.background)
         .ignoresSafeArea(.container, edges: panelOpen ? .bottom : [])
         .navigationBarTitleDisplayMode(.inline)
+        // The back gesture first ends editing (docs/chat.md "Pro Plattform"): the system back
+        // button is swapped for one that cancels, and a swipe from the edge does the same.
+        .navigationBarBackButtonHidden(editing != nil)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20).onEnded { g in
+                if editing != nil, g.startLocation.x < Self.edgeWidth, g.translation.width > 60,
+                   abs(g.translation.height) < g.translation.width {
+                    editing = nil
+                }
+            },
+            including: editing != nil ? .all : .subviews
+        )
+        .onChange(of: editedGone) { _, gone in if gone { editing = nil } }
+        .onChange(of: store.activeToken) { _, t in if t != token { editing = nil } }
+        .confirmationDialog(
+            "Nachricht löschen?",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { m in
+            Button("Löschen", role: .destructive) { store.deleteMessage(token, m.id) }
+            Button("Abbrechen", role: .cancel) {}
+        } message: { m in
+            Text(Self.deleteQuestion(m))
+        }
         .toolbar {
+            if editing != nil {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { editing = nil } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Talk.onSurface)
+                    }
+                    .accessibilityLabel("Zurück")
+                    .accessibilityIdentifier("edit-back")
+                }
+            }
             ToolbarItem(placement: .principal) {
                 // docs/connection.md "Chat": spinner beside the name (its place is kept, nothing
                 // moves), "Keine Verbindung" under it once offline.
@@ -272,7 +317,7 @@ struct ChatView: View {
             MessageMenuOverlay(
                 target: t,
                 showBar: canReact && Reactions.reactable(t.m),
-                actions: messageActions(t.m),
+                actions: messageActions(t.m, room: store.room(token)),
                 safe: MessageMenuWindow.shared.safeArea,
                 onReact: { store.setReaction(token, msg.id, $0) },
                 onClose: {
@@ -283,22 +328,63 @@ struct ChatView: View {
         )
     }
 
-    private func messageActions(_ m: UiMessage) -> [MenuAction] {
+    /// Strip at the left edge where a drag is the back gesture, not "swipe to reply".
+    static let edgeWidth: CGFloat = 24
+
+    /// Worked out when the menu opens (docs/chat.md "Bearbeiten und Löschen"): edit and delete
+    /// only for delivered messages, as the core's rights say; in the outbox "Löschen" discards.
+    private func messageActions(_ m: UiMessage, room: RoomView?) -> [MenuAction] {
         let msg = m.msg
+        let delivered = m.status == nil
+        let canChat = room?.canChat == true
+        let canEdit = delivered && msg.editable && canChat
+            && (msg.editUntil.map { Int64(Date().timeIntervalSince1970) < $0 } ?? true)
+        let canDelete = delivered && msg.deletable
+            && (msg.isOwn ? canChat : room?.canDeleteOthers == true)
         var list: [MenuAction] = []
         if m.status == .failed || m.status == .waiting {
             list.append(MenuAction(id: "retry", label: "Erneut senden", icon: "arrow.clockwise") { store.retry(msg) })
         }
-        if msg.kind == .text && m.status == nil {
+        if msg.kind == .text && delivered {
             list.append(MenuAction(id: "reply", label: "Antworten", icon: "arrowshape.turn.up.left") { replyTo = msg })
+        }
+        if canEdit {
+            list.append(MenuAction(id: "edit", label: "Bearbeiten", icon: "pencil") { startEdit(msg) })
         }
         if !msg.text.isEmpty && msg.kind != .deleted {
             list.append(MenuAction(id: "copy", label: "Kopieren", icon: "doc.on.doc") { UIPasteboard.general.string = msg.text })
         }
-        if m.status != nil {
+        if !delivered {
             list.append(MenuAction(id: "delete", label: "Löschen", icon: "trash", destructive: true) { store.discard(msg) })
+        } else if canDelete {
+            list.append(MenuAction(id: "delete", label: "Löschen", icon: "trash", destructive: true) { deleting = msg })
         }
         return list
+    }
+
+    private func startEdit(_ msg: MessageView) {
+        Task {
+            let source = await store.editSource(token, msg.id) ?? msg.text
+            editing = EditTarget(msg: msg, source: source)
+        }
+    }
+
+    /// On an error the mode stays open with the text, and the toast says why.
+    private func saveEdit(_ text: String) async {
+        guard let e = editing else { return }
+        if let error = await store.editMessage(token, e.msg.id, text) {
+            Toast.show(error)
+        } else if editing?.msg.id == e.msg.id {
+            editing = nil
+        }
+    }
+
+    static func deleteQuestion(_ m: MessageView) -> String {
+        var text = m.isOwn
+            ? "Sie wird für alle im Chat gelöscht."
+            : "Die Nachricht von \(m.author) wird für alle im Chat gelöscht."
+        if m.attachment != nil { text += " Die Datei selbst bleibt erhalten." }
+        return text
     }
 }
 

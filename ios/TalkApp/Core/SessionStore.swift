@@ -1186,6 +1186,31 @@ final class SessionStore {
         }
     }
 
+    // MARK: - Edit and delete (docs/chat.md "Bearbeiten und Löschen")
+
+    /// The text for the input field when editing (mentions as the server wants them back);
+    /// nil: start from `MessageView.text`.
+    func editSource(_ token: String, _ messageId: Int64) async -> String? {
+        await session?.editSource(token: token, messageId: messageId)
+    }
+
+    /// Saves the new text. The new version comes as `MessagesUpdated` before this returns;
+    /// the result is the error text to show, nil on success.
+    func editMessage(_ token: String, _ messageId: Int64, _ text: String) async -> String? {
+        guard let s = session else { return nil }
+        return await s.editMessage(token: token, messageId: messageId, text: text)
+    }
+
+    /// Deletes a message for everybody; the bubble follows via `MessagesUpdated`.
+    func deleteMessage(_ token: String, _ messageId: Int64) {
+        guard let s = session else { return }
+        Task {
+            if let error = await s.deleteMessage(token: token, messageId: messageId) {
+                Toast.show(error)
+            }
+        }
+    }
+
     /// Who reacted to a message (own first, then newest).
     func reactions(_ token: String, _ messageId: Int64) async throws -> [ReactionView] {
         guard let s = session else { throw CancellationError() }

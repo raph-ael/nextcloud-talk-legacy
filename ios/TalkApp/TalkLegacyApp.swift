@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         _ = CallController.shared
+        _ = Toast.shared
         VoipPush.shared.register()
         // APNs token (background pushes); the push itself needs no permission.
         application.registerForRemoteNotifications()

@@ -367,6 +367,8 @@ struct MessageList: UIViewRepresentable {
             guard let pan = g as? UIPanGestureRecognizer, let view else { return true }
             let v = pan.velocity(in: view)
             guard v.x > 0, abs(v.x) > abs(v.y) * 1.5 else { return false }
+            // A drag from the left edge is the back gesture (while editing: it ends editing).
+            guard pan.location(in: view).x - pan.translation(in: view).x > ChatView.edgeWidth else { return false }
             guard let (m, _) = message(at: pan.location(in: view)) else { return false }
             return replyable(m)
         }

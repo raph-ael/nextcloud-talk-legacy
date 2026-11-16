@@ -177,7 +177,21 @@ final class NotificationPermission {
 final class Toast {
     static let shared = Toast()
     private(set) var text: String?
+    /// Height of the keyboard, which lies above the toast's window: the notice goes above it
+    /// (an error while editing). Followed from the start (`AppDelegate`), as the window comes later.
+    private(set) var keyboard: CGFloat = 0
     @ObservationIgnored private var hide: Task<Void, Never>?
+    @ObservationIgnored private var observer: NSObjectProtocol?
+
+    private init() {
+        observer = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main
+        ) { n in
+            guard let frame = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let height = max(0, UIScreen.main.bounds.height - frame.minY)
+            MainActor.assumeIsolated { Toast.shared.keyboard = height }
+        }
+    }
 
     static func show(_ text: String) {
         shared.present(text)
@@ -222,20 +236,24 @@ struct ToastOverlay: View {
     let toast = Toast.shared
 
     var body: some View {
-        VStack {
-            Spacer()
-            if let text = toast.text {
-                Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.8), in: Capsule())
-                    .padding(.bottom, 90)
-                    .transition(.opacity)
-                    .accessibilityIdentifier("toast")
+        GeometryReader { geo in
+            VStack {
+                Spacer()
+                if let text = toast.text {
+                    Text(text)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.8), in: Capsule())
+                        .padding(.bottom, max(0, toast.keyboard - geo.safeAreaInsets.bottom) + 90)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("toast")
+                }
             }
+            .frame(maxWidth: .infinity)
         }
+        .ignoresSafeArea(.keyboard)
         .allowsHitTesting(false)
     }
 }
