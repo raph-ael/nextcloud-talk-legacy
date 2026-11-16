@@ -48,7 +48,6 @@ struct ChatView: View {
         }()
 
         VStack(spacing: 0) {
-            if !store.online { OfflineBanner() }
             RecordingBanners(notices: store.recordingNotices(for: token))
             MessageList(
                 messages: messages,
@@ -143,9 +142,25 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
+                // docs/connection.md "Chat": spinner beside the name (its place is kept, nothing
+                // moves), "Keine Verbindung" under it once offline.
+                let shown = store.connectionShown
                 let title = HStack(spacing: 10) {
                     Avatar(name: room?.name ?? "", size: 32, token: token, version: room?.avatarVersion ?? "")
-                    Text(room?.name ?? "").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 6) {
+                            Text(room?.name ?? "").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                            ConnectingSpinner()
+                                .opacity(shown == .connecting ? 1 : 0)
+                                .accessibilityHidden(shown != .connecting)
+                        }
+                        if shown == .offline {
+                            Text("Keine Verbindung")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Talk.muted)
+                                .lineLimit(1)
+                        }
+                    }
                 }
                 if let room, GroupInfoView.applies(room) {
                     // Groups: the header opens the group settings (docs/groups.md).

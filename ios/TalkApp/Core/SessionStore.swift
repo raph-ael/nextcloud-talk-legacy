@@ -70,7 +70,8 @@ final class AccountRuntime {
     fileprivate let bridge: EventBridge
     /// The last conversation list (inactive accounts: for the call screens).
     fileprivate(set) var rooms: [RoomView]
-    fileprivate(set) var online = true
+    /// docs/connection.md: a session starts as `connecting`, the event reports changes.
+    fileprivate(set) var connection: ConnectionState
     fileprivate var notifiedFailures = Set<String>()
     /// Recording notices already known; nil until the first `recordingsChanged` of a session
     /// (the starting point: banners, but no notifications).
@@ -85,6 +86,7 @@ final class AccountRuntime {
         self.bridge = bridge
         media = MediaCache(session: session)
         rooms = session.rooms()
+        connection = session.connectionState()
     }
 }
 
@@ -114,7 +116,11 @@ final class SessionStore {
     /// Observation skips equal assignments, so the sections read this instead.
     private(set) var roomsEvents = 0
     private(set) var chats: [String: ChatState] = [:]
-    private(set) var online = true
+    /// The active account's connection (docs/connection.md); error texts read `.offline`.
+    private(set) var connection: ConnectionState = .connecting
+    /// What the header shows: `connection` once it held 500 ms, `online` at once.
+    private(set) var connectionShown: ConnectionState = .online
+    @ObservationIgnored private var connectionDelay: Task<Void, Never>?
     private(set) var activeToken: String?
     private(set) var unreadLine: UnreadLine?
     /// The open chat's list shows its newest message; until then nothing is marked read
@@ -448,7 +454,8 @@ final class SessionStore {
             rooms = rt.session.rooms()
             roomsEvents &+= 1
             recordings = rt.session.recordingNotices()
-            online = rt.online
+            connectionShown = .online
+            setConnection(rt.connection)
             if !devRun { AccountList.active = id }
         }
         phase = .ready
@@ -622,7 +629,7 @@ final class SessionStore {
         groupInfoOpen = false
         participantsVersion = [:]
         leaving = []
-        online = true
+        setConnection(.connecting)
         if let next = accounts.first {
             activate(next.id)
         } else {
@@ -793,6 +800,21 @@ final class SessionStore {
         rooms.first { $0.token == token }
     }
 
+    /// docs/connection.md "Regeln für alle": a state shows once it held 500 ms; online hides
+    /// at once. While waiting the previous indicator stays (connecting → offline).
+    private func setConnection(_ state: ConnectionState) {
+        connection = state
+        connectionDelay?.cancel()
+        connectionDelay = nil
+        if state == .online { connectionShown = .online; return }
+        guard connectionShown != state else { return }
+        connectionDelay = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self, self.connection == state else { return }
+            self.connectionShown = state
+        }
+    }
+
     // MARK: - Core events
 
     /// Events of inactive accounts (docs/accounts.md "Im Hintergrund"): badge, calls,
@@ -807,9 +829,8 @@ final class SessionStore {
             updateAppBadge()
             if active { roomsChanged(rooms) }
         case .connection(let state):
-            let online = state != .offline
-            rt.online = online
-            if active { self.online = online }
+            rt.connection = state
+            if active { setConnection(state) }
         case .authFailed:
             Task { await expire(id) }
         case .callChanged(let call):

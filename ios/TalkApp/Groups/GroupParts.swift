@@ -129,7 +129,7 @@ extension View {
                 state.wrappedValue = .done(list)
             } catch {
                 guard !Task.isCancelled else { return }
-                state.wrappedValue = .failed(store.online ? "Konnte nicht geladen werden" : "Keine Verbindung")
+                state.wrappedValue = .failed(store.connection == .offline ? "Keine Verbindung" : "Konnte nicht geladen werden")
             }
         }
     }

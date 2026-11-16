@@ -29,8 +29,6 @@ enum Talk {
     static let groupedBackground = dynamic(light: 0xF1F1F3, dark: 0x121212)
     static let groupedRow = dynamic(light: 0xFFFFFF, dark: 0x232325)
     static let callDot = Color(hex: 0x2FB35A)
-    static let offlineText = Color(hex: 0x6A5000)
-    static let offlineBackground = Color(hex: 0xFFF3CD)
 
     static let uiBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x121212) : .white }
 
@@ -56,17 +54,14 @@ extension UIColor {
     }
 }
 
-/// "Keine Verbindung" strip above lists.
-struct OfflineBanner: View {
+/// docs/connection.md: the small spinner in the header while connecting, muted.
+struct ConnectingSpinner: View {
     var body: some View {
-        Text("Keine Verbindung – wird erneut versucht …")
-            .font(.system(size: 13))
-            .foregroundStyle(Talk.offlineText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .background(Talk.offlineBackground, in: RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+        ProgressView()
+            .controlSize(.mini)
+            .tint(Talk.muted)
+            .frame(width: 16, height: 16)
+            .accessibilityLabel("Verbinde …")
     }
 }
 

@@ -20,11 +20,6 @@ struct RoomListView: View {
         // Relative times ("5 Min.") need a clock.
         TimelineView(.periodic(from: .now, by: 30)) { context in
             List {
-                if !store.online {
-                    OfflineBanner()
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                }
                 if !store.recordings.isEmpty {
                     RecordingBanners(notices: store.recordings, showRoom: true)
                         .listRowInsets(EdgeInsets())
@@ -43,10 +38,10 @@ struct RoomListView: View {
                     }
                 }
                 if sections.isEmpty {
-                    Text(query.isEmpty ? "Noch keine Chats" : "Keine Treffer")
-                        .foregroundStyle(Talk.muted)
-                        .frame(maxWidth: .infinity)
+                    emptyList
+                        .frame(maxWidth: .infinity, minHeight: 24)
                         .padding(32)
+                        .listRowBackground(Talk.background)
                         .listRowSeparator(.hidden)
                 }
             }
@@ -59,6 +54,11 @@ struct RoomListView: View {
         .searchable(text: $query, prompt: "Suchen")
         .navigationTitle("Chats")
         .toolbar {
+            // docs/connection.md: the state as a line under the large title, always there so
+            // the title does not move. An empty list still loading has its own spinner instead.
+            ToolbarItem(placement: connectionPlacement) {
+                connectionIndicator(hidden: sections.isEmpty && query.isEmpty && store.connection == .connecting)
+            }
             ToolbarItem(placement: .topBarLeading) { ownAvatar }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { newMessage = true } label: { Image(systemName: "square.and.pencil") }
@@ -89,6 +89,49 @@ struct RoomListView: View {
             }
             .disabled(categoryName.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+    }
+
+    /// docs/connection.md "Leere Chatliste": loading (spinner after 500 ms), empty, or nothing
+    /// while offline (the header says why).
+    @ViewBuilder private var emptyList: some View {
+        if !query.isEmpty {
+            Text("Keine Treffer").foregroundStyle(Talk.muted)
+        } else if store.connection == .online {
+            Text("Noch keine Chats").foregroundStyle(Talk.muted)
+        } else if store.connection == .connecting && store.connectionShown == .connecting {
+            ProgressView()
+                .tint(Talk.muted)
+                .accessibilityLabel("Verbinde …")
+        }
+    }
+
+    /// Under the large title from iOS 26 on (there a `.principal` item is not shown with it).
+    private var connectionPlacement: ToolbarItemPlacement {
+        if #available(iOS 26.0, *) { return .largeSubtitle }
+        return .principal
+    }
+
+    private var underLargeTitle: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
+    /// Spinner while connecting, with "Keine Verbindung" once offline.
+    private func connectionIndicator(hidden: Bool) -> some View {
+        HStack(spacing: 6) {
+            if store.connectionShown != .online && !hidden {
+                ConnectingSpinner()
+                if store.connectionShown == .offline {
+                    Text("Keine Verbindung")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Talk.muted)
+                }
+            }
+        }
+        .frame(maxWidth: underLargeTitle ? .infinity : nil, minHeight: 16, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityHidden(store.connectionShown == .online || hidden)
+        .accessibilityIdentifier("connection-state")
     }
 
     /// Own avatar (docs/settings.md, docs/accounts.md): one account opens the settings; from

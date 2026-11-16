@@ -210,7 +210,7 @@ struct GroupInfoView: View {
                     .listRowBackground(Talk.groupedRow)
             }
         } else if failed {
-            LoadFailed(text: store.online ? "Konnte nicht geladen werden" : "Keine Verbindung") {
+            LoadFailed(text: store.connection == .offline ? "Keine Verbindung" : "Konnte nicht geladen werden") {
                 failed = false
                 retry += 1
             }
@@ -291,7 +291,7 @@ struct GroupInfoView: View {
             do {
                 if try await store.leaveNeedsModerator(token) { sheet = .newModerator } else { confirmLeave = true }
             } catch {
-                Toast.show(store.online ? "Hat nicht geklappt" : "Keine Verbindung")
+                Toast.show(store.connection == .offline ? "Keine Verbindung" : "Hat nicht geklappt")
             }
             busy = false
         }
