@@ -131,6 +131,7 @@ Aus dem Push allein geht das nicht: Er trägt nur den gekürzten Text und den Ch
 - iOS entscheidet selbst, ob es die App weckt: nicht, wenn sie aus der Übersicht gewischt wurde, und bei vielen Pushes gedrosselt. Dann fehlt die Nachricht im ersten Bild und kommt nach einem Abruf auf frischer Verbindung.
 - Tippt jemand schneller, als der Abruf dauert, gilt dasselbe.
 - Ohne Netz beim Push bleibt es beim alten Stand.
+- Desktop: War der Chat in dieser Sitzung schon einmal offen, zeigt das Fenster beim Öffnen ein Bild lang (14 bis 33 ms) seinen eigenen alten Stand, dann den Zwischenspeicher. Das gilt für jedes Öffnen und bleibt so.
 
 **Gemessen vor der Änderung** (0.6.0, Zeit vom Antippen bis die Nachricht zu sehen ist; der Chat selbst steht nach etwa 0,6 s):
 
