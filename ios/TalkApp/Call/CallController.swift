@@ -709,6 +709,14 @@ final class CallController: NSObject {
                         } ?? ""
                         let shown = group || caller.isEmpty ? (room?.name ?? caller) : caller
                         Notifications.missedCall(SessionStore.shared.origin(rt.account.id), token: token, name: shown)
+                        // The core may ring for it already (notify_push) or would on the push:
+                        // it learns of the push and ends the call here as missed, before iOS
+                        // suspends the app (its own clock would run out only on the next wake).
+                        // Its `CallMissed` falls within the ten minutes of the notification above.
+                        let done = self.holdBackground(name: "miss")
+                        if let message { _ = await rt.session.handlePush(message: message, callId: nil) }
+                        await rt.session.missCallAndWait(token: token, timeoutMs: 2_000)
+                        done()
                     }
                     return
                 }
