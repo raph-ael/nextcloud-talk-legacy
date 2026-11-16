@@ -420,8 +420,12 @@ export async function boot(): Promise<void> {
   window.talk.onEvent(handleEvent)
   // Waiting messages go out as soon as the network is back.
   window.addEventListener('online', () => window.talk.networkChanged())
-  window.addEventListener('offline', () => window.talk.networkChanged())
-  window.addEventListener('focus', refreshRoomsThrottled)
+  // No network at all (docs/connection.md): shows at once instead of after a call that
+  // hangs. A call and the outbox get their probe as before.
+  window.addEventListener('offline', () => {
+    window.talk.networkLost()
+    window.talk.networkChanged()
+  })
   const [shown, accounts] = await Promise.all([window.talk.account(), window.talk.accounts()])
   if (state.accounts.length === 0) set({ accounts: accounts.accounts })
   // An event may have been quicker (a switch, the start finishing).
@@ -511,15 +515,6 @@ export async function loadOlder(token: string): Promise<void> {
   } catch {
     setChat(token, (c) => ({ ...c, loadingOlder: false }))
   }
-}
-
-let lastRefresh = 0
-
-/** Desktop counterpart of pull-to-refresh: re-sync the list when the window gets focus. */
-function refreshRoomsThrottled(): void {
-  if (state.session !== 'ready' || Date.now() - lastRefresh < 30_000) return
-  lastRefresh = Date.now()
-  void window.talk.refreshRooms()
 }
 
 export function toReply(m: UiMessage | null): ReplyPreview | null {

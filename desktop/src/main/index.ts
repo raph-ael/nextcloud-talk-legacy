@@ -1346,7 +1346,8 @@ function createWindow(): void {
   win.on('show', showTaskbarCount)
   win.on('focus', () => {
     win?.flashFrame(false)
-    // Back in front: a retry that is waiting runs now (docs/connection.md).
+    // Back in front (docs/connection.md): every account fetches its list, and a retry
+    // that is waiting runs now. The core folds a burst into one request.
     runtimes.forEach((r) => r.session.networkChanged())
   })
   // However it was entered (call view, green button, F11, menu): the call view shows it.
@@ -1462,6 +1463,7 @@ function registerIpc(): void {
   handle('talk:discard', (r, referenceId: string) => r?.session.discard(referenceId))
   // Every account's outbox waits for the network.
   ipcMain.on('talk:networkChanged', () => runtimes.forEach((r) => r.session.networkChanged()))
+  ipcMain.on('talk:networkLost', () => runtimes.forEach((r) => r.session.networkLost()))
   handle('talk:stageData', (r, name: string, mime: string, data: Uint8Array, width: number, height: number) =>
     stageData(need(r), name, mime, data, width, height),
   )

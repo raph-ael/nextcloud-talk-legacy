@@ -546,6 +546,8 @@ export interface TalkApi {
   retrySend(referenceId: string): Promise<void>
   discard(referenceId: string): Promise<void>
   networkChanged(): void
+  /** The system has no network at all (docs/connection.md). */
+  networkLost(): void
   /** Writes bytes (a prepared image, pasted data) into the staging folder. */
   stageData(name: string, mime: string, data: Uint8Array, width: number, height: number): Promise<StagedFile>
   /** Copies a local file into the staging folder (the original stays untouched). */

@@ -44,6 +44,7 @@ const api: TalkApi = {
   retrySend: (referenceId) => call('talk:retrySend', referenceId),
   discard: (referenceId) => call('talk:discard', referenceId),
   networkChanged: () => ipcRenderer.send('talk:networkChanged'),
+  networkLost: () => ipcRenderer.send('talk:networkLost'),
   stageData: (name, mime, data, width, height) => call('talk:stageData', name, mime, data, width, height),
   stagePath: (path, name, mime) => call('talk:stagePath', path, name, mime),
   unstage: (path) => call('talk:unstage', path),
