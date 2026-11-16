@@ -190,15 +190,19 @@ final class SessionStore {
             }
         }
         // Network back or switched (Wi-Fi ↔ cellular): retry waiting messages right away,
-        // reconnect the call's signaling and restart ICE.
+        // reconnect the call's signaling and restart ICE. No network at all: the header says
+        // so at once (docs/connection.md), calls and the outbox stay untouched.
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let ok = path.status == .satisfied
+            let lost = path.status == .unsatisfied
             let key = path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
             Task { @MainActor in
                 guard let self else { return }
                 let switched = ok && self.lastPathSatisfied && key != self.lastPathKey && !self.lastPathKey.isEmpty
                 if (ok && !self.lastPathSatisfied) || switched {
                     for rt in self.allRuntimes { rt.session.networkChanged() }
+                } else if lost {
+                    for rt in self.allRuntimes { rt.session.networkLost() }
                 }
                 self.lastPathSatisfied = ok
                 if ok { self.lastPathKey = key }
