@@ -122,7 +122,10 @@ export function App() {
         !getState().groupInfo &&
         !getState().categories &&
         !(document.activeElement instanceof HTMLInputElement) &&
-        !(document.activeElement instanceof HTMLTextAreaElement)
+        !(document.activeElement instanceof HTMLTextAreaElement) &&
+        // Not out of a dialog or menu, and Space presses the focused button.
+        !document.querySelector('.modal, .menu-layer, .viewer') &&
+        !(e.key === ' ' && document.activeElement instanceof HTMLButtonElement)
       ) {
         composer.current.focus()
       }
