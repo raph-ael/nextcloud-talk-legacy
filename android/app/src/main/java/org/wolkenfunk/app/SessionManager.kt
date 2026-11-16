@@ -260,8 +260,17 @@ class SessionManager(private val context: Context) {
         val first = store.activeId()?.let { runtimes[it] } ?: runtimes.values.firstOrNull()
         if (first == null) _state.update { it.copy(session = SessionState.LOGGED_OUT) } else activate(first)
         // Network back: retry waiting messages right away instead of after the backoff.
-        context.getSystemService(ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        connectivity?.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
+                // No network at all (docs/connection.md): the core says so at once instead of
+                // after the next failed request. A change to another network has a successor
+                // and arrives as onAvailable.
+                override fun onLost(network: Network) {
+                    if (connectivity.activeNetwork != null) return
+                    for (rt in runtimes.values) rt.session.networkLost()
+                }
+
                 override fun onAvailable(network: Network) {
                     for (rt in runtimes.values) rt.session.networkChanged()
                     // Registration failed offline: try again now.
