@@ -657,10 +657,12 @@ class SessionManager(private val context: Context) {
                 s.handlePush(message, null)
             }
             // First the notification, then the messages themselves, so the chat shows them in
-            // its first frame (docs/notifications.md). The service's window is the limit.
+            // its first frame (docs/notifications.md). The wait is short: FCM hands over one
+            // push after the other, and a call may be next. The fetching itself goes on.
             is PushMessage.Chat -> {
                 showPushed(rt, message)
-                s.handlePush(message, null)
+                val fetch = scope.launch { runCatching { s.handlePush(message, null) } }
+                withTimeoutOrNull(CHAT_FETCH_WAIT_MS) { fetch.join() }
             }
             is PushMessage.Other -> MessageNotifications.showOther(context, rt.id, label(rt), message.subject)
         }
@@ -1658,6 +1660,8 @@ class SessionManager(private val context: Context) {
         const val PREVIEW_CACHE_BYTES = 48 * 1024 * 1024
         /** How long a call push waits for the ringing to start. */
         const val RING_WAIT_MS = 3_000L
+        /** How long a chat push keeps the push service waiting for the messages (usually under 0.5 s). */
+        const val CHAT_FETCH_WAIT_MS = 4_000L
         /** A notification waits this long for the chat's picture (the core's cache answers at once). */
         const val AVATAR_WAIT_MS = 1_000L
         /** A broadcast receiver has about ten seconds. */

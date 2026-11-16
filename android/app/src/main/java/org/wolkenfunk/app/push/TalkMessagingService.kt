@@ -29,8 +29,8 @@ class TalkMessagingService : FirebaseMessagingService() {
             Log.w(Push.TAG, "push deprioritized (${message.originalPriority} → ${message.priority})")
         }
         // Runs on a background thread; stay here until the call rings (foreground service
-        // started) or the new messages of the chat are fetched (docs/notifications.md), so the
-        // process is not frozen in between. The notification is up before the fetching starts.
+        // started) or the new messages of the chat are fetched (docs/notifications.md, at most
+        // 4 s), so the process is not frozen in between. The notification is up before that.
         runBlocking {
             withTimeoutOrNull(HANDLE_TIMEOUT_MS) { sessions.handlePush(subject) }
                 ?: Log.w(Push.TAG, "push not handled in time")
@@ -44,10 +44,7 @@ class TalkMessagingService : FirebaseMessagingService() {
     }
 
     private companion object {
-        /**
-         * FCM allows about 10 s (high priority) before the process may be frozen again. This
-         * also ends the fetching of a chat's messages, which the core gives up after 8 s.
-         */
+        /** FCM allows about 10 s (high priority) before the process may be frozen again. */
         const val HANDLE_TIMEOUT_MS = 9_000L
     }
 }
