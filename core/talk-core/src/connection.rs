@@ -71,8 +71,13 @@ impl Engine {
         self.connection_state() == ConnectionState::Offline
     }
 
-    /// A server call was answered.
+    /// A server call was answered. Without a chat list that is not `online` yet: an empty
+    /// list means "still loading" to the platform until the list is there, so the state
+    /// waits for it (the retries and the regular refresh fetch it).
     pub(crate) fn reached(&self) {
+        if !self.list_known() {
+            return;
+        }
         {
             let mut c = self.conn.lock().unwrap();
             c.failing = false;

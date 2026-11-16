@@ -23,7 +23,8 @@ Eine Sitzung beginnt als `connecting`. Dafür kommt kein Ereignis: Die Plattform
   - Ist gerade nichts gescheitert, holt der Kern die Chatliste trotzdem sofort. Die Plattform braucht dafür keinen eigenen Abruf.
 - **`networkLost()`** heißt: Das Gerät hat gar kein Netz. Der Kern meldet sofort `connecting` und versucht es wie nach einem gescheiterten Abruf. Antwortet 3 s lang nichts, wird daraus `offline`. Ohne diesen Aufruf fällt der Ausfall erst auf, wenn ein Abruf scheitert, und das kann auf einer alten Verbindung bis zu 30 s dauern.
 - Eine Fehlerantwort des Servers (500, Wartung) ändert den Zustand nicht. Ausnahme ist der Start: Liefert er nur Fehler, zählt das wie „keine Antwort“.
-- Beim Start trägt der Kern erst die Chatliste ein (`roomsChanged`) und meldet dann `online`. Kommt in den ersten 8 s gar keine Antwort, meldet er `offline`.
+- Der Kern meldet `online` nie ohne Chatliste: Er trägt erst die Liste ein (`roomsChanged`) und meldet dann `online`, beim Start wie bei jedem Neuversuch. Antwortet ein anderer Abruf früher, bleibt der Zustand stehen, bis die Liste da ist. Eine leere Liste bei `online` heißt also wirklich „keine Chats“.
+- Kommt in den ersten 8 s nach dem Start gar keine Antwort, meldet er `offline`.
 
 ### Was die Plattform beisteuert
 - `networkChanged()` bei jedem Netzwechsel und immer, wenn die App in den Vordergrund kommt. Nach dem Aufwachen sind offene Verbindungen oft tot; der Abruf zeigt das sofort, und der Neuversuch läuft, bevor jemand etwas sieht.

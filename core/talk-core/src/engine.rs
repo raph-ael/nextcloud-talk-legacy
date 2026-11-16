@@ -424,8 +424,9 @@ impl Engine {
         let first = rooms.map(|batch| self.apply_rooms(batch, true));
         self.track(&user);
         self.track(&first);
-        if user.is_err() && first.is_err() {
-            // The server answered with errors only: not reachable for the user either.
+        if first.is_err() && (user.is_err() || !self.list_known()) {
+            // The server answered with errors only, or there is no list to show: not
+            // reachable for the user either.
             self.unreachable();
         }
 
@@ -729,9 +730,20 @@ impl Engine {
         } else {
             self.client.rooms(since, true).await
         };
-        let batch = self.guard(batch)?;
+        let batch = match batch {
+            Ok(batch) => batch,
+            Err(e) => return self.guard(Err(e)),
+        };
+        // The list first, then the connection state, as at the start (docs/connection.md).
         self.apply_rooms(batch, since.is_none());
+        self.reached();
         Ok(())
+    }
+
+    /// The chat list of this account is there: from the cache or from the server.
+    pub(crate) fn list_known(&self) -> bool {
+        let st = self.state.lock().unwrap();
+        st.last_full.is_some() || !st.rooms.is_empty()
     }
 
     fn apply_rooms(&self, batch: crate::client::RoomsBatch, full: bool) {

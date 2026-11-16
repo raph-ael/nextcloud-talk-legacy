@@ -651,10 +651,18 @@ async fn a_start_without_the_server() {
     assert_eq!(connections(&sink), [Offline]);
 
     server.start().await;
+    // Another call is answered first: no `online` without the list.
+    engine.search_users("le", None).await.unwrap();
+    assert!(engine.connection_state() != Online || !engine.rooms().is_empty());
     engine.network_changed();
     until("online", || engine.connection_state() == Online).await;
     assert!(!engine.rooms().is_empty());
     assert_eq!(connections(&sink), [Offline, Online]);
+    let events = sink.0.lock().unwrap();
+    let rooms = events.iter().position(|e| matches!(e, Event::RoomsChanged { .. })).unwrap();
+    let online = events.iter().position(|e| matches!(e, Event::Connection { state: Online })).unwrap();
+    assert!(rooms < online, "rooms before online");
+    drop(events);
     engine.shutdown();
 }
 
