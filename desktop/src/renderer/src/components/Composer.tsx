@@ -12,6 +12,8 @@ import {
 } from 'react'
 import { withAttachment } from '@shared/core'
 import { sendFiles, sendMessage, type UiMessage } from '../store'
+import { toast } from '../call/store'
+import type { Editing } from './Chat'
 import { dropDraft, releaseDraft, stage, type Draft } from '../media'
 import {
   cancelRecording,
@@ -45,6 +47,11 @@ interface Props {
   token: string
   replyTo: UiMessage | null
   onCancelReply: () => void
+  /** The message being edited (docs/chat.md „Bearbeiten“): its text is in the field, not the draft. */
+  editing: Editing | null
+  onEndEdit: () => void
+  /** Starts editing the last own message that allows it; `false` when there is none. */
+  onEditLast: () => boolean
   onSent: () => void
   /** Set by the composer: lets the chat hand over dropped files. */
   addFilesRef: MutableRefObject<((files: File[]) => void) | null>
@@ -56,7 +63,7 @@ interface Props {
  * the text becomes their caption.
  */
 export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer(
-  { token, replyTo, onCancelReply, onSent, addFilesRef },
+  { token, replyTo, onCancelReply, editing, onEndEdit, onEditLast, onSent, addFilesRef },
   ref,
 ) {
   // The chat remounts for another account (its key), so the key holds for this composer.
@@ -66,6 +73,9 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   const [staging, setStaging] = useState(0)
   const [error, setError] = useState('')
   const [emoji, setEmoji] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
   const input = useRef<HTMLTextAreaElement | null>(null)
   const picker = useRef<HTMLInputElement>(null)
   const emojiButton = useRef<HTMLButtonElement>(null)
@@ -95,12 +105,49 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
       } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'y') {
         e.preventDefault()
         if (recording) void sendRecording(replyTo).then(onSent)
-        else if (!voiceDraft && !text.trim() && files.length === 0) void startRecording(token)
+        else if (!editing && !voiceDraft && !text.trim() && files.length === 0) void startRecording(token)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [recording, voiceDraft, text, files.length, token, replyTo, onSent])
+  }, [recording, voiceDraft, text, files.length, token, replyTo, onSent, editing])
+
+  // Edit mode: the field takes the message's text with the caret at its end. Draft, staged
+  // files, a voice draft and a started reply wait and are back afterwards.
+  useEffect(() => {
+    setSaving(false)
+    if (!editing) {
+      setText(textDrafts.get(key) ?? '')
+      input.current?.focus()
+      return
+    }
+    void stopToDraft()
+    setEmoji(false)
+    setText(editing.source)
+    const end = editing.source.length
+    requestAnimationFrame(() => {
+      const el = input.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(end, end)
+      el.scrollTop = el.scrollHeight
+    })
+  }, [editing])
+
+  // Esc also cancels when the focus is nowhere (after a click into the timeline); menus,
+  // dialogs and the image viewer come first.
+  useEffect(() => {
+    if (!editing) return
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key !== 'Escape' || document.activeElement !== document.body) return
+      if (document.querySelector('.modal, .menu-layer, .viewer')) return
+      e.preventDefault()
+      e.stopPropagation()
+      onEndEdit()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [editing, onEndEdit])
   useEffect(() => {
     if (replyTo) input.current?.focus()
   }, [replyTo])
@@ -117,6 +164,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
 
   function updateText(v: string) {
     setText(v)
+    // The edited text never becomes the draft.
+    if (editing) return
     if (v) textDrafts.set(key, v)
     else textDrafts.delete(key)
   }
@@ -146,7 +195,9 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     }
     input.current?.focus()
   }
-  addFilesRef.current = (f) => void addFiles(f)
+  addFilesRef.current = (f) => {
+    if (!editingRef.current) void addFiles(f)
+  }
 
   function removeFile(d: Draft) {
     dropDraft(d)
@@ -175,19 +226,50 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     onSent()
   }
 
+  // Off while the text is empty or the same as before (both without whitespace at the edges).
+  const canSave = !!editing && !saving && text.trim() !== '' && text.trim() !== editing.source.trim()
+
+  async function save() {
+    if (!editing || !canSave) return
+    setSaving(true)
+    const error = await window.talk.editMessage(token, editing.msg.id, text.trim()).catch(() => 'Nachricht nicht geändert')
+    // Another message is being edited by now: its mode is not ours to end.
+    if (editingRef.current !== editing) return
+    setSaving(false)
+    if (error) {
+      // The mode stays open with the text; the new version comes with `messagesUpdated`.
+      toast(error)
+      input.current?.focus()
+    } else onEndEdit()
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      submit()
+      if (editing) void save()
+      else submit()
     } else if (e.key === 'Escape') {
       if (emoji) setEmoji(false)
+      else if (editing) onEndEdit()
       else if (replyTo) onCancelReply()
+    } else if (
+      e.key === 'ArrowUp' &&
+      !e.shiftKey &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !editing &&
+      text === '' &&
+      files.length === 0 &&
+      staging === 0
+    ) {
+      if (onEditLast()) e.preventDefault()
     }
   }
 
   function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
     const pasted = [...e.clipboardData.files]
-    if (pasted.length === 0) return
+    if (pasted.length === 0 || editing) return
     e.preventDefault()
     void addFiles(pasted)
   }
@@ -205,7 +287,25 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
 
   return (
     <div className="composer">
-      {replyTo && (
+      {editing ? (
+        <div className="reply-bar edit-bar" role="group" aria-label="Nachricht bearbeiten">
+          <div className="quote">
+            <div className="quote-author">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M3 17.3V21h3.7L17.8 9.9l-3.7-3.7L3 17.3zM20.7 7a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.7 3.7L20.7 7z"
+                />
+              </svg>
+              Nachricht bearbeiten
+            </div>
+            <div className="quote-text">{editing.msg.text.trim() || editing.msg.attachment?.name || ''}</div>
+          </div>
+          <button className="icon-button" aria-label="Bearbeiten abbrechen" title="Bearbeiten abbrechen" onClick={onEndEdit}>
+            <CloseIcon />
+          </button>
+        </div>
+      ) : replyTo && (
         <div className="reply-bar">
           <div className={`quote${replyTo.isOwn ? ' own' : ''}`}>
             <div className="quote-author">{replyTo.isOwn ? 'Du' : replyTo.author}</div>
@@ -216,7 +316,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
           </button>
         </div>
       )}
-      {(files.length > 0 || staging > 0) && (
+      {!editing && (files.length > 0 || staging > 0) && (
         <div className="attachment-rail">
           {files.map((d) => (
             <div key={d.key} className="staged" title={d.file.name}>
@@ -241,7 +341,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
         </div>
       )}
       {(error || notice) && <div className="composer-error">{error || notice}</div>}
-      {recording ? (
+      {recording && !editing ? (
         <RecordingBar
           rec={recording}
           onCancel={() => void cancelRecording()}
@@ -250,7 +350,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
             onCancelReply()
           }}
         />
-      ) : voiceDraft ? (
+      ) : voiceDraft && !editing ? (
         <DraftBar
           draft={voiceDraft}
           onDiscard={() => void discardDraft(token)}
@@ -290,12 +390,14 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
           }}
           className="composer-input"
           rows={1}
-          placeholder={files.length ? 'Bildunterschrift hinzufügen' : 'Nachricht'}
+          placeholder={files.length && !editing ? 'Bildunterschrift hinzufügen' : 'Nachricht'}
           value={text}
+          readOnly={saving}
           onChange={(e) => updateText(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
+        {!editing && (
         <div className="composer-cell">
           <button className="icon-button" aria-label="Datei anhängen" title="Datei anhängen" onClick={() => picker.current?.click()}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
@@ -314,7 +416,29 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
             }}
           />
         </div>
-        {canSend ? (
+        )}
+        {editing ? (
+          <div className="composer-cell">
+            <button
+              className="send"
+              aria-label="Änderung speichern"
+              title="Änderung speichern"
+              disabled={!canSave}
+              onClick={() => void save()}
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path
+                  d="M5 12.5l4.5 4.5L19 7.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        ) : canSend ? (
           <div className="composer-cell">
             <button className="send" aria-label="Senden" title="Senden" onClick={submit}>
               <svg viewBox="0 0 24 24" width="20" height="20">

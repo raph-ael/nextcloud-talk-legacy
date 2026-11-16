@@ -21,10 +21,12 @@ import { Composer } from './Composer'
 import { VoiceMessage } from './Voice'
 import { isAudioAttachment } from '../voice'
 import { ImageViewer } from './ImageViewer'
+import { ConfirmDialog } from './Modal'
 import { MessageMenu, type MenuItem } from './MessageMenu'
 import { ConnectingSpinner } from './Sidebar'
 import { react, reactable, ReactionBar, ReactionPills, ReactionPopover, WhoReacted } from './Reactions'
 import { CallButton } from '../call/CallScreen'
+import { toast } from '../call/store'
 import { RecordingBanners } from '../call/RecordingBanners'
 
 /** Floating „Zum Ende springen“ (docs/chat.md); always mounted so it can fade in and out. */
@@ -103,9 +105,33 @@ function ChatTitle({ room }: { room: RoomView }) {
 /** Messages of the same author within this window form one visual group. */
 const GROUP_WINDOW_S = 3 * 60
 
+// docs/chat.md „Bearbeiten und Löschen“: what goes with a message, computed when the menu opens.
+function canEdit(room: RoomView, m: UiMessage): boolean {
+  return !m.status && m.editable && room.canChat && (m.editUntil == null || Date.now() / 1000 < m.editUntil)
+}
+function canDelete(room: RoomView, m: UiMessage): boolean {
+  return !m.status && m.deletable && (m.isOwn ? room.canChat : room.canDeleteOthers)
+}
+
+function deleteText(m: UiMessage): string {
+  const first = m.isOwn
+    ? 'Sie wird für alle im Chat gelöscht.'
+    : `Die Nachricht von ${m.author} wird für alle im Chat gelöscht.`
+  return m.attachment ? `${first} Die Datei selbst bleibt erhalten.` : first
+}
+
+/** A message being edited, with the text for the input field (`editSource`). */
+export interface Editing {
+  msg: UiMessage
+  source: string
+}
+
 export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function Chat({ room }, composerRef) {
   const chat = useStore((s) => s.chats[room.token])
   const [replyTo, setReplyTo] = useState<UiMessage | null>(null)
+  const [editing, setEditing] = useState<Editing | null>(null)
+  const [deleting, setDeleting] = useState<UiMessage | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const [menu, setMenu] = useState<{ msg: UiMessage; x: number; y: number } | null>(null)
   const [viewer, setViewer] = useState<UiMessage | null>(null)
   const [reacting, setReacting] = useState<{
@@ -131,6 +157,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const pagesLoaded = useRef(0)
   const ownScroll = useRef(false)
   const lastHeight = useRef(0)
+  const viewHeight = useRef(0)
 
   const isGroup = room.roomType !== 1 && room.roomType !== 6
   const messages = chat?.messages ?? []
@@ -147,6 +174,46 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const unreadCount = Math.max(unreadLine?.base ?? 0, counting.length)
 
   useEffect(() => setReplyTo(null), [room.token])
+
+  // Editing ends when the message was deleted meanwhile (leaving the chat unmounts it).
+  const editedKind = editing ? messages.find((m) => m.id === editing.msg.id)?.kind : undefined
+  useEffect(() => {
+    if (editedKind === 'deleted') setEditing(null)
+  }, [editedKind])
+
+  const startEdit = useCallback(
+    async (m: UiMessage) => {
+      const source = await window.talk.editSource(room.token, m.id).catch(() => null)
+      setEditing({ msg: m, source: source ?? m.text })
+    },
+    [room.token],
+  )
+  const endEdit = useCallback(() => setEditing(null), [])
+  // A reply started while editing ends the editing: only one of the two bars shows.
+  const reply = useCallback((m: UiMessage) => {
+    setEditing(null)
+    setReplyTo(m)
+  }, [])
+
+  /** Arrow up in the empty field: the last own message that can still be edited. */
+  function editLast(): boolean {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.isOwn && canEdit(room, m)) {
+        void startEdit(m)
+        return true
+      }
+    }
+    return false
+  }
+
+  async function confirmDelete(m: UiMessage) {
+    setDeleteBusy(true)
+    const error = await window.talk.deleteMessage(room.token, m.id).catch(() => 'Nachricht nicht gelöscht')
+    setDeleteBusy(false)
+    setDeleting(null)
+    if (error) toast(error)
+  }
 
   function updateAtBottom(value: boolean) {
     atBottomRef.current = value
@@ -217,7 +284,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   // The scroller is column-reverse: scrollTop 0 is the bottom, negative values go up.
   function onScroll() {
     const el = scroller.current
-    if (!el) return
+    if (!el || keepEnd(el)) return
     setReacting(null)
     const bottom = el.scrollTop > -40
     updateAtBottom(bottom)
@@ -230,6 +297,25 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     else if (!grew || bottom) showDatePill(el, bottom)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
   }
+
+  // The end stays the end when the input area grows (reply or edit bar, a longer text): the
+  // browser would keep the visible messages in place and hide the last one behind the bar.
+  // Its shift comes as a scroll event before or after the resize, so both ask here.
+  function keepEnd(el: HTMLElement): boolean {
+    const shrunk = el.clientHeight < viewHeight.current
+    viewHeight.current = el.clientHeight
+    if (!shrunk || !placed.current || !atBottomRef.current || el.scrollTop >= 0) return false
+    ownScroll.current = true
+    el.scrollTop = 0
+    return true
+  }
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const observer = new ResizeObserver(() => keepEnd(el))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   // Fill the viewport when the first page is shorter than the window.
   useLayoutEffect(() => {
@@ -284,17 +370,19 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
       return items
     }
     if (m.kind === 'deleted') return items
-    if (!room.readOnly) items.push({ label: 'Antworten', onSelect: () => setReplyTo(m) })
+    if (!room.readOnly) items.push({ label: 'Antworten', onSelect: () => reply(m) })
+    if (canEdit(room, m)) items.push({ label: 'Bearbeiten', onSelect: () => void startEdit(m) })
     if (m.text) items.push({ label: 'Text kopieren', onSelect: () => void navigator.clipboard.writeText(m.text) })
     if (m.attachment?.link) {
       if (isImageAttachment(m.attachment)) items.push({ label: 'Bild öffnen', onSelect: () => setViewer(m) })
       items.push({ label: 'Im Browser öffnen', onSelect: () => window.open(m.attachment!.link, '_blank') })
     }
+    if (canDelete(room, m)) items.push({ label: 'Löschen', onSelect: () => setDeleting(m), danger: true })
     return items
   }
 
   function isFileDrag(e: DragEvent) {
-    return !room.readOnly && e.dataTransfer.types.includes('Files')
+    return !room.readOnly && !editing && e.dataTransfer.types.includes('Files')
   }
 
   const lastCommonRead = Math.max(chat?.lastCommonRead ?? 0, room.lastCommonReadMessage)
@@ -357,7 +445,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 canReply={!room.readOnly}
                 canReact={room.canReact}
                 token={room.token}
-                onReply={setReplyTo}
+                onReply={reply}
                 onReact={openReacting}
                 onWhoReacted={openWhoReacted}
                 onMenu={openMenu}
@@ -380,6 +468,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           ref={composerRef}
           token={room.token}
           replyTo={replyTo}
+          editing={editing}
+          onEndEdit={endEdit}
+          onEditLast={editLast}
           addFilesRef={addFiles}
           onCancelReply={() => setReplyTo(null)}
           onSent={() => {
@@ -412,6 +503,17 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           toggle={reacting.toggle}
           startFull={reacting.full}
           onClose={closeReacting}
+        />
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title="Nachricht löschen?"
+          text={deleteText(deleting)}
+          confirm="Löschen"
+          danger
+          busy={deleteBusy}
+          onCancel={() => setDeleting(null)}
+          onConfirm={() => void confirmDelete(deleting)}
         />
       )}
       {whoReacted !== null && <WhoReacted token={room.token} messageId={whoReacted} onClose={closeWhoReacted} />}

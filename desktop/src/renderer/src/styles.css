@@ -1434,6 +1434,19 @@ button.who-row:focus-visible {
 .reply-bar .quote.own {
   border-left-color: var(--bubble-own);
 }
+/* Editing a message (docs/chat.md „Bearbeiten“): the reply bar with its own title. */
+.edit-bar .quote-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+.edit-bar .quote-author svg {
+  flex-shrink: 0;
+}
+.edit-bar .quote-text {
+  -webkit-line-clamp: 1;
+}
 .attachment-rail {
   display: flex;
   gap: 8px;
