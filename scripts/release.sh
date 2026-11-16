@@ -19,10 +19,11 @@ VERSION="${1:?usage: scripts/release.sh X.Y.Z [development|stable]}"
 TYPE="${2:-development}"
 ONLY="${ONLY:-linux,android,mac,windows}"
 DRY_RUN="${DRY_RUN:-0}"
-HOST="${PKG_HOST:-jw.helsinki}"
-REMOTE="${PKG_REMOTE:-/root/claudes/wolkenfunk/pkg}"
+source scripts/pkg-env.sh
+HOST="$PKG_HOST"
+REMOTE="$PKG_REMOTE"
 STAGE="${PKG_STAGE:-$HOME/.cache/wolkenfunk/pkg}"
-export PKG_HOST="$HOST" PKG_REMOTE="$REMOTE" PKG_STAGE="$STAGE" DRY_RUN
+export PKG_STAGE="$STAGE" DRY_RUN
 
 want() { [[ ",$ONLY," == *",$1,"* ]]; }
 step() { printf '\n== %s\n' "$*"; }

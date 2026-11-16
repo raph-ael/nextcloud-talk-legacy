@@ -31,8 +31,8 @@ flatpak/                                   Flathub-Manifest, siehe flatpak/READM
    `DRY_RUN=1` baut und signiert nur lokal (`~/.cache/wolkenfunk/pkg`), `SKIP_BUILD=1` nimmt `dist/`.
 3. Flathub: neue Version im Flathub-Repo eintragen (`flatpak/README.md`).
 
-Server: `jw.helsinki:/root/claudes/wolkenfunk/pkg` (Bind-Mount in CT122, nginx; TLS auf CT100).
-Betriebsdoku dort im `README.md`.
+Server: `PKG_HOST` und `PKG_REMOTE` aus der Umgebung oder aus `.env` (`scripts/pkg-env.sh`). Der
+Ordner ist in den Webserver eingehängt. Die Betriebsdoku liegt auf dem Server, nicht hier.
 
 ## APT-Repo
 

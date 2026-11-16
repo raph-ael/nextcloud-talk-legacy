@@ -7,13 +7,14 @@
 #   DRY_RUN=1 ...                       stage and sign locally, upload nothing
 #
 # Bump "version" in package.json first: a version that is already published is refused.
-# Server: jw.helsinki:/root/claudes/wolkenfunk/pkg (bind mount into CT122, served by nginx there).
+# Server: PKG_HOST and PKG_REMOTE from the environment or .env (scripts/pkg-env.sh).
 # Signing key: ~/.config/wolkenfunk/apt-gnupg (override with WOLKENFUNK_GNUPGHOME).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOST="${PKG_HOST:-jw.helsinki}"
-REMOTE="${PKG_REMOTE:-/root/claudes/wolkenfunk/pkg}"
+source ../scripts/pkg-env.sh
+HOST="$PKG_HOST"
+REMOTE="$PKG_REMOTE"
 STAGE="${PKG_STAGE:-$HOME/.cache/wolkenfunk/pkg}"
 KEEP=3
 

@@ -14,8 +14,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:-$(node -p 'require("./package.json").version')}"
-HOST="${PKG_HOST:-jw.helsinki}"
-REMOTE="${PKG_REMOTE:-/root/claudes/wolkenfunk/pkg}"
+source ../scripts/pkg-env.sh
+HOST="$PKG_HOST"
+REMOTE="$PKG_REMOTE"
 STAGE="${PKG_STAGE:-$HOME/.cache/wolkenfunk/pkg}"
 DRY_RUN="${DRY_RUN:-0}"
 WORKFLOW=desktop-windows.yml

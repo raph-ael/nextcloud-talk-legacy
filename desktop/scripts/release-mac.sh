@@ -15,8 +15,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(cd .. && pwd)"
 
-HOST="${PKG_HOST:-jw.helsinki}"
-REMOTE="${PKG_REMOTE:-/root/claudes/wolkenfunk/pkg}"
+source ../scripts/pkg-env.sh
+HOST="$PKG_HOST"
+REMOTE="$PKG_REMOTE"
 STAGE="${PKG_STAGE:-$HOME/.cache/wolkenfunk/pkg}/mac"
 KEEP=3
 

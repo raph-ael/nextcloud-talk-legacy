@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Spielt website/public/ nach wolkenfunk.org aus.
-# Ziel: Bind-Mount auf dem PVE-Host jw.helsinki → CT122 /var/www/wolkenfunk.org (sofort live).
+# Ziel: der Ordner site/ neben dem Paket-Ordner auf dem Server (PKG_HOST aus der Umgebung oder
+# aus .env, siehe scripts/pkg-env.sh). Er ist in den Webserver eingehängt: sofort live.
 #   website/scripts/deploy.sh            # ausspielen
 #   website/scripts/deploy.sh --dry-run  # nur anzeigen, was sich ändern würde
 # Vorher prüft stage.py, welche Downloads auf pkg.wolkenfunk.org schon existieren; die übrigen
 # erscheinen als „bald“. Nach einem Release also einfach erneut ausspielen.
 set -euo pipefail
 
-HOST="${WOLKENFUNK_HOST:-jw.helsinki}"
-DEST="/root/claudes/wolkenfunk/site/"
+source "$(dirname "$0")/../../scripts/pkg-env.sh"
+HOST="$PKG_HOST"
+DEST="$(dirname "$PKG_REMOTE")/site/"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 

@@ -21,8 +21,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-HOST="${PKG_HOST:-jw.helsinki}"
-REMOTE="${PKG_REMOTE:-/root/claudes/wolkenfunk/pkg}"
+source ../scripts/pkg-env.sh
+HOST="$PKG_HOST"
+REMOTE="$PKG_REMOTE"
 STAGE="${PKG_STAGE:-$HOME/.cache/wolkenfunk/pkg}/android"
 KEEP=3
 DRY_RUN="${DRY_RUN:-0}"

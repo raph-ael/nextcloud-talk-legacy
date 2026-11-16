@@ -19,7 +19,7 @@ public/                 ausgelieferte Dateien
 scripts/
   build-assets.py       erzeugt alle Icons + og-image.png aus design/icon/wolkenfunk-symbolic.svg
   stage.py              kopiert public/, markiert vorhandene Downloads, prüft Bilder, erzeugt kleine Varianten
-  deploy.sh             stage.py, dann rsync nach jw.helsinki (CT122), danach Statusprüfung
+  deploy.sh             stage.py, dann rsync auf den Server (PKG_HOST), danach Statusprüfung
 ```
 
 ## Lokal ansehen
@@ -77,8 +77,9 @@ website/scripts/deploy.sh --dry-run   # zeigt die Änderungen
 website/scripts/deploy.sh             # live
 ```
 
-Ziel ist `/root/claudes/wolkenfunk/site/` auf dem PVE-Host (Bind-Mount in CT122, nginx :80
-hinter dem Reverse-Proxy CT100). `--delete`: was nicht in `public/` liegt, verschwindet vom Server.
+Ziel ist der Ordner `site/` neben dem Paket-Ordner auf dem Server (`PKG_HOST` aus der Umgebung
+oder aus `.env`, siehe `scripts/pkg-env.sh`). Er ist in den Webserver eingehängt (nginx :80
+hinter dem Reverse-Proxy). `--delete`: was nicht in `public/` liegt, verschwindet vom Server.
 
 ## Vor dem Launch
 
