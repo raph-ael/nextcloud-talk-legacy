@@ -1090,10 +1090,17 @@ impl Engine {
         let before = self.poll_seen(token);
         self.revive();
         self.poll_wake.notify_waiters();
-        if before.is_some() {
-            // The poll may have brought it already; then this waits for nothing, briefly.
+        if let Some(before) = before {
+            // Ask whether anything is left to wait for: the poll may have brought it before
+            // the push arrived, and then nothing more will come.
             let _ = tokio::time::timeout(OPEN_CHAT_WAIT, async {
-                while self.poll_seen(token) == before {
+                let newest = match self.fetch_delta(token, before).await {
+                    Ok(Some((messages, _))) => messages.iter().map(|m| m.id).max(),
+                    // Too much to tell, or no answer: the poll decides.
+                    _ => Some(i64::MAX),
+                };
+                let Some(newest) = newest else { return };
+                while self.poll_seen(token).is_some_and(|seen| seen == before && seen < newest) {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             })

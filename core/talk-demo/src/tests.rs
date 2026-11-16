@@ -939,6 +939,8 @@ async fn editing_without_the_server() {
     engine.start().await.unwrap();
     let page = engine.open_chat("lena").await.unwrap();
     let own = page.messages.iter().rev().find(|m| m.is_own).unwrap().id;
+    // The server only stops once no request is under way: not with the chat's long poll.
+    engine.close_chat("lena");
     server.stop().await;
     let err = engine.edit_message("lena", own, "Neu").await.unwrap_err();
     assert_eq!(message_error_text(MessageOp::Edit, &err), "Keine Verbindung – Nachricht nicht geändert");
@@ -1002,6 +1004,10 @@ async fn a_push_fetches_the_chat_ahead() {
     assert_eq!(added(&sink, "Ich kann am Abend."), 1, "the open chat has the message when the call returns");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(added(&sink, "Ich kann am Abend."), 1);
+    // The poll was faster than the push: nothing is left to wait for.
+    let started = std::time::Instant::now();
+    engine.handle_push(chat_push("garten"), None).await;
+    assert!(started.elapsed() < Duration::from_secs(1), "waited {:?} for nothing", started.elapsed());
     engine.close_chat("garten");
 
     // A change comes the same way: somebody edits their message while the chat is closed.

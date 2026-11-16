@@ -111,7 +111,7 @@ Aus dem Push allein geht das nicht: Er trägt nur den gekürzten Text und den Ch
 | Eine neue `messageNotices`-Meldung | Holt die gemeldeten Chats im Hintergrund nach, höchstens fünf je Abruf der Chatliste. |
 | `networkChanged()` nach einer Pause | Die Abfragen der offenen Chats beginnen neu, auf frischen Verbindungen (`docs/connection.md`). |
 
-- Ein offener Chat bekommt die Nachricht über seine laufende Abfrage als `messagesAdded`. Für ihn holt der Kern nichts doppelt. `handlePush` wartet dann, bis die Abfrage etwas gebracht hat, höchstens 3 s.
+- Ein offener Chat bekommt die Nachricht über seine laufende Abfrage als `messagesAdded`. Für ihn holt der Kern nichts doppelt. `handlePush` wartet dann, bis die Abfrage das Neue gebracht hat, höchstens 3 s. Steht nichts aus, kehrt der Aufruf nach einer kurzen Nachfrage beim Server zurück.
 - Ein geschlossener Chat bekommt kein Ereignis. Die Nachricht steht in `cachedChat(token)`, das die Plattform beim Öffnen ohnehin zuerst zeigt.
 - Geholt wird immer lückenlos ab dem gespeicherten Stand, ohne Zwischenspeicher die neueste Seite. Einzelne Nachrichten aus dem Push oder aus der Chatliste trägt niemand ein.
 - Öffnet jemand den Chat, während das Nachholen läuft, wartet `openChat` auf diesen einen Abruf.
