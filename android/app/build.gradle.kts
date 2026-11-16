@@ -54,8 +54,8 @@ android {
         applicationId = appId
         minSdk = 26
         targetSdk = 36
-        versionCode = 401
-        versionName = "0.4.1"
+        versionCode = 500
+        versionName = "0.5.0"
         buildConfigField("String", "PUSH_PROXY_URL", "\"$pushProxyUrl\"")
         // armeabi-v7a: low-end devices with a 32-bit-only system (e.g. Galaxy A13 with Android 13).
         if (!abiSplits) ndk { abiFilters += phoneAbis + "x86_64" }
