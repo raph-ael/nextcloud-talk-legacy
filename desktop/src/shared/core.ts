@@ -54,6 +54,10 @@ export interface RoomView {
   readOnly: boolean
   /** The user may react to messages (docs/chat.md „Reaktionen“). */
   canReact: boolean
+  /** The user may write here, and so edit and delete own messages (docs/chat.md „Bearbeiten und Löschen“). */
+  canChat: boolean
+  /** The user may delete messages of others (moderator of a group). */
+  canDeleteOthers: boolean
   hasCall: boolean
   /** Effective level: 1 always, 2 mentions only, 3 never (the core resolves the default). */
   notificationLevel: number
@@ -99,6 +103,12 @@ export interface MessageView {
   reactionsSelf: string[]
   /** For file messages; `text` is then the caption. */
   attachment?: FileAttachment | null
+  /** Can be deleted: by its author with `RoomView.canChat`, by others with `RoomView.canDeleteOthers`. */
+  deletable: boolean
+  /** Its author can edit the text (or caption) with `RoomView.canChat`, until `editUntil`. */
+  editable: boolean
+  /** Unix seconds; `null`: no limit. */
+  editUntil: number | null
 }
 
 /** One person's reaction, for the "who reacted" list. */
@@ -578,6 +588,12 @@ export interface TalkApi {
    * error text to show, or `null` on success.
    */
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
+  /** The text of a message for the input field when editing it; `null`: start from `MessageView.text`. */
+  editSource(token: string, messageId: number): Promise<string | null>
+  /** Edits an own message. Resolves to a German error text to show, or `null` (docs/chat.md). */
+  editMessage(token: string, messageId: number, text: string): Promise<string | null>
+  /** Deletes a message for everybody. Resolves to a German error text to show, or `null`. */
+  deleteMessage(token: string, messageId: number): Promise<string | null>
   /** Who reacted: own first, then newest first. */
   reactions(token: string, messageId: number): Promise<ReactionView[]>
 

@@ -285,6 +285,23 @@ impl TalkClient {
         Ok(())
     }
 
+    /// `PUT /chat/{token}/{messageId}`: replaces the text of a message (the caption of a
+    /// file). Returns the hidden system message whose `parent` is the new version,
+    /// without its quote and without the own reactions.
+    pub async fn edit_message(&self, token: &str, message_id: i64, text: &str) -> Result<ChatMessage> {
+        let rb = self
+            .request(Method::PUT, &format!("{SPREED}/v1/chat/{token}/{message_id}"))
+            .form(&[("message", text)]);
+        Ok(self.ocs::<ChatMessage>(rb).await?.0)
+    }
+
+    /// `DELETE /chat/{token}/{messageId}`: deletes a message for everybody. Returns the
+    /// hidden system message whose `parent` is the deleted message.
+    pub async fn delete_message(&self, token: &str, message_id: i64) -> Result<ChatMessage> {
+        let rb = self.request(Method::DELETE, &format!("{SPREED}/v1/chat/{token}/{message_id}"));
+        Ok(self.ocs::<ChatMessage>(rb).await?.0)
+    }
+
     /// `POST /reaction/{token}/{messageId}`: adds a reaction. Returns all reactions of
     /// the message afterwards.
     pub async fn add_reaction(&self, token: &str, message_id: i64, emoji: &str) -> Result<Reactions> {

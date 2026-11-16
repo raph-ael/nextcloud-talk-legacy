@@ -126,6 +126,16 @@ enum Cmd {
     },
     /// List who reacted to a message
     Reactions { token: String, id: i64 },
+    /// Replace the text of an own message (or the caption of an own file)
+    Edit { token: String, id: i64, text: String },
+    /// Delete a message for everybody
+    DeleteMessage { token: String, id: i64 },
+    /// Open the chat and print new and changed messages as the apps receive them
+    Changes {
+        token: String,
+        #[arg(long, default_value_t = 30)]
+        seconds: u64,
+    },
     /// Search users like "Neue Nachricht" (all listable users without a query)
     Users {
         query: Option<String>,
@@ -410,6 +420,43 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Cmd::Edit { token, .. } | Cmd::DeleteMessage { token, .. } | Cmd::Changes { token, .. } = &cli.cmd {
+        // Like the apps: chat open (cached, live poll), so the change shows as `MessagesUpdated`.
+        let sink = Arc::new(ChangeSink { token: token.clone(), preview: Mutex::new(None) });
+        let engine = Engine::new(client, sink, Some(data_dir(&cli)?));
+        engine.start().await?;
+        let page = engine.open_chat(token).await?;
+        let failed = match &cli.cmd {
+            Cmd::Edit { id, text, .. } => {
+                eprintln!("vorher: {:?}", engine.edit_source(token, *id).await);
+                engine.edit_message(token, *id, text).await.err().map(|e| (talk_core::MessageOp::Edit, e))
+            }
+            Cmd::DeleteMessage { id, .. } => {
+                engine.delete_message(token, *id).await.err().map(|e| (talk_core::MessageOp::Delete, e))
+            }
+            Cmd::Changes { seconds, .. } => {
+                let room = engine.rooms().into_iter().find(|r| &r.token == token);
+                if let Some(r) = room {
+                    eprintln!("Raum: schreiben={} fremde löschen={}", r.can_chat, r.can_delete_others);
+                }
+                for m in page.messages.iter().rev().take(8).rev() {
+                    eprintln!("  {}", change_line(m));
+                }
+                tokio::time::sleep(Duration::from_secs(*seconds)).await;
+                None
+            }
+            _ => unreachable!(),
+        };
+        if !matches!(cli.cmd, Cmd::Changes { .. }) {
+            tokio::time::sleep(Duration::from_secs(2)).await; // the live poll confirms
+        }
+        engine.shutdown();
+        match failed {
+            None => eprintln!("ok"),
+            Some((op, e)) => anyhow::bail!("{} ({e})", talk_core::message_error_text(op, &e)),
+        }
+        return Ok(());
+    }
     if let Cmd::Reactions { token, id } = &cli.cmd {
         let engine = Engine::new(client, Arc::new(talk_core_null_sink()), None);
         let list = engine.reactions(token, *id).await?;
@@ -475,6 +522,7 @@ async fn main() -> Result<()> {
         | Cmd::AudioInfo { .. }
         | Cmd::Fetch { .. }
         | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Group { .. }
+        | Cmd::Edit { .. } | Cmd::DeleteMessage { .. } | Cmd::Changes { .. }
         | Cmd::Sections { .. } | Cmd::Category { .. } => {
             unreachable!()
         }
@@ -800,6 +848,62 @@ impl EventSink for GroupSink {
                 if last.as_deref() != Some(&line) {
                     eprintln!("Raum: {line}");
                     *last = Some(line);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// One message as the apps get it: what it says and what may be done with it.
+fn change_line(m: &talk_core::MessageView) -> String {
+    let mut out = format!("{} {} [{}] {:?}", m.id, m.author, m.kind, m.text);
+    if m.edited {
+        out.push_str(" bearbeitet");
+    }
+    if let Some(q) = &m.reply_to {
+        out.push_str(&format!(" zitiert {}: {:?}", q.id, q.text));
+    }
+    if !m.reactions.is_empty() {
+        let r: String = m.reactions.iter().map(|(k, v)| format!("{k}{v}")).collect();
+        out.push_str(&format!(" {r} eigene={:?}", m.reactions_self));
+    }
+    if let Some(a) = &m.attachment {
+        out.push_str(&format!(" Datei {}", a.name));
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let edit = match (m.editable, m.edit_until) {
+        (false, _) => "nein".to_string(),
+        (true, None) => "ja".to_string(),
+        (true, Some(t)) if t > now => format!("noch {} min", (t - now) / 60),
+        (true, Some(_)) => "abgelaufen".to_string(),
+    };
+    out.push_str(&format!(" | löschbar={} bearbeitbar={edit}", if m.deletable { "ja" } else { "nein" }));
+    out
+}
+
+/// Prints new and changed messages of one chat and its preview in the chat list.
+struct ChangeSink {
+    token: String,
+    preview: Mutex<Option<String>>,
+}
+
+impl EventSink for ChangeSink {
+    fn emit(&self, event: Event) {
+        match event {
+            Event::MessagesAdded { token, messages } if token == self.token => {
+                messages.iter().for_each(|m| eprintln!("neu:      {}", change_line(m)));
+            }
+            Event::MessagesUpdated { token, messages } if token == self.token => {
+                messages.iter().for_each(|m| eprintln!("geändert: {}", change_line(m)));
+            }
+            Event::RoomsChanged { rooms } => {
+                let Some(room) = rooms.iter().find(|r| r.token == self.token) else { return };
+                let text = room.last_message.as_ref().map(|m| format!("{}: {:?}", m.author, m.text));
+                let mut last = self.preview.lock().unwrap();
+                if *last != text {
+                    eprintln!("Vorschau: {}", text.as_deref().unwrap_or("-"));
+                    *last = text;
                 }
             }
             _ => {}

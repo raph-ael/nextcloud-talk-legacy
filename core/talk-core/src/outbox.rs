@@ -971,6 +971,10 @@ impl Engine {
                     link: String::new(),
                     voice_message: f.voice,
                 }),
+                // Not on the server yet: `discard` removes it.
+                deletable: false,
+                editable: false,
+                edit_until: None,
             },
             state,
             progress,

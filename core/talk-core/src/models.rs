@@ -116,7 +116,7 @@ pub struct Room {
     pub is_sensitive: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub id: i64,
@@ -150,13 +150,41 @@ pub struct ChatMessage {
     #[serde(default)]
     pub silent: bool,
     /// The message this one replies to (only one level deep).
-    #[serde(default, deserialize_with = "object_or_empty_array")]
+    #[serde(default, deserialize_with = "parent_message")]
     pub parent: Option<Box<ChatMessage>>,
 }
 
 impl ChatMessage {
     pub fn is_system(&self) -> bool {
         !self.system_message.is_empty()
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.message_type == "comment_deleted"
+    }
+
+    /// The text as the user wrote it, to edit it: like [`Self::caption_text`], with
+    /// mentions in the server's notation (`@"id"`). Their display
+    /// names would come back as plain text and the mention would be gone.
+    pub fn source_text(&self) -> String {
+        if self.attachment().is_some() && self.message.trim() == "{file}" {
+            return String::new();
+        }
+        let mut out = self.message.clone();
+        for (key, param) in &self.message_parameters {
+            let s = |k: &str| param.get(k).and_then(Value::as_str).unwrap_or_default();
+            let replacement = match s("type") {
+                "file" if key == "file" => String::new(),
+                "user" | "guest" | "call" | "user-group" | "group" | "circle" | "team" | "email" => {
+                    // Always quoted: a bare id would swallow a full stop that follows it.
+                    let id = if s("mention-id").is_empty() { s("id") } else { s("mention-id") };
+                    format!("@\"{id}\"")
+                }
+                _ => s("name").to_string(),
+            };
+            out = out.replace(&format!("{{{key}}}"), &replacement);
+        }
+        out
     }
 
     /// The shared file of a file message (`{file}` parameter of type `file`).
@@ -384,6 +412,29 @@ where
     }
 }
 
+/// The quoted message of a reply. For one the user may no longer see the server sends
+/// only `{"id": …, "deleted": true}`: that is a deleted message, not a broken answer.
+fn parent_message<'de, D>(d: D) -> Result<Option<Box<ChatMessage>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = match Value::deserialize(d)? {
+        Value::Null => return Ok(None),
+        Value::Array(a) if a.is_empty() => return Ok(None),
+        v => v,
+    };
+    let stub = v.get("actorType").is_none();
+    if stub {
+        let Some(id) = v.get("id").and_then(Value::as_i64) else { return Ok(None) };
+        return Ok(Some(Box::new(ChatMessage {
+            id,
+            message_type: "comment_deleted".into(),
+            ..Default::default()
+        })));
+    }
+    serde_json::from_value(v).map(Some).map_err(serde::de::Error::custom)
+}
+
 /// Like [`map_or_empty_array`], without keys that are no emoji: right after a reaction is
 /// removed the server may briefly list the deleted comment, whose text is a JSON object
 /// (`{"deleted_by_type":…}`).
@@ -440,6 +491,44 @@ mod tests {
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.rendered_text(), "Hi @Bea");
         assert!(msg.reactions.is_empty());
+    }
+
+    /// What goes into the input field to edit a message: mentions as the server reads
+    /// them, the caption of a file without the file.
+    #[test]
+    fn source_text_keeps_mentions_and_drops_the_file() {
+        let msg = |message: &str, params: &str| -> ChatMessage {
+            let json = format!(
+                r#"{{"id":5,"token":"abc","actorType":"users","actorId":"a","actorDisplayName":"A","timestamp":1,
+                    "message":"{message}","messageParameters":{params}}}"#
+            );
+            serde_json::from_str(&json).unwrap()
+        };
+        let mentions = r#"{"mention-user1":{"type":"user","id":"b","name":"Bea","mention-id":"b"},
+            "mention-call1":{"type":"call","id":"abc","name":"Garten","mention-id":"all"},
+            "mention-group1":{"type":"user-group","id":"team eins","name":"Team","mention-id":"group/team eins"},
+            "mention-guest1":{"type":"guest","id":"guest/1f","name":"Gast"}}"#;
+        let m = msg("{mention-user1}. {mention-call1} {mention-group1} {mention-guest1}", mentions);
+        assert_eq!(m.source_text(), r#"@"b". @"all" @"group/team eins" @"guest/1f""#);
+        assert_eq!(m.rendered_text(), "@Bea. @Garten @Team @Gast");
+        let file = r#"{"file":{"type":"file","id":"7","name":"Beet.jpg","path":"Talk/Beet.jpg","mimetype":"image/jpeg"}}"#;
+        assert_eq!(msg("{file}", file).source_text(), "");
+        assert_eq!(msg("Unser Beet", file).source_text(), "Unser Beet");
+        assert_eq!(msg("Nur Text", "[]").source_text(), "Nur Text");
+    }
+
+    /// A quote the user may not see is only `{id, deleted}`: a deleted message, and the
+    /// rest of the answer still parses.
+    #[test]
+    fn a_quote_reduced_to_its_id_is_a_deleted_message() {
+        let json = r#"[{"id":6,"token":"abc","actorType":"users","actorId":"a","actorDisplayName":"A","timestamp":2,
+            "message":"Antwort","parent":{"id":5,"deleted":true}}]"#;
+        let list: Vec<ChatMessage> = serde_json::from_str(json).unwrap();
+        let quote = list[0].parent.as_ref().unwrap();
+        assert!(quote.id == 5 && quote.is_deleted());
+        // It also survives the cache (stored as JSON).
+        let again: ChatMessage = serde_json::from_str(&serde_json::to_string(&list[0]).unwrap()).unwrap();
+        assert!(again.parent.unwrap().is_deleted());
     }
 
     #[test]

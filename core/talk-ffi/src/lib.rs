@@ -244,6 +244,11 @@ pub struct RoomView {
     pub read_only: bool,
     /// The user may react to messages (docs/chat.md „Reaktionen“).
     pub can_react: bool,
+    /// The user may write here, and so edit and delete own messages (docs/chat.md
+    /// „Bearbeiten und Löschen“).
+    pub can_chat: bool,
+    /// The user may delete messages of others (moderator of a group).
+    pub can_delete_others: bool,
     pub has_call: bool,
     /// 1 always, 2 mentions only, 3 never (the server default is resolved: 1 in
     /// one-to-one chats, 2 in groups).
@@ -279,6 +284,8 @@ impl From<core::RoomView> for RoomView {
             is_archived: r.is_archived,
             read_only: r.read_only,
             can_react: r.can_react,
+            can_chat: r.can_chat,
+            can_delete_others: r.can_delete_others,
             has_call: r.has_call,
             notification_level: r.notification_level,
             avatar_version: r.avatar_version,
@@ -580,6 +587,13 @@ pub struct MessageView {
     pub reactions_self: Vec<String>,
     /// For file messages; `text` is then the caption.
     pub attachment: Option<FileAttachment>,
+    /// Can be deleted: by its author with `RoomView.can_chat`, by others with
+    /// `RoomView.can_delete_others`.
+    pub deletable: bool,
+    /// Its author can edit the text (or caption) with `RoomView.can_chat`, until `edit_until`.
+    pub editable: bool,
+    /// Unix seconds; `None`: no limit.
+    pub edit_until: Option<i64>,
 }
 
 impl From<core::MessageView> for MessageView {
@@ -612,6 +626,9 @@ impl From<core::MessageView> for MessageView {
             reactions: m.reactions.into_iter().collect(),
             reactions_self: m.reactions_self,
             attachment: m.attachment.map(Into::into),
+            deletable: m.deletable,
+            editable: m.editable,
+            edit_until: m.edit_until,
         }
     }
 }
@@ -950,6 +967,33 @@ impl TalkSession {
             .await
             .err()
             .map(|e| core::reaction_error_text(&e))
+    }
+
+    /// The text of a message for the input field when editing it (mentions as the server
+    /// wants them back). `None`: start from `MessageView.text`.
+    pub async fn edit_source(&self, token: String, message_id: i64) -> Option<String> {
+        self.engine.edit_source(&token, message_id).await
+    }
+
+    /// Replaces the text of an own message, or the caption of an own file. The new version
+    /// arrives as `MessagesUpdated` before this returns. Returns a short German error
+    /// text to show, or `None` on success (docs/chat.md „Bearbeiten und Löschen“).
+    pub async fn edit_message(&self, token: String, message_id: i64, text: String) -> Option<String> {
+        self.engine
+            .edit_message(&token, message_id, &text)
+            .await
+            .err()
+            .map(|e| core::message_error_text(core::MessageOp::Edit, &e))
+    }
+
+    /// Deletes a message for everybody. Returns a short German error text to show, or
+    /// `None` on success.
+    pub async fn delete_message(&self, token: String, message_id: i64) -> Option<String> {
+        self.engine
+            .delete_message(&token, message_id)
+            .await
+            .err()
+            .map(|e| core::message_error_text(core::MessageOp::Delete, &e))
     }
 
     /// Who reacted to a message: own reactions first, then newest first.

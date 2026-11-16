@@ -180,6 +180,18 @@ impl Cache {
         })
     }
 
+    /// The cached replies to a message, oldest first.
+    pub fn replies_to(&self, token: &str, id: i64) -> Vec<ChatMessage> {
+        self.read(|c| {
+            let mut st = c.prepare_cached(
+                "SELECT json FROM messages
+                 WHERE token = ?1 AND id > ?2 AND json_extract(json, '$.parent.id') = ?2 ORDER BY id",
+            )?;
+            let rows = st.query_map(params![token, id], |r| r.get::<_, String>(0))?;
+            Ok(rows.filter_map(|j| serde_json::from_str(&j.ok()?).ok()).collect())
+        })
+    }
+
     // --- writes --------------------------------------------------------------------
 
     pub fn set_meta(&self, key: &'static str, value: String) {
@@ -470,11 +482,25 @@ fn apply(conn: &mut Connection, op: Op) -> rusqlite::Result<()> {
             // Without a cached range the messages would start a range with a gap.
             if range(&tx, &token)?.is_some() {
                 insert_messages(&tx, &token, &messages)?;
-                let mut st = tx.prepare_cached("UPDATE messages SET json = ?3 WHERE token = ?1 AND id = ?2")?;
+                // The server sends a changed message without its quote: keep the stored one.
+                let mut st = tx.prepare_cached(
+                    "UPDATE messages SET json = CASE
+                         WHEN json_type(?3, '$.parent') IS 'object' OR json_type(json, '$.parent') IS NOT 'object' THEN ?3
+                         ELSE json_set(?3, '$.parent', json_extract(json, '$.parent')) END
+                     WHERE token = ?1 AND id = ?2",
+                )?;
+                // Replies quote it: they carry a copy (they have higher ids).
+                let mut quotes = tx.prepare_cached(
+                    "UPDATE messages SET json = json_set(json, '$.parent', json_remove(?3, '$.parent'))
+                     WHERE token = ?1 AND id > ?2 AND json_extract(json, '$.parent.id') = ?2",
+                )?;
                 for m in &updates {
-                    st.execute(params![token, m.id, json(m)])?;
+                    let new = json(m);
+                    st.execute(params![token, m.id, new])?;
+                    quotes.execute(params![token, m.id, new])?;
                 }
                 drop(st);
+                drop(quotes);
                 if let Some(r) = last_common_read {
                     tx.execute("UPDATE chats SET last_common_read = ?2 WHERE token = ?1", params![token, r])?;
                 }

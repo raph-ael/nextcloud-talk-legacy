@@ -17,7 +17,7 @@ const READ_DELAY_S: i64 = 5;
 /// Permissions of the current user: everything up to chat (128) and react (256).
 const PERMISSIONS: i64 = 510;
 /// Hidden in the clients, never counted or shown as last message.
-const HIDDEN: &[&str] = &["reaction", "reaction_deleted", "reaction_revoked"];
+const HIDDEN: &[&str] = &["reaction", "reaction_deleted", "reaction_revoked", "message_deleted", "message_edited"];
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -59,8 +59,12 @@ pub struct Msg {
     pub reply_to: Option<i64>,
     pub reactions: Vec<Reaction>,
     pub file: Option<i64>,
-    /// Reaction system messages carry the updated message as `parent`.
+    /// Reaction, edit and deletion system messages carry the updated message as `parent`.
     pub parent_snapshot: Option<Value>,
+    /// Who edited it last, and when.
+    pub edited: Option<(String, i64)>,
+    /// Who deleted it. The message stays, as "comment_deleted".
+    pub deleted_by: Option<String>,
 }
 
 impl Msg {
@@ -513,6 +517,8 @@ impl State {
                 reactions,
                 file: None,
                 parent_snapshot: None,
+                edited: None,
+                deleted_by: None,
             };
             if let Some(sys) = &m.system {
                 msg.kind = "system".into();
@@ -643,7 +649,7 @@ impl State {
         p
     }
 
-    /// `@id` of a known person → `{mention-userN}` with its rich object parameter.
+    /// `@id` or `@"id"` of a known person → `{mention-userN}` with its rich object parameter.
     pub fn mentions(&self, text: &str) -> (String, Map<String, Value>) {
         let mut params = Map::new();
         let mut out = String::with_capacity(text.len());
@@ -651,16 +657,17 @@ impl State {
         while let Some(pos) = rest.find('@') {
             out.push_str(&rest[..pos]);
             let after = &rest[pos + 1..];
+            let quoted = after.strip_prefix('"').and_then(|a| a.split_once('"')).map(|(id, _)| id);
             let len = after
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
                 .unwrap_or(after.len());
-            let id = after[..len].trim_end_matches('.');
+            let id = quoted.unwrap_or_else(|| after[..len].trim_end_matches('.'));
             match self.person(id) {
                 Some(p) if !id.is_empty() => {
                     let key = format!("mention-user{}", params.len() + 1);
                     params.insert(key.clone(), json!({ "type": "user", "id": p.id, "name": p.name, "mention-id": p.id }));
                     out.push_str(&format!("{{{key}}}"));
-                    rest = &after[id.len()..];
+                    rest = &after[id.len() + if quoted.is_some() { 2 } else { 0 }..];
                 }
                 _ => {
                     out.push('@');
@@ -706,6 +713,29 @@ impl State {
         });
         if !own.is_empty() {
             v["reactionsSelf"] = json!(own);
+        }
+        if let Some((by, at)) = &m.edited {
+            v["lastEditActorType"] = json!("users");
+            v["lastEditActorId"] = json!(by);
+            v["lastEditActorDisplayName"] = json!(self.name_of(by));
+            v["lastEditTimestamp"] = json!(at);
+        }
+        if let Some(by) = &m.deleted_by {
+            v["messageType"] = json!("comment_deleted");
+            v["message"] = json!(if *by == self.me {
+                "Nachricht von dir gelöscht"
+            } else if *by == m.actor {
+                "Nachricht vom Autor gelöscht"
+            } else {
+                "Nachricht von {actor} gelöscht"
+            });
+            v["messageParameters"] = json!({ "actor": self.user_param(by) });
+            v["reactions"] = json!([]);
+            v["isReplyable"] = json!(false);
+            v["deleted"] = json!(true);
+            for key in ["reactionsSelf", "lastEditActorType", "lastEditActorId", "lastEditActorDisplayName", "lastEditTimestamp"] {
+                v.as_object_mut().unwrap().remove(key);
+            }
         }
         if with_parent {
             if let Some(p) = &m.parent_snapshot {
@@ -853,7 +883,21 @@ impl State {
             reactions: Vec::new(),
             file: None,
             parent_snapshot: None,
+            edited: None,
+            deleted_by: None,
         }
+    }
+
+    /// Like [`Self::push_msg`], for the hidden message of an edit or a deletion: the
+    /// long polls wake, but the room does not count as modified (as on a real server,
+    /// whose room list reports such a change only with the next full fetch).
+    pub fn push_quiet(&mut self, token: &str, msg: Msg) -> Option<i64> {
+        let modified = self.rooms.iter().find(|r| r.token == token)?.modified;
+        let id = self.push_msg(token, msg);
+        if let Some(r) = self.rooms.iter_mut().find(|r| r.token == token) {
+            r.modified = modified;
+        }
+        id
     }
 
     pub fn system_msg(&self, system: &str, text: String) -> Msg {

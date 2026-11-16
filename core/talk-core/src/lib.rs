@@ -40,7 +40,10 @@ pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };
 pub use connection::ConnectionState;
-pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReactionView, ReplyPreview, RoomView, reaction_error_text};
+pub use engine::{
+    ChatPage, Engine, Event, EventSink, MessageOp, MessageView, ReactionView, ReplyPreview, RoomView, message_error_text,
+    reaction_error_text,
+};
 pub use categories::{CategoryOp, CategoryView, SectionView, category_error_text};
 pub use error::{Error, Result};
 pub use groups::{GroupOp, MemberView, UserView, group_error_text, square_photo};

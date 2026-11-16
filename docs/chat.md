@@ -185,3 +185,86 @@ Schlank wie bei Signal: **eine Reaktion pro Person und Nachricht.** Ein anderes 
   - Leichtes haptisches Feedback beim Setzen.
 
 **Barrierefreiheit:** Die Knöpfe der Leiste heißen „Mit ❤️ reagieren“ und „Weitere Reaktionen“, die Pillen „❤️ 2, Reaktionen anzeigen“.
+
+## Bearbeiten und Löschen
+
+Eigene Nachrichten lassen sich bearbeiten und löschen. Moderatoren einer Gruppe können auch fremde Nachrichten löschen. Gelöscht wird immer für alle; „nur für mich“ kennt Talk nicht.
+
+**Was der Server erlaubt**
+
+| | Bearbeiten | Löschen |
+|---|---|---|
+| Wer | eigene Nachrichten | eigene; Moderatoren in Gruppen auch fremde, nie im 1:1-Chat |
+| Wie lange | 24 Stunden, in „Notiz an mich“ unbegrenzt | unbegrenzt |
+| Was | Text, Bildunterschrift einer Datei | Text, Datei, Sprachnachricht |
+| Nicht | Sprachnachricht, Umfrage, Standort; leerer Text | Systemnachrichten |
+
+Bei einer Datei endet nur die Freigabe für den Chat. Die Datei selbst bleibt beim Besitzer.
+
+**Kern-Vertrag**
+- `RoomView.canChat`: Der User darf hier schreiben. `RoomView.canDeleteOthers`: Er darf fremde Nachrichten löschen.
+- `MessageView.deletable`, `editable` und `editUntil` (Unix-Sekunden, leer heißt unbegrenzt) sagen, was mit der Nachricht geht. Die Plattform rechnet nur noch, und zwar beim Öffnen des Menüs:
+  - **Löschen:** `deletable` und (`isOwn` mit `canChat` oder fremd mit `canDeleteOthers`).
+  - **Bearbeiten:** `editable`, `canChat` und (`editUntil` leer oder jetzt < `editUntil`).
+  - Beides nur für zugestellte Nachrichten. Im Postausgang bleibt „Löschen“ das lokale Verwerfen (`discard`), ohne Nachfrage.
+- `editSource(token, messageId) → Text | null`: der Text fürs Eingabefeld. Erwähnungen stehen darin so, wie der Server sie zurückhaben will (`@"id"`), sonst wären sie nach dem Speichern nur noch Text. Bei `null` nimmt die Plattform `MessageView.text`.
+- `editMessage(token, messageId, text)` und `deleteMessage(token, messageId)`:
+  - Das Ergebnis ist ein kurzer deutscher Fehlertext oder `null`. Die Plattform zeigt den Text als Hinweis (Toast).
+  - Nichts erscheint vorab. Die neue Fassung kommt als `MessagesUpdated`, bevor der Aufruf zurückkehrt.
+  - Derselbe Text noch einmal ist ein Erfolg ohne Abruf.
+  - Es gibt keine Outbox: Offline kommt „Keine Verbindung – Nachricht nicht geändert“ bzw. „… nicht gelöscht“.
+- **Was der Kern dazutut,** auch wenn jemand anderes ändert:
+  - Eine geänderte Antwort behält ihr Zitat und die eigene Reaktion. Der Server schickt beides nicht mit.
+  - Antworten auf eine geänderte oder gelöschte Nachricht kommen im selben `MessagesUpdated` mit dem neuen Zitat.
+  - Ist es die letzte Nachricht des Chats, kommt `RoomsChanged` mit der neuen Vorschau.
+- Die Anzeige bleibt wie bisher: „bearbeitet ·“ in der Meta-Zeile, „Diese Nachricht wurde gelöscht.“ in der Blase, „Nachricht gelöscht“ im Zitat und in der Chatliste.
+
+**Menü der Nachricht**
+- „Bearbeiten“ steht direkt nach „Antworten“.
+- „Löschen“ steht an letzter Stelle und ist als gefährlich markiert (rot).
+
+**Bearbeiten**
+- Über dem Eingabefeld erscheint die Leiste, die es fürs Antworten gibt:
+  - Titel „Nachricht bearbeiten“ in der Akzentfarbe, davor ein Stift.
+  - Darunter eine Zeile mit dem bisherigen Text, bei einer Datei ohne Bildunterschrift der Dateiname.
+  - Rechts ein ✕, „Bearbeiten abbrechen“.
+- Das Eingabefeld enthält den Text aus `editSource()`, die Marke steht am Ende, das Feld hat den Fokus.
+- Der Senden-Knopf wird zum Haken, „Änderung speichern“. Er ist aus, solange der Text leer ist oder dem Ausgangstext gleicht (beide ohne Leerraum am Rand).
+- Anhang und Mikrofon sind solange ausgeblendet.
+- Ein angefangener Entwurf und eine angefangene Antwort bleiben erhalten. Nach dem Speichern oder Abbrechen stehen sie wieder da. Der bearbeitete Text wird nie zum Entwurf.
+- Während des Speicherns ist der Haken aus. Bei Erfolg endet der Modus.
+- Bei einem Fehler bleibt der Modus offen und der Text stehen, dazu kommt der Hinweis.
+- Der Modus endet auch, wenn man den Chat verlässt oder die Nachricht inzwischen gelöscht wurde.
+
+**Löschen**
+- Immer mit Nachfrage: „Nachricht löschen?“, Knöpfe „Abbrechen“ und „Löschen“ (gefährlich).
+- Text bei einer eigenen Nachricht: „Sie wird für alle im Chat gelöscht.“
+- Text bei einer fremden: „Die Nachricht von {Name} wird für alle im Chat gelöscht.“
+- Hat die Nachricht eine Datei, folgt: „Die Datei selbst bleibt erhalten.“
+- Danach zeigt die Blase „Diese Nachricht wurde gelöscht.“ Sie kommt über `MessagesUpdated`, die Plattform entfernt nichts selbst.
+
+**Pro Plattform**
+- **Desktop:**
+  - Pfeil nach oben im leeren Eingabefeld bearbeitet die letzte eigene Nachricht, die sich noch bearbeiten lässt.
+  - Esc bricht ab, Enter speichert.
+- **Android und iOS:** Die Tastatur öffnet sich mit dem Modus. Die Zurück-Geste bricht erst das Bearbeiten ab.
+
+**Barrierefreiheit:** Die Leiste heißt „Nachricht bearbeiten“, ihre Knöpfe „Bearbeiten abbrechen“ und „Änderung speichern“.
+
+**Nicht im Umfang:** Vormerken ohne Verbindung, fremde Nachrichten bearbeiten, eine Bildunterschrift ganz entfernen (der Server lehnt leeren Text ab), ein Verlauf früherer Fassungen.
+
+### Test
+Im Testraum mit Bot A und Bot B, unter `bot-lock.sh`. Gegenstelle ist `talk-cli` (`edit`, `delete-message`, `changes`).
+
+1. Eigene Nachricht bearbeiten: neuer Text und „bearbeitet ·“, bei der Gegenstelle ebenso.
+2. Entwurf im Feld, dann bearbeiten und speichern: Der Entwurf steht wieder da.
+3. Unverändert oder leer: Der Haken ist aus.
+4. Eigene Antwort bearbeiten: Zitat und eigene Reaktion bleiben.
+5. Die Gegenstelle bearbeitet eine Nachricht, auf die geantwortet wurde: Das Zitat in der Antwort ist neu.
+6. Nachricht mit Erwähnung bearbeiten: Die Erwähnung bleibt eine Erwähnung.
+7. Eigene Nachricht löschen: Nachfrage, danach „Diese Nachricht wurde gelöscht.“, die Chatliste zeigt „Nachricht gelöscht“.
+8. Als Moderator eine fremde Nachricht in der Gruppe löschen. Im 1:1-Chat fehlt „Löschen“ bei fremden Nachrichten.
+9. Nachricht älter als 24 Stunden: „Bearbeiten“ fehlt, „Löschen“ ist da.
+10. Sprachnachricht: nur „Löschen“. Datei: „Bearbeiten“ ändert die Bildunterschrift.
+11. Ohne Netz bearbeiten: Hinweis „Keine Verbindung – Nachricht nicht geändert“, der Text bleibt im Feld.
+12. Desktop: Pfeil nach oben, Esc, Enter.

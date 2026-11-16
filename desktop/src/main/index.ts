@@ -74,6 +74,9 @@ interface NativeSession {
   loadOlder(token: string, beforeId: number): Promise<unknown>
   markRead(token: string, messageId: number): Promise<void>
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
+  editSource(token: string, messageId: number): Promise<string | null>
+  editMessage(token: string, messageId: number, text: string): Promise<string | null>
+  deleteMessage(token: string, messageId: number): Promise<string | null>
   reactions(token: string, messageId: number): Promise<unknown>
   roomSections(query: string, activeToken: string | null): unknown
   toggleSection(id: string): Promise<string | null>
@@ -1501,6 +1504,13 @@ function registerIpc(): void {
     return rt.session.audioInfo(localPath)
   })
   handle('talk:markRead', (r, token: string, messageId: number) => r?.session.markRead(token, messageId))
+  handle('talk:editSource', (r, token: string, messageId: number) => (r ? r.session.editSource(token, messageId) : null))
+  handle('talk:editMessage', (r, token: string, messageId: number, text: string) =>
+    r ? r.session.editMessage(token, messageId, text) : NOT_SIGNED_IN,
+  )
+  handle('talk:deleteMessage', (r, token: string, messageId: number) =>
+    r ? r.session.deleteMessage(token, messageId) : NOT_SIGNED_IN,
+  )
   handle('talk:setReaction', (r, token: string, messageId: number, emoji: string | null) =>
     r ? r.session.setReaction(token, messageId, emoji) : NOT_SIGNED_IN,
   )

@@ -61,6 +61,8 @@ pub fn router(app: App) -> Router {
         .route("/demo/incoming", post(api::demo_incoming))
         .route("/demo/status", post(api::demo_status))
         .route("/demo/missed-call", post(api::demo_missed_call))
+        .route("/demo/edit", post(api::demo_edit))
+        .route("/demo/delete", post(api::demo_delete))
         .route("/ocs/v2.php/apps/user_status/api/v1/user_status", get(api::user_status))
         .route(&format!("{SPREED}/v4/call/{{token}}/notification-state"), get(api::call_notification_state))
         .route("/ocs/v2.php/cloud/capabilities", get(api::capabilities))
@@ -87,6 +89,7 @@ pub fn router(app: App) -> Router {
         // chat
         .route(&sp("/v1/chat/{token}"), get(api::chat_get).post(api::chat_post))
         .route(&sp("/v1/chat/{token}/read"), post(api::read_marker).delete(api::unread_marker))
+        .route(&sp("/v1/chat/{token}/{id}"), put(api::chat_edit).delete(api::chat_delete))
         .route(
             &sp("/v1/reaction/{token}/{id}"),
             get(api::reactions_get).post(api::reaction_add).delete(api::reaction_remove),

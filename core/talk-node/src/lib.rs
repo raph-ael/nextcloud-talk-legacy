@@ -340,6 +340,38 @@ impl TalkSession {
             .map(|e| core::reaction_error_text(&e))
     }
 
+    // --- edit and delete (docs/chat.md „Bearbeiten und Löschen“) ------------------------
+
+    /// The text of a message for the input field when editing it (mentions as the server
+    /// wants them back). `null`: start from `MessageView.text`.
+    #[napi]
+    pub async fn edit_source(&self, token: String, message_id: i64) -> Option<String> {
+        self.engine.edit_source(&token, message_id).await
+    }
+
+    /// Replaces the text of an own message, or the caption of an own file. The new version
+    /// arrives as `messagesUpdated` before this resolves: to a short German error text to
+    /// show, or `null` on success.
+    #[napi]
+    pub async fn edit_message(&self, token: String, message_id: i64, text: String) -> Option<String> {
+        self.engine
+            .edit_message(&token, message_id, &text)
+            .await
+            .err()
+            .map(|e| core::message_error_text(core::MessageOp::Edit, &e))
+    }
+
+    /// Deletes a message for everybody. Resolves to a short German error text to show, or
+    /// `null` on success.
+    #[napi]
+    pub async fn delete_message(&self, token: String, message_id: i64) -> Option<String> {
+        self.engine
+            .delete_message(&token, message_id)
+            .await
+            .err()
+            .map(|e| core::message_error_text(core::MessageOp::Delete, &e))
+    }
+
     // --- categories (docs/categories.md); changes resolve to a German error or `null` --
 
     /// `SectionView[]`: the chat list in sections. Again on `roomsChanged`, a new search

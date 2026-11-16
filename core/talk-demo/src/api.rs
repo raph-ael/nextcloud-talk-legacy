@@ -59,7 +59,8 @@ pub async fn capabilities() -> Response {
                     "conversation-tags", "favorites", "archived-conversations-v2", "chat-read-marker",
                     "chat-unread", "chat-read-last", "voice-message-sharing", "markdown-messages",
                     "rich-object-sharing", "silent-send", "read-only-rooms", "notification-levels",
-                    "mention-flag", "last-room-activity", "avatar", "conversation-creation-all"
+                    "mention-flag", "last-room-activity", "avatar", "conversation-creation-all",
+                    "delete-messages", "delete-messages-unlimited", "edit-messages", "edit-messages-note-to-self"
                 ],
                 "config": {
                     "attachments": { "allowed": true, "folder": "/Talk" },
@@ -584,12 +585,124 @@ pub async fn unread_marker(AxState(app): S, Path(token): Path<String>) -> Respon
     ocs(st.room_json(r))
 }
 
+// --- edit and delete ------------------------------------------------------------------------
+
+enum Change {
+    Edit(String),
+    Delete,
+}
+
+fn refused(status: StatusCode, error: &str) -> Response {
+    ocs_status(status, json!({ "error": error }))
+}
+
+/// Edits or deletes a message as `actor` (`None`: the signed-in user, with the rules of
+/// Talk) and posts the hidden system message whose `parent` is the new version. That
+/// message is also the answer, with a `parent` as Talk sends it there: without the own
+/// reactions.
+fn change_message(app: &App, token: &str, id: i64, actor: Option<String>, change: Change) -> Response {
+    let mut st = app.st.lock().unwrap();
+    let me = st.me.clone();
+    let Some(r) = st.room(token) else { return not_found() };
+    let Some(m) = r.msg(id) else { return refused(StatusCode::NOT_FOUND, "message") };
+    if !m.system.is_empty() || m.deleted_by.is_some() {
+        return refused(StatusCode::METHOD_NOT_ALLOWED, "message");
+    }
+    let by = match actor {
+        Some(a) if r.is_member(&a) => a,
+        Some(_) => return bad_request("from"),
+        None => {
+            // Moderators may change what others wrote, but not in a one-to-one chat.
+            let moderator = r.members.iter().any(|x| x.person == me && x.ptype <= 2);
+            if m.actor != me && !(moderator && r.kind != 1) {
+                return refused(StatusCode::FORBIDDEN, "permission");
+            }
+            me.clone()
+        }
+    };
+    if let Change::Edit(text) = &change {
+        if text.trim().is_empty() {
+            return bad_request("message");
+        }
+        if text.chars().count() > 32000 {
+            return ocs_status(StatusCode::PAYLOAD_TOO_LARGE, json!([]));
+        }
+        if m.ts < now() - 24 * 60 * 60 {
+            return bad_request("age");
+        }
+    }
+    let system = match &change {
+        Change::Edit(text) => {
+            let (text, mut params) = st.mentions(text.trim());
+            let m = st.room_mut(token).unwrap().messages.iter_mut().find(|m| m.id == id).unwrap();
+            // The file and the author of a file message stay; the text is its caption.
+            for key in ["actor", "file"] {
+                if let Some(v) = m.params.get(key) {
+                    params.insert(key.into(), v.clone());
+                }
+            }
+            m.text = text;
+            m.params = params;
+            m.edited = Some((by.clone(), now()));
+            "message_edited"
+        }
+        Change::Delete => {
+            let m = st.room_mut(token).unwrap().messages.iter_mut().find(|m| m.id == id).unwrap();
+            m.deleted_by = Some(by.clone());
+            m.reactions.clear();
+            "message_deleted"
+        }
+    };
+    let r = st.room(token).unwrap();
+    let snapshot = st.msg_json(r, r.msg(id).unwrap(), false);
+    let verb = if system == "message_edited" { "bearbeitet" } else { "gelöscht" };
+    let text = st.system_text(&by, &format!("hast eine Nachricht {verb}"), &format!("hat eine Nachricht {verb}"));
+    let mut sys = st.system_msg(system, text);
+    sys.actor = by.clone();
+    sys.params.insert("actor".into(), st.user_param(&by));
+    sys.parent_snapshot = Some(snapshot);
+    let Some(sys_id) = st.push_quiet(token, sys) else { return not_found() };
+    let r = st.room(token).unwrap();
+    let mut data = st.msg_json(r, r.msg(sys_id).unwrap(), true);
+    if let Some(parent) = data.get_mut("parent").and_then(Value::as_object_mut) {
+        parent.remove("reactionsSelf");
+    }
+    ocs_with_headers(StatusCode::OK, data, &chat_headers(None, r.common_read()))
+}
+
+pub async fn chat_edit(AxState(app): S, Path((token, id)): Path<(String, i64)>, p: Params) -> Response {
+    change_message(&app, &token, id, None, Change::Edit(p.str("message").unwrap_or_default()))
+}
+
+pub async fn chat_delete(AxState(app): S, Path((token, id)): Path<(String, i64)>) -> Response {
+    change_message(&app, &token, id, None, Change::Delete)
+}
+
+/// Test hook: the author of a message edits it. `token`, `id`, `text`.
+pub async fn demo_edit(AxState(app): S, p: Params) -> Response {
+    let (token, id) = (p.str("token").unwrap_or_default(), p.i64("id").unwrap_or(0));
+    let Some(author) = author_of(&app, &token, id) else { return not_found() };
+    change_message(&app, &token, id, Some(author), Change::Edit(p.str("text").unwrap_or_default()))
+}
+
+/// Test hook: the author of a message deletes it. `token`, `id`.
+pub async fn demo_delete(AxState(app): S, p: Params) -> Response {
+    let (token, id) = (p.str("token").unwrap_or_default(), p.i64("id").unwrap_or(0));
+    let Some(author) = author_of(&app, &token, id) else { return not_found() };
+    change_message(&app, &token, id, Some(author), Change::Delete)
+}
+
+fn author_of(app: &App, token: &str, id: i64) -> Option<String> {
+    let st = app.st.lock().unwrap();
+    Some(st.room(token)?.msg(id)?.actor.clone())
+}
+
 // --- reactions ------------------------------------------------------------------------------
 
 fn reactable(st: &State, token: &str, id: i64) -> Result<(), Box<Response>> {
     let Some(r) = st.room(token) else { return Err(Box::new(not_found())) };
     match r.msg(id) {
-        Some(m) if m.system.is_empty() => Ok(()),
+        Some(m) if m.system.is_empty() && m.deleted_by.is_none() => Ok(()),
         Some(_) => Err(Box::new(bad_request("message"))),
         None => Err(Box::new(not_found())),
     }

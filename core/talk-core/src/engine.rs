@@ -98,6 +98,9 @@ const ROOM_SYSTEM: &[&str] = &[
     "conversation_made_private",
 ];
 
+/// Own text messages can be edited this long (the server's limit; none in "note to self").
+const EDIT_WINDOW_S: i64 = 24 * 60 * 60;
+
 /// System messages whose `parent` is the updated version of an existing message.
 pub(crate) const UPDATING_SYSTEM: &[&str] = &[
     "reaction",
@@ -106,6 +109,9 @@ pub(crate) const UPDATING_SYSTEM: &[&str] = &[
     "message_deleted",
     "message_edited",
 ];
+
+/// ... and those of them that change what the message says: replies quote it.
+const REWRITING_SYSTEM: &[&str] = &["message_deleted", "message_edited"];
 
 pub trait EventSink: Send + Sync + 'static {
     fn emit(&self, event: Event);
@@ -185,6 +191,11 @@ pub struct RoomView {
     pub read_only: bool,
     /// The user may react to messages (see docs/chat.md „Reaktionen“).
     pub can_react: bool,
+    /// The user may write here, and so edit and delete own messages (docs/chat.md
+    /// „Bearbeiten und Löschen“).
+    pub can_chat: bool,
+    /// The user may delete messages of others: moderators, in groups.
+    pub can_delete_others: bool,
     pub has_call: bool,
     /// 1 always, 2 mentions only, 3 never. The server default (0) is resolved: 1 in
     /// one-to-one chats, 2 in groups (docs/settings.md).
@@ -237,6 +248,13 @@ pub struct MessageView {
     pub reactions: BTreeMap<String, i64>,
     pub reactions_self: Vec<String>,
     pub attachment: Option<FileAttachment>,
+    /// Can be deleted: by its author with `RoomView.can_chat`, by others with
+    /// `RoomView.can_delete_others`.
+    pub deletable: bool,
+    /// Its author can edit the text (or caption) with `RoomView.can_chat`, until `edit_until`.
+    pub editable: bool,
+    /// Unix seconds; `None`: no limit.
+    pub edit_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,8 +322,9 @@ pub struct Engine {
     attachment_folder: RwLock<Option<String>>,
     /// Which permission bit allows reactions on this server.
     react_bit: AtomicI64,
-    /// Reaction changes run one after another (quick changes of mind stay in order).
-    reaction_lock: tokio::sync::Mutex<()>,
+    /// Changes of a message (reaction, edit, deletion) run one after another: quick changes
+    /// of mind stay in order.
+    message_lock: tokio::sync::Mutex<()>,
     /// The server lets this user create conversations (`config.conversations.can-create`).
     pub(crate) can_create: AtomicBool,
     /// Categories from the server and the locally kept collapsed state (docs/categories.md).
@@ -361,7 +380,7 @@ impl Engine {
             react_bit: AtomicI64::new(
                 cache.meta("react_bit").and_then(|v| v.parse().ok()).unwrap_or(PERMISSION_REACT),
             ),
-            reaction_lock: tokio::sync::Mutex::new(()),
+            message_lock: tokio::sync::Mutex::new(()),
             can_create: AtomicBool::new(cache.meta("can_create").is_none_or(|v| v == "true")),
             categories: Mutex::new(crate::categories::Categories::load(&cache)),
             outbox: Outbox::open(data_dir.as_deref()),
@@ -1070,7 +1089,9 @@ impl Engine {
     /// it. On failure the message falls back to what the server has and the error is
     /// returned (see [`reaction_error_text`]).
     pub async fn set_reaction(&self, token: &str, message_id: i64, emoji: Option<&str>) -> Result<()> {
-        let _order = self.reaction_lock.lock().await;
+        let _order = self.message_lock.lock().await;
+        // A message that just arrived may still be on its way into the cache.
+        self.cache.flush().await;
         let cached = self.cache.message(token, message_id);
         let own: Vec<String> = match &cached {
             Some(m) => m.reactions_self.clone(),
@@ -1153,6 +1174,129 @@ impl Engine {
             .map(|(e, people)| (e.clone(), people.len() as i64))
             .collect();
         m
+    }
+
+    // --- edit and delete (docs/chat.md „Bearbeiten und Löschen“) ---------------------------------
+
+    /// The text of a message as it was written, for the input field: mentions in the
+    /// server's notation, so they are still mentions after saving. `None` when the
+    /// message is not cached (the platform then starts from `MessageView.text`).
+    pub async fn edit_source(&self, token: &str, message_id: i64) -> Option<String> {
+        self.cache.flush().await;
+        self.cache.message(token, message_id).filter(|m| !m.is_deleted()).map(|m| m.source_text())
+    }
+
+    /// Replaces the text of an own message (the caption of an own file). The new version
+    /// arrives as `MessagesUpdated` before this returns; nothing shows before the server
+    /// has it. See [`message_error_text`] for the error.
+    pub async fn edit_message(&self, token: &str, message_id: i64, text: &str) -> Result<()> {
+        let text = text.trim();
+        // Pending messages have no id on the server yet.
+        if message_id <= 0 {
+            return Err(Error::NotFound);
+        }
+        let _order = self.message_lock.lock().await;
+        self.cache.flush().await;
+        let before = self.cache.message(token, message_id);
+        if let Some(m) = &before {
+            if m.is_deleted() {
+                return Err(Error::NotFound);
+            }
+            if m.source_text().trim() == text {
+                return Ok(());
+            }
+        }
+        let answer = self.guard(self.client.edit_message(token, message_id, text).await)?;
+        self.apply_answer(token, answer, before.as_ref());
+        Ok(())
+    }
+
+    /// Deletes a message for everybody: an own one, or as a moderator of a group anyone's.
+    /// The deleted message arrives as `MessagesUpdated` before this returns.
+    pub async fn delete_message(&self, token: &str, message_id: i64) -> Result<()> {
+        if message_id <= 0 {
+            return Err(Error::NotFound);
+        }
+        let _order = self.message_lock.lock().await;
+        self.cache.flush().await;
+        let before = self.cache.message(token, message_id);
+        // Deleting it twice is an error to the server.
+        if before.as_ref().is_some_and(ChatMessage::is_deleted) {
+            return Ok(());
+        }
+        let answer = self.guard(self.client.delete_message(token, message_id).await)?;
+        self.apply_answer(token, answer, before.as_ref());
+        Ok(())
+    }
+
+    /// The server's answer to an own edit or deletion: its `parent` is the new version.
+    /// Without one the live update brings it.
+    fn apply_answer(&self, token: &str, answer: ChatMessage, before: Option<&ChatMessage>) {
+        let Some(mut m) = answer.parent.map(|p| *p) else { return };
+        // The answer leaves out which reactions are ours.
+        if let Some(old) = before {
+            m.reactions_self = old.reactions_self.iter().filter(|e| m.reactions.contains_key(*e)).cloned().collect();
+        }
+        let changed = [m.id];
+        let mut updates = vec![m];
+        let messages = self.update_views(token, &mut updates, &changed);
+        self.cache.append(token, Vec::new(), updates.clone(), None);
+        self.sink.emit(Event::MessagesUpdated { token: token.to_string(), messages });
+        let rooms = {
+            let mut st = self.state.lock().unwrap();
+            self.update_preview(&mut st, token, &updates).then(|| self.sorted_views(&st.rooms))
+        };
+        if let Some(rooms) = rooms {
+            self.sink.emit(Event::RoomsChanged { rooms });
+        }
+    }
+
+    /// The views of new versions of messages, completed in place with what the server
+    /// leaves out: a changed message comes without its quote. For the ids in `rewritten`
+    /// (edited, deleted) the cached replies follow, with the new quote.
+    fn update_views(&self, token: &str, updates: &mut Vec<ChatMessage>, rewritten: &[i64]) -> Vec<MessageView> {
+        // The last version of each message.
+        let mut seen = std::collections::HashSet::new();
+        let mut last: Vec<ChatMessage> = updates.drain(..).rev().filter(|m| seen.insert(m.id)).collect();
+        last.reverse();
+        *updates = last;
+        for m in updates.iter_mut() {
+            if m.parent.is_none() {
+                m.parent = self.cache.message(token, m.id).and_then(|old| old.parent);
+            }
+        }
+        // A quoted message that changed with it.
+        let quotes: HashMap<i64, ChatMessage> =
+            updates.iter().map(|m| (m.id, ChatMessage { parent: None, ..m.clone() })).collect();
+        for m in updates.iter_mut() {
+            if let Some(q) = m.parent.as_ref().and_then(|p| quotes.get(&p.id)) {
+                m.parent = Some(Box::new(q.clone()));
+            }
+        }
+        let unlimited = self.edit_unlimited(token);
+        let mut views: Vec<MessageView> = updates.iter().map(|m| self.view_in(m, unlimited)).collect();
+        for id in rewritten {
+            let Some(quote) = quotes.get(id) else { continue };
+            for mut reply in self.cache.replies_to(token, *id) {
+                if quotes.contains_key(&reply.id) || !is_visible(&reply) {
+                    continue;
+                }
+                reply.parent = Some(Box::new(quote.clone()));
+                views.push(self.view_in(&reply, unlimited));
+            }
+        }
+        views
+    }
+
+    /// Replaces the last message of the room in the list when it is one of `updates`.
+    fn update_preview(&self, st: &mut State, token: &str, updates: &[ChatMessage]) -> bool {
+        let Some(room) = st.rooms.get_mut(token) else { return false };
+        let Some(new) = room.last_message.as_ref().and_then(|l| updates.iter().find(|m| m.id == l.id)) else {
+            return false;
+        };
+        room.last_message = Some(new.clone());
+        self.cache.put_rooms(vec![room.clone()], false);
+        true
     }
 
     /// Stores a changed message and shows it.
@@ -1325,12 +1469,13 @@ impl Engine {
     fn page(&self, messages: Vec<ChatMessage>, last_common_read: Option<i64>) -> ChatPage {
         let has_more = messages.len() as u32 >= PAGE_SIZE;
         let oldest_id = messages.iter().map(|m| m.id).min();
+        let unlimited = messages.first().is_some_and(|m| self.edit_unlimited(&m.token));
         ChatPage {
             oldest_id,
             messages: messages
                 .iter()
                 .filter(|m| is_visible(m))
-                .map(|m| self.view(m))
+                .map(|m| self.view_in(m, unlimited))
                 .collect(),
             has_more,
             last_common_read,
@@ -1343,12 +1488,13 @@ impl Engine {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
+        let unlimited = messages.first().is_some_and(|m| self.edit_unlimited(&m.token));
         ChatPage {
             oldest_id: messages.iter().map(|m| m.id).min(),
             messages: messages
                 .iter()
                 .filter(|m| is_visible(m) && !(m.expiration_timestamp > 0 && m.expiration_timestamp < now))
-                .map(|m| self.view(m))
+                .map(|m| self.view_in(m, unlimited))
                 .collect(),
             has_more,
             last_common_read,
@@ -1356,8 +1502,22 @@ impl Engine {
         }
     }
 
+    /// Own messages can be edited without a time limit here ("note to self").
+    fn edit_unlimited(&self, token: &str) -> bool {
+        let st = self.state.lock().unwrap();
+        st.rooms.get(token).is_some_and(|r| r.room_type == RoomType::NoteToSelf)
+    }
+
+    /// Not with `state` locked: it looks up the room.
     pub fn view(&self, m: &ChatMessage) -> MessageView {
-        let deleted = m.message_type == "comment_deleted";
+        self.view_in(m, self.edit_unlimited(&m.token))
+    }
+
+    fn view_in(&self, m: &ChatMessage, edit_unlimited: bool) -> MessageView {
+        let deleted = m.is_deleted();
+        let is_own = self.is_own(&m.actor_type, &m.actor_id);
+        // On the server, and neither a system message nor deleted.
+        let deletable = m.id > 0 && !deleted && !m.is_system();
         MessageView {
             id: m.id,
             token: m.token.clone(),
@@ -1375,7 +1535,7 @@ impl Engine {
             },
             system_message: m.system_message.clone(),
             reference_id: m.reference_id.clone(),
-            is_own: self.is_own(&m.actor_type, &m.actor_id),
+            is_own,
             edited: m.last_edit_timestamp.is_some_and(|t| t > 0),
             markdown: m.markdown,
             reply_to: m.parent.as_deref().map(|p| ReplyPreview {
@@ -1392,6 +1552,13 @@ impl Engine {
             reactions: m.reactions.clone(),
             reactions_self: m.reactions_self.clone(),
             attachment: if deleted { None } else { m.attachment() },
+            deletable,
+            // Text and files (their caption); no voice message, poll or location.
+            editable: deletable
+                && is_own
+                && m.message_type == "comment"
+                && !m.message_parameters.contains_key("object"),
+            edit_until: (!edit_unlimited).then_some(m.timestamp + EDIT_WINDOW_S),
         }
     }
 
@@ -1421,6 +1588,7 @@ impl Engine {
     }
 
     fn room_view(&self, r: &Room) -> RoomView {
+        let can_chat = r.read_only == 0 && (r.permissions == 0 || r.permissions & PERMISSION_CHAT != 0);
         RoomView {
             token: r.token.clone(),
             name: r.display_name.clone(),
@@ -1437,6 +1605,11 @@ impl Engine {
             read_only: r.read_only != 0,
             can_react: r.read_only == 0
                 && (r.permissions == 0 || r.permissions & self.react_bit.load(Ordering::Relaxed) != 0),
+            can_chat,
+            // In a one-to-one chat both are "owner": the server refuses it there.
+            can_delete_others: can_chat
+                && matches!(r.participant_type, 1 | 2 | 6)
+                && matches!(r.room_type, RoomType::Group | RoomType::Public),
             has_call: r.has_call,
             notification_level: effective_notification_level(r.notification_level, r.room_type),
             avatar_version: r.avatar_version.clone(),
@@ -1458,23 +1631,29 @@ impl Engine {
         if members {
             self.sink.emit(Event::ParticipantsChanged { token: token.to_string() });
         }
+        let mut updates = parent_updates(&messages);
+        // A message that came and changed in the same batch has its quote right there.
+        for u in updates.iter_mut().filter(|u| u.parent.is_none()) {
+            u.parent = messages.iter().find(|m| m.id == u.id).and_then(|m| m.parent.clone());
+        }
+        let rewritten: Vec<i64> = messages
+            .iter()
+            .filter(|m| REWRITING_SYSTEM.contains(&m.system_message.as_str()))
+            .filter_map(|m| m.parent.as_ref().map(|p| p.id))
+            .collect();
+        let updated = self.update_views(token, &mut updates, &rewritten);
         if messages.iter().any(|m| m.system_message == "history_cleared") {
             // Forget the cached copy; the next open loads the remaining history.
             self.cache.replace_chat(token, Vec::new(), false, None);
         } else if !messages.is_empty() {
-            self.cache.append(token, messages.clone(), parent_updates(&messages), None);
+            self.cache.append(token, messages.clone(), updates.clone(), None);
         }
+        let unlimited = self.edit_unlimited(token);
         let mut added = Vec::new();
-        let mut updated = Vec::new();
         let mut latest: Option<ChatMessage> = None;
         for m in messages {
-            if UPDATING_SYSTEM.contains(&m.system_message.as_str()) {
-                if let Some(p) = m.parent.as_deref() {
-                    updated.push(self.view(p));
-                }
-            }
             if is_visible(&m) {
-                added.push(self.view(&m));
+                added.push(self.view_in(&m, unlimited));
                 latest = Some(m);
             }
         }
@@ -1484,26 +1663,29 @@ impl Engine {
                 messages: updated,
             });
         }
-        if added.is_empty() {
-            return room;
+        if !added.is_empty() {
+            let refs: Vec<String> = added.iter().map(|m| m.reference_id.clone()).collect();
+            self.sink.emit(Event::MessagesAdded {
+                token: token.to_string(),
+                messages: added,
+            });
+            // After the message itself, so the pending bubble is replaced without a gap.
+            self.outbox_echo(token, &refs.iter().map(String::as_str).collect::<Vec<_>>());
         }
-        let refs: Vec<String> = added.iter().map(|m| m.reference_id.clone()).collect();
-        self.sink.emit(Event::MessagesAdded {
-            token: token.to_string(),
-            messages: added,
-        });
-        // After the message itself, so the pending bubble is replaced without a gap.
-        self.outbox_echo(token, &refs.iter().map(String::as_str).collect::<Vec<_>>());
-        if let Some(m) = latest {
-            let rooms = {
-                let mut st = self.state.lock().unwrap();
-                if let Some(room) = st.rooms.get_mut(token) {
-                    room.last_activity = room.last_activity.max(m.timestamp);
-                    room.last_message = Some(m);
-                    self.cache.put_rooms(vec![room.clone()], false);
-                }
-                self.sorted_views(&st.rooms)
-            };
+        let rooms = {
+            let mut st = self.state.lock().unwrap();
+            // The server does not touch the room for an edit or a deletion: the list
+            // would show the old text until its next full refresh.
+            let mut changed = self.update_preview(&mut st, token, &updates);
+            if let (Some(m), Some(room)) = (latest, st.rooms.get_mut(token)) {
+                room.last_activity = room.last_activity.max(m.timestamp);
+                room.last_message = Some(m);
+                self.cache.put_rooms(vec![room.clone()], false);
+                changed = true;
+            }
+            changed.then(|| self.sorted_views(&st.rooms))
+        };
+        if let Some(rooms) = rooms {
             self.sink.emit(Event::RoomsChanged { rooms });
         }
         room
@@ -1538,7 +1720,6 @@ fn is_visible(m: &ChatMessage) -> bool {
     !HIDDEN_SYSTEM.contains(&m.system_message.as_str())
 }
 
-/// New versions of earlier messages carried by edit/deletion/reaction system messages.
 /// `m` as it will look once the own reactions `own` are removed and `add` is added.
 fn optimistic(m: &ChatMessage, own: &[String], add: Option<&str>) -> ChatMessage {
     let mut m = m.clone();
@@ -1565,6 +1746,36 @@ pub fn reaction_error_text(e: &Error) -> String {
     }
 }
 
+/// Which change of a message failed, for [`message_error_text`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageOp {
+    Edit,
+    Delete,
+}
+
+/// German text for a failed [`Engine::edit_message`] or [`Engine::delete_message`], for a
+/// short notice.
+pub fn message_error_text(op: MessageOp, e: &Error) -> String {
+    let text = match (op, e) {
+        (MessageOp::Edit, Error::Network(_) | Error::RetryLater { .. }) => "Keine Verbindung – Nachricht nicht geändert",
+        (MessageOp::Delete, Error::Network(_) | Error::RetryLater { .. }) => "Keine Verbindung – Nachricht nicht gelöscht",
+        (MessageOp::Edit, Error::Http { status: 400, .. }) if e.ocs_error().as_deref() == Some("age") => {
+            "Nachrichten lassen sich nur 24 Stunden lang bearbeiten"
+        }
+        (MessageOp::Edit, Error::Http { status: 400, .. }) => "Die Nachricht darf nicht leer sein",
+        (_, Error::Http { status: 413, .. }) => "Die Nachricht ist zu lang",
+        (_, Error::Http { status: 403, .. }) => "Keine Berechtigung",
+        (MessageOp::Edit, Error::Http { status: 405, .. }) => "Diese Nachricht lässt sich nicht bearbeiten",
+        (MessageOp::Delete, Error::Http { status: 405, .. }) => "Diese Nachricht lässt sich nicht löschen",
+        (_, Error::Http { status: 412, .. }) => "Der Chat ist gerade gesperrt",
+        (_, Error::NotFound) => "Nachricht nicht gefunden",
+        (MessageOp::Edit, _) => "Bearbeiten fehlgeschlagen",
+        (MessageOp::Delete, _) => "Löschen fehlgeschlagen",
+    };
+    text.into()
+}
+
+/// New versions of earlier messages carried by edit/deletion/reaction system messages.
 fn parent_updates(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     messages
         .iter()

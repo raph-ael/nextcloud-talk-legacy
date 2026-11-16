@@ -458,6 +458,8 @@ mod tests {
             is_archived: false,
             read_only: false,
             can_react: true,
+            can_chat: true,
+            can_delete_others: false,
             has_call: false,
             notification_level: 0,
             avatar_version: String::new(),

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 use talk_core::{
-    Account, ChatMessage, ConnectionState, ConversationTag, Engine, Event, EventSink, Participant, Platform, Reactions, Room,
-    TalkClient,
+    Account, ChatMessage, ConnectionState, ConversationTag, Engine, Event, EventSink, MessageOp, MessageView, Participant,
+    Platform, Reactions, Room, TalkClient, message_error_text,
 };
 
 use crate::state::State;
@@ -694,5 +694,250 @@ async fn a_start_with_a_server_that_hangs() {
     assert!(!starting.is_finished(), "the requests still hang");
     starting.abort();
     hanging.abort();
+    engine.shutdown();
+}
+
+/// docs/chat.md „Bearbeiten und Löschen“: the calls and what the server refuses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn editing_and_deleting_on_the_client() {
+    let server = serve().await;
+    let c = client(&server);
+    let status = |e: talk_core::Error| match e {
+        talk_core::Error::Http { status, .. } => status,
+        talk_core::Error::NotFound => 404,
+        other => panic!("{other}"),
+    };
+    let garden = c.history("garten", None, 50).await.unwrap().messages;
+    let find = |text: &str| garden.iter().find(|m| m.message.starts_with(text)).unwrap().id;
+
+    // Edit: the answer is the hidden system message, its parent the new version.
+    let sent = c.send_message("garten", "Ich gieße am Samstag", &talk_core::new_reference_id(), None).await.unwrap();
+    c.add_reaction("garten", sent.id, "👍").await.unwrap();
+    let answer = c.edit_message("garten", sent.id, "Ich gieße am Sonntag, @lena.").await.unwrap();
+    assert_eq!(answer.system_message, "message_edited");
+    let new = answer.parent.unwrap();
+    assert_eq!((new.id, new.rendered_text().as_str()), (sent.id, "Ich gieße am Sonntag, @Lena Hoffmann."));
+    assert_eq!(new.source_text(), "Ich gieße am Sonntag, @\"lena\".");
+    assert!(new.last_edit_timestamp.is_some_and(|t| t > 0));
+    // As on a real server: the answer does not say which reactions are ours ...
+    assert!(new.reactions_self.is_empty() && new.reactions["👍"] == 1);
+    // ... the live update does.
+    let poll = c.poll_messages("garten", sent.id, 0).await.unwrap();
+    let hidden = poll.messages.iter().find(|m| m.system_message == "message_edited").unwrap();
+    assert_eq!(hidden.parent.as_ref().unwrap().reactions_self, vec!["👍".to_string()]);
+    let again = c.history("garten", None, 5).await.unwrap().messages;
+    assert!(again.iter().find(|m| m.id == sent.id).unwrap().last_edit_timestamp.is_some());
+    let last = c.room("garten").await.unwrap().last_message.unwrap();
+    assert_eq!((last.id, last.message.as_str()), (sent.id, "Ich gieße am Sonntag, {mention-user1}."), "not the hidden one");
+
+    // Refused edits.
+    let err = c.edit_message("garten", sent.id, "  ").await.unwrap_err();
+    assert_eq!(err.ocs_error().as_deref(), Some("message"));
+    assert_eq!(message_error_text(MessageOp::Edit, &err), "Die Nachricht darf nicht leer sein");
+    let err = c.edit_message("garten", find("Bin dabei!"), "Zu spät").await.unwrap_err();
+    assert_eq!(err.ocs_error().as_deref(), Some("age"));
+    assert_eq!(message_error_text(MessageOp::Edit, &err), "Nachrichten lassen sich nur 24 Stunden lang bearbeiten");
+    let err = c.edit_message("garten", find("Den Gießplan"), "Nicht meine").await.unwrap_err();
+    assert_eq!(message_error_text(MessageOp::Edit, &err), "Keine Berechtigung");
+    let system = garden.iter().find(|m| m.is_system()).unwrap().id;
+    assert_eq!(status(c.edit_message("garten", system, "x").await.unwrap_err()), 405);
+    assert_eq!(status(c.edit_message("garten", 999_999, "x").await.unwrap_err()), 404);
+
+    // Delete: own messages; as the owner of a group also others'; never in a one-to-one chat.
+    let answer = c.delete_message("garten", sent.id).await.unwrap();
+    assert_eq!(answer.system_message, "message_deleted");
+    let gone = answer.parent.unwrap();
+    assert!(gone.is_deleted() && gone.reactions.is_empty() && gone.last_edit_timestamp.is_none());
+    let err = c.delete_message("garten", sent.id).await.unwrap_err();
+    assert_eq!(message_error_text(MessageOp::Delete, &err), "Diese Nachricht lässt sich nicht löschen");
+    assert_eq!(status(c.delete_message("garten", find("Den Gießplan")).await.unwrap_err()), 403);
+    let family = c.history("familie", None, 50).await.unwrap().messages;
+    let theirs = family.iter().find(|m| m.actor_id == "paul" && !m.is_system()).unwrap().id;
+    assert!(c.delete_message("familie", theirs).await.unwrap().parent.unwrap().is_deleted());
+    let one = c.history("lena", None, 50).await.unwrap().messages;
+    let theirs = one.iter().find(|m| m.actor_id == "lena").unwrap().id;
+    assert_eq!(status(c.delete_message("lena", theirs).await.unwrap_err()), 403);
+    // A reply to a deleted message quotes it as deleted.
+    let reply = family.iter().find(|m| m.parent.as_ref().is_some_and(|p| p.actor_id == "emil")).unwrap();
+    c.delete_message("familie", reply.parent.as_ref().unwrap().id).await.unwrap();
+    let family = c.history("familie", None, 50).await.unwrap().messages;
+    assert!(family.iter().find(|m| m.id == reply.id).unwrap().parent.as_ref().unwrap().is_deleted());
+}
+
+/// The updates of one message the platform was told, in order.
+fn updates(sink: &Sink, id: i64) -> Vec<MessageView> {
+    let events = sink.0.lock().unwrap();
+    let all = events.iter().filter_map(|e| match e {
+        Event::MessagesUpdated { messages, .. } => Some(messages.iter().filter(|m| m.id == id).cloned()),
+        _ => None,
+    });
+    all.flatten().collect()
+}
+
+/// A message the live update brought (`MessagesAdded`).
+async fn arrived(sink: &Sink, text: &'static str) -> MessageView {
+    let find = || {
+        let events = sink.0.lock().unwrap();
+        events.iter().find_map(|e| match e {
+            Event::MessagesAdded { messages, .. } => messages.iter().find(|m| m.text == text).cloned(),
+            _ => None,
+        })
+    };
+    until(text, || find().is_some()).await;
+    find().unwrap()
+}
+
+/// docs/chat.md „Bearbeiten und Löschen“: what the platform sees. A changed message
+/// keeps its quote and the own reaction, the replies to it get the new quote, and the
+/// chat list shows the new text at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn editing_and_deleting_in_the_engine() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account.clone(), Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let room = |token: &str| engine.rooms().into_iter().find(|r| r.token == token).unwrap();
+    let post = |path: &'static str, form: Vec<(&'static str, String)>| {
+        let url = format!("{server}{path}");
+        async move { assert!(reqwest::Client::new().post(url).form(&form).send().await.unwrap().status().is_success()) }
+    };
+    let now = chrono::Utc::now().timestamp();
+
+    // Who may do what.
+    assert!(room("garten").can_chat && !room("garten").can_delete_others, "a member");
+    assert!(room("familie").can_delete_others, "the owner of a group");
+    assert!(room("lena").can_chat && !room("lena").can_delete_others, "never in a one-to-one chat");
+    let page = engine.open_chat("garten").await.unwrap();
+    let old = page.messages.iter().find(|m| m.text.starts_with("Bin dabei!")).unwrap();
+    assert!(old.is_own && old.deletable && old.editable && old.edit_until.unwrap() < now, "too old to edit");
+    let theirs = page.messages.iter().find(|m| m.text.starts_with("Den Gießplan")).unwrap();
+    assert!(theirs.deletable && !theirs.editable);
+    let picture = page.messages.iter().find(|m| m.attachment.is_some()).unwrap();
+    assert!(picture.deletable && !picture.editable, "not ours");
+    let system = page.messages.iter().find(|m| m.kind == "system").unwrap();
+    assert!(!system.deletable && !system.editable);
+    let (old, theirs) = (old.id, theirs.id);
+
+    // An own message, an own reply to it with an own reaction.
+    engine.send("garten", "Erste Fassung", &talk_core::new_reference_id(), None).await.unwrap();
+    let first = arrived(&sink, "Erste Fassung").await;
+    assert!(first.editable && first.edit_until.unwrap() > now);
+    engine.send("garten", "Antwort", &talk_core::new_reference_id(), Some(first.id)).await.unwrap();
+    let reply = arrived(&sink, "Antwort").await;
+    assert_eq!(reply.reply_to.as_ref().unwrap().text, "Erste Fassung");
+    engine.set_reaction("garten", reply.id, Some("👍")).await.unwrap();
+    // The live update carries the reply without its quote: it stays.
+    until("the reaction over the live update", || updates(&sink, reply.id).len() >= 3).await;
+    assert!(updates(&sink, reply.id).iter().all(|m| m.reply_to.is_some()), "a reaction keeps the quote");
+
+    // Edit the quoted message: it changes, and the reply follows with the new quote.
+    assert_eq!(engine.edit_source("garten", first.id).await.as_deref(), Some("Erste Fassung"));
+    engine.edit_message("garten", first.id, "Zweite Fassung").await.unwrap();
+    let new = updates(&sink, first.id).pop().unwrap();
+    assert!(new.text == "Zweite Fassung" && new.edited && new.is_own);
+    assert_eq!(updates(&sink, reply.id).pop().unwrap().reply_to.unwrap().text, "Zweite Fassung");
+    // The same text again asks nobody.
+    until("the edit over the live update", || updates(&sink, first.id).len() >= 2).await;
+    let hidden = client(&server).history("garten", None, 50).await.unwrap().messages.len();
+    engine.edit_message("garten", first.id, " Zweite Fassung ").await.unwrap();
+    assert_eq!(client(&server).history("garten", None, 50).await.unwrap().messages.len(), hidden);
+
+    // Edit the reply: quote and own reaction stay, the chat list shows the new text.
+    let told = updates(&sink, reply.id).len();
+    engine.edit_message("garten", reply.id, "Antwort an @lena").await.unwrap();
+    let new = updates(&sink, reply.id).remove(told);
+    assert_eq!(new.text, "Antwort an @Lena Hoffmann");
+    assert_eq!(new.reply_to.as_ref().unwrap().text, "Zweite Fassung");
+    assert_eq!(new.reactions_self, vec!["👍".to_string()]);
+    assert_eq!(room("garten").last_message.unwrap().text, "Antwort an @Lena Hoffmann");
+    // The live update says the same.
+    until("the edit of the reply over the live update", || updates(&sink, reply.id).len() > told + 1).await;
+    let new = updates(&sink, reply.id).pop().unwrap();
+    assert!(new.text == "Antwort an @Lena Hoffmann" && new.reply_to.is_some() && new.reactions_self.len() == 1);
+    assert_eq!(engine.edit_source("garten", reply.id).await.as_deref(), Some("Antwort an @\"lena\""));
+
+    // What the server refuses comes back as a text to show.
+    let text = |r: talk_core::Result<()>, op| message_error_text(op, &r.unwrap_err());
+    assert_eq!(
+        text(engine.edit_message("garten", old, "Zu spät").await, MessageOp::Edit),
+        "Nachrichten lassen sich nur 24 Stunden lang bearbeiten"
+    );
+    assert_eq!(text(engine.delete_message("garten", theirs).await, MessageOp::Delete), "Keine Berechtigung");
+    assert_eq!(text(engine.delete_message("garten", -3).await, MessageOp::Delete), "Nachricht nicht gefunden");
+
+    // Delete the quoted message: the reply quotes a deleted message.
+    let (told, told_reply) = (updates(&sink, first.id).len(), updates(&sink, reply.id).len());
+    engine.delete_message("garten", first.id).await.unwrap();
+    let gone = updates(&sink, first.id).remove(told);
+    assert!(gone.kind == "deleted" && gone.text.is_empty() && !gone.deletable && !gone.editable);
+    let quote = updates(&sink, reply.id).remove(told_reply).reply_to.unwrap();
+    assert!(quote.id == first.id && quote.text.is_empty());
+    engine.delete_message("garten", first.id).await.unwrap();
+
+    // Somebody else edits and deletes: the same over the live update.
+    post("/demo/incoming", vec![("token", "garten".into()), ("text", "Ich bringe Erde mit".into()), ("from", "jonas".into())]).await;
+    let theirs = arrived(&sink, "Ich bringe Erde mit").await;
+    engine.send("garten", "Danke!", &talk_core::new_reference_id(), Some(theirs.id)).await.unwrap();
+    let thanks = arrived(&sink, "Danke!").await;
+    engine.set_reaction("garten", theirs.id, Some("❤️")).await.unwrap();
+    post("/demo/edit", vec![("token", "garten".into()), ("id", theirs.id.to_string()), ("text", "Ich bringe Kompost mit".into())]).await;
+    until("their edit", || updates(&sink, theirs.id).last().is_some_and(|m| m.text == "Ich bringe Kompost mit")).await;
+    let new = updates(&sink, theirs.id).pop().unwrap();
+    assert!(new.edited && !new.is_own && new.reactions_self == vec!["❤️".to_string()]);
+    until("the quote of their edit", || {
+        updates(&sink, thanks.id).last().is_some_and(|m| m.reply_to.as_ref().unwrap().text == "Ich bringe Kompost mit")
+    })
+    .await;
+    // The last message of the chat changes: the list follows without a refresh, and
+    // nothing is announced.
+    post("/demo/incoming", vec![("token", "garten".into()), ("text", "Bis Samstag".into()), ("from", "clara".into())]).await;
+    let last = arrived(&sink, "Bis Samstag").await;
+    let notices = |sink: &Sink| sink.0.lock().unwrap().iter().filter(|e| matches!(e, Event::MessageNotices { .. })).count();
+    let announced = notices(&sink);
+    post("/demo/edit", vec![("token", "garten".into()), ("id", last.id.to_string()), ("text", "Bis Sonntag".into())]).await;
+    until("the preview of their edit", || room("garten").last_message.is_some_and(|m| m.text == "Bis Sonntag")).await;
+    post("/demo/delete", vec![("token", "garten".into()), ("id", last.id.to_string())]).await;
+    until("their deletion", || updates(&sink, last.id).last().is_some_and(|m| m.kind == "deleted")).await;
+    until("the preview of their deletion", || room("garten").last_message.is_some_and(|m| m.text.is_empty())).await;
+    assert_eq!(notices(&sink), announced);
+    post("/demo/delete", vec![("token", "garten".into()), ("id", theirs.id.to_string())]).await;
+    until("the quote of their deletion", || {
+        updates(&sink, thanks.id).last().is_some_and(|m| m.reply_to.as_ref().unwrap().text.is_empty())
+    })
+    .await;
+
+    // All of it is in the cache: a start without the server shows the same.
+    engine.shutdown();
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink, Some(dir.clone()));
+    let cached = engine.cached_chat("garten").messages;
+    let by_id = |id: i64| cached.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(by_id(first.id).kind, "deleted");
+    let kept = by_id(reply.id);
+    assert_eq!(kept.text, "Antwort an @Lena Hoffmann");
+    assert!(kept.edited && kept.reactions_self == vec!["👍".to_string()]);
+    assert!(kept.reply_to.as_ref().unwrap().id == first.id && kept.reply_to.as_ref().unwrap().text.is_empty());
+    assert!(by_id(thanks.id).reply_to.as_ref().unwrap().text.is_empty());
+    assert_eq!(by_id(last.id).kind, "deleted");
+    assert!(cached.iter().all(|m| !m.system_message.starts_with("message_")), "the hidden messages stay hidden");
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Offline nothing is kept for later: the platform gets the text to show.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn editing_without_the_server() {
+    let mut server = Outage::server().await;
+    let (engine, _sink) = server.engine();
+    engine.start().await.unwrap();
+    let page = engine.open_chat("lena").await.unwrap();
+    let own = page.messages.iter().rev().find(|m| m.is_own).unwrap().id;
+    server.stop().await;
+    let err = engine.edit_message("lena", own, "Neu").await.unwrap_err();
+    assert_eq!(message_error_text(MessageOp::Edit, &err), "Keine Verbindung – Nachricht nicht geändert");
+    let err = engine.delete_message("lena", own).await.unwrap_err();
+    assert_eq!(message_error_text(MessageOp::Delete, &err), "Keine Verbindung – Nachricht nicht gelöscht");
     engine.shutdown();
 }

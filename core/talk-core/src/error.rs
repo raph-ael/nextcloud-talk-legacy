@@ -34,6 +34,17 @@ pub enum Error {
 }
 
 impl Error {
+    /// The `error` code of a refused OCS call (`{"ocs":{"data":{"error":"age"}}}`).
+    pub fn ocs_error(&self) -> Option<String> {
+        let Error::Http { message, .. } = self else { return None };
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(message) {
+            return v.pointer("/ocs/data/error")?.as_str().map(str::to_string);
+        }
+        // The kept part of the answer was cut off.
+        let rest = message.split_once("\"error\":\"")?.1;
+        rest.split_once('"').map(|(code, _)| code.to_string())
+    }
+
     /// Whether the request may have reached the server although it failed (timeouts,
     /// connection resets after sending). Only a failed connect proves it did not.
     pub fn maybe_delivered(&self) -> bool {
