@@ -908,6 +908,11 @@ async fn editing_and_deleting_in_the_engine() {
     })
     .await;
 
+    // A deleted reply shows no quote.
+    engine.delete_message("garten", thanks.id).await.unwrap();
+    let gone = updates(&sink, thanks.id).pop().unwrap();
+    assert!(gone.kind == "deleted" && gone.reply_to.is_none());
+
     // All of it is in the cache: a start without the server shows the same.
     engine.shutdown();
     let sink = Arc::new(Sink(Mutex::new(Vec::new())));
@@ -919,7 +924,7 @@ async fn editing_and_deleting_in_the_engine() {
     assert_eq!(kept.text, "Antwort an @Lena Hoffmann");
     assert!(kept.edited && kept.reactions_self == vec!["👍".to_string()]);
     assert!(kept.reply_to.as_ref().unwrap().id == first.id && kept.reply_to.as_ref().unwrap().text.is_empty());
-    assert!(by_id(thanks.id).reply_to.as_ref().unwrap().text.is_empty());
+    assert!(by_id(thanks.id).kind == "deleted" && by_id(thanks.id).reply_to.is_none());
     assert_eq!(by_id(last.id).kind, "deleted");
     assert!(cached.iter().all(|m| !m.system_message.starts_with("message_")), "the hidden messages stay hidden");
     engine.shutdown();

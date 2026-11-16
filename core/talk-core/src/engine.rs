@@ -1538,7 +1538,8 @@ impl Engine {
             is_own,
             edited: m.last_edit_timestamp.is_some_and(|t| t > 0),
             markdown: m.markdown,
-            reply_to: m.parent.as_deref().map(|p| ReplyPreview {
+            // A deleted message says nothing, so it quotes nothing either.
+            reply_to: m.parent.as_deref().filter(|_| !deleted).map(|p| ReplyPreview {
                 id: p.id,
                 author: p.actor_display_name.clone(),
                 text: if p.message_type == "comment_deleted" {

@@ -218,6 +218,7 @@ Bei einer Datei endet nur die Freigabe für den Chat. Die Datei selbst bleibt be
   - Antworten auf eine geänderte oder gelöschte Nachricht kommen im selben `MessagesUpdated` mit dem neuen Zitat.
   - Ist es die letzte Nachricht des Chats, kommt `RoomsChanged` mit der neuen Vorschau.
 - Die Anzeige bleibt wie bisher: „bearbeitet ·“ in der Meta-Zeile, „Diese Nachricht wurde gelöscht.“ in der Blase, „Nachricht gelöscht“ im Zitat und in der Chatliste.
+- Eine gelöschte Antwort kommt ohne `replyTo`: Sie zeigt kein Zitat mehr.
 
 **Menü der Nachricht**
 - „Bearbeiten“ steht direkt nach „Antworten“.
