@@ -123,6 +123,8 @@ final class SessionStore {
     @ObservationIgnored private var connectionDelay: Task<Void, Never>?
     private(set) var activeToken: String?
     private(set) var unreadLine: UnreadLine?
+    /// Bumped whenever the open chat is opened anew in place: its list starts over (position).
+    private(set) var openSerial = 0
     /// The open chat's list shows its newest message; until then nothing is marked read
     /// (opening at the unread line must not read what is below it).
     @ObservationIgnored private var chatAtBottom = true
@@ -1030,6 +1032,16 @@ final class SessionStore {
                 settleUnreadLine(token)
             }
         }
+    }
+
+    /// A notification of the chat that is open already was tapped (docs/notifications.md,
+    /// "War der Chat schon offen"): like opening it anew, the list then stands at the unread
+    /// line, without unread messages at the end.
+    func reopenRoom(_ token: String) {
+        guard activeToken == token else { return }
+        closeRoom()
+        openRoom(token)
+        openSerial += 1
     }
 
     func closeRoom() {

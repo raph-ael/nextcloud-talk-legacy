@@ -92,6 +92,8 @@ struct ChatView: View {
                     }
                 )
             )
+            // Opened anew in place (a notification of this chat): a fresh list positions again.
+            .id(store.openSerial)
             .background(Talk.background)
             .overlay(alignment: .top) {
                 if pillShown {
@@ -163,6 +165,11 @@ struct ChatView: View {
         )
         .onChange(of: editedGone) { _, gone in if gone { editing = nil } }
         .onChange(of: store.activeToken) { _, t in if t != token { editing = nil } }
+        .onChange(of: store.openSerial) {
+            // The new list reports where it stands; what the old one showed goes.
+            showJump = false
+            pillShown = false
+        }
         .confirmationDialog(
             "Nachricht löschen?",
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),

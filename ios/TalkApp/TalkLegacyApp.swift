@@ -128,6 +128,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #if DEBUG
         DebugEnv.persist()
         Heartbeat.start()
+        DevPushInbox.start()
         Task { @MainActor in
             await LogDump.deliveredNotifications()
             try? await Task.sleep(for: .seconds(2))
@@ -152,7 +153,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Log.push.error("apns: \(error.localizedDescription, privacy: .public)")
     }
 
-    /// Background push from the server (e.g. a call notification was deleted).
+    /// Background push from the server: a call notification was deleted, or a message push
+    /// with `content-available` (the core fetches the chat; iOS keeps the app awake until
+    /// `handleBackground` returns, docs/notifications.md "Die Nachricht ist dann schon da").
     nonisolated func application(
         _ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]
     ) async -> UIBackgroundFetchResult {
@@ -213,6 +216,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             if store.activeToken != token {
                 store.closeRoom()
                 store.openRoom(token)
+            } else {
+                store.reopenRoom(token)
             }
         }
     }

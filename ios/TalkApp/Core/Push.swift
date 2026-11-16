@@ -113,8 +113,11 @@ final class Push {
         }
     }
 
-    /// Background push (deletions: a call that ended rings no longer). The key that
-    /// decrypts names the account.
+    /// Background push: deletions (a call that ended rings no longer), and message pushes
+    /// with `content-available`, for which the core fetches the chat into the cache
+    /// (docs/notifications.md "Die Nachricht ist dann schon da", at most 8 s). Returns only
+    /// when `handlePush` is done: iOS keeps the app awake until then. Shows nothing, the
+    /// extension already made the notification. The key that decrypts names the account.
     nonisolated static func handleBackground(_ info: [AnyHashable: Any]) async {
         guard let subject = info["subject"] as? String,
               let found = decryptPushFor(keys: DeviceKeys.decryptKeys(), subject: subject) else {
@@ -134,7 +137,11 @@ final class Push {
         }
         guard let account, let session else { return }
         await removeDelivered(msg, account: account, legacy: legacy)
+        let start = ContinuousClock.now
         _ = await session.handlePush(message: msg, callId: nil)
+        let took = (ContinuousClock.now - start).components
+        let ms = took.seconds * 1000 + took.attoseconds / 1_000_000_000_000_000
+        Log.push.info("background push handled in \(ms, privacy: .public) ms")
     }
 
     /// Read or deleted on the server: the extension's chat notifications (they carry `nid`)

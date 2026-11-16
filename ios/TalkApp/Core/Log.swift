@@ -198,3 +198,43 @@ enum DevPushKeys {
     }
 }
 #endif
+
+#if DEBUG
+/// Simulator tests of the wake-up path (`TALK_DEV_PUSH_INBOX=<folder>`): `simctl push` never
+/// wakes the app there, so a test drops a push's userInfo as `<name>.json` into the folder.
+/// The app hands it to `Push.handleBackground` like iOS would and writes `<name>.done`: how
+/// long it took and whether `cachedChat` held the text `expect` before and after.
+enum DevPushInbox {
+    @MainActor static func start() {
+        guard let dir = ProcessInfo.processInfo.environment["TALK_DEV_PUSH_INBOX"], !dir.isEmpty else { return }
+        Task.detached {
+            let fm = FileManager.default
+            while true {
+                try? await Task.sleep(for: .milliseconds(200))
+                let names = (try? fm.contentsOfDirectory(atPath: dir))?.filter { $0.hasSuffix(".json") } ?? []
+                for name in names {
+                    let url = URL(fileURLWithPath: dir).appendingPathComponent(name)
+                    guard let data = try? Data(contentsOf: url) else { continue }
+                    try? fm.removeItem(at: url)
+                    guard let info = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+                    let expect = info["expect"] as? String ?? ""
+                    let token = info["token"] as? String ?? ""
+                    let account = info["account"] as? String
+                    let before = await cached(account, token, expect)
+                    let start = Date()
+                    await Push.handleBackground(info)
+                    let ms = Int(Date().timeIntervalSince(start) * 1000)
+                    let after = await cached(account, token, expect)
+                    let done = url.deletingPathExtension().appendingPathExtension("done")
+                    try? Data("ms=\(ms) before=\(before) after=\(after)".utf8).write(to: done)
+                }
+            }
+        }
+    }
+
+    @MainActor private static func cached(_ account: String?, _ token: String, _ text: String) -> Bool {
+        guard !text.isEmpty, let s = SessionStore.shared.runtime(account)?.session else { return false }
+        return s.cachedChat(token: token).messages.contains { $0.text.contains(text) }
+    }
+}
+#endif
