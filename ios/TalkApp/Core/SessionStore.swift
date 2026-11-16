@@ -806,7 +806,8 @@ final class SessionStore {
             badges[id] = rt.session.badge()
             updateAppBadge()
             if active { roomsChanged(rooms) }
-        case .connection(let online):
+        case .connection(let state):
+            let online = state != .offline
             rt.online = online
             if active { self.online = online }
         case .authFailed:

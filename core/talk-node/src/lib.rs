@@ -729,6 +729,17 @@ impl TalkSession {
         self.engine.network_changed();
     }
 
+    /// "online" | "connecting" | "offline" right now (the event only reports changes).
+    #[napi]
+    pub fn connection_state(&self) -> String {
+        match self.engine.connection_state() {
+            core::ConnectionState::Online => "online",
+            core::ConnectionState::Connecting => "connecting",
+            core::ConnectionState::Offline => "offline",
+        }
+        .into()
+    }
+
     #[napi]
     pub fn outbox_unsent(&self) -> u32 {
         self.engine.outbox_unsent()

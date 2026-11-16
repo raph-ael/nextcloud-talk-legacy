@@ -216,6 +216,7 @@ website/       wolkenfunk.org
   [Chat](docs/chat.md) ·
   [Anrufe](docs/calls.md) ·
   [Benachrichtigungen](docs/notifications.md) ·
+  [Verbindungsanzeige](docs/connection.md) ·
   [Mehrere Konten](docs/accounts.md) ·
   [Kategorien](docs/categories.md) ·
   [Gruppen](docs/groups.md) ·

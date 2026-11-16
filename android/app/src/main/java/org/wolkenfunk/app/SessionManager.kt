@@ -54,6 +54,7 @@ import uniffi.talk_ffi.revokeAppPassword
 import org.wolkenfunk.app.media.stagingDir
 import uniffi.talk_ffi.generatePushKey
 import uniffi.talk_ffi.ClientPlatform
+import uniffi.talk_ffi.ConnectionState
 import uniffi.talk_ffi.CoreEvent
 import uniffi.talk_ffi.CoreException
 import uniffi.talk_ffi.CoreListener
@@ -1014,8 +1015,9 @@ class SessionManager(private val context: Context) {
                 it.copy(lastCommonRead = maxOf(it.lastCommonRead, event.lastCommonRead))
             }
             is CoreEvent.Connection -> {
-                rt.online = event.online
-                _state.update { if (it.accountId == rt.id) it.copy(online = event.online) else it }
+                val online = event.state != ConnectionState.OFFLINE
+                rt.online = online
+                _state.update { if (it.accountId == rt.id) it.copy(online = online) else it }
             }
             CoreEvent.AuthFailed -> scope.launch { expire(rt) }
             is CoreEvent.OutboxChanged -> {

@@ -438,6 +438,7 @@ impl Engine {
     pub fn network_changed(&self) {
         self.outbox.wake();
         self.calls.network_changed();
+        self.retry_now();
     }
 
     /// Resolves once nothing is actively being sent: the outbox is empty or every item is
@@ -917,12 +918,21 @@ impl Engine {
         });
     }
 
+    /// The pending messages of every conversation look different now (connection state).
+    pub(crate) fn outbox_views_changed(&self) {
+        let tokens: std::collections::BTreeSet<String> =
+            self.outbox.inner.lock().unwrap().items.values().map(|i| i.token.clone()).collect();
+        for token in tokens {
+            self.outbox_changed(&token);
+        }
+    }
+
     fn pending_view(&self, item: &OutboxItem, live: &Live) -> PendingMessage {
         let state = match (item.failed, live.phase) {
             (Some(_), _) => PendingState::Failed,
             (None, Phase::Waiting) => PendingState::Waiting,
             // Queued behind a waiting message while offline: waiting as well.
-            (None, Phase::Queued) if !self.is_online() => PendingState::Waiting,
+            (None, Phase::Queued) if self.is_offline() => PendingState::Waiting,
             _ => PendingState::Sending,
         };
         let progress = match (&item.file, live.phase) {

@@ -471,6 +471,26 @@ impl From<ReplyPreview> for core::ReplyPreview {
     }
 }
 
+/// What the server connection looks like to the user (docs/connection.md).
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConnectionState {
+    Online,
+    /// Starting, or a call just failed and the core is retrying: a small spinner.
+    Connecting,
+    /// The retries failed too: "Keine Verbindung".
+    Offline,
+}
+
+impl From<core::ConnectionState> for ConnectionState {
+    fn from(s: core::ConnectionState) -> Self {
+        match s {
+            core::ConnectionState::Online => Self::Online,
+            core::ConnectionState::Connecting => Self::Connecting,
+            core::ConnectionState::Offline => Self::Offline,
+        }
+    }
+}
+
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PendingState {
     Sending,
@@ -628,7 +648,8 @@ pub enum CoreEvent {
     MessagesAdded { token: String, messages: Vec<MessageView> },
     MessagesUpdated { token: String, messages: Vec<MessageView> },
     ReadStatus { token: String, last_common_read: i64 },
-    Connection { online: bool },
+    /// docs/connection.md. A session starts as `Connecting`.
+    Connection { state: ConnectionState },
     AuthFailed,
     /// Pending messages of a conversation changed (any conversation, open or not).
     OutboxChanged { token: String, items: Vec<PendingMessage> },
@@ -670,7 +691,7 @@ impl From<core::Event> for CoreEvent {
                 token,
                 last_common_read,
             },
-            core::Event::Connection { online } => Self::Connection { online },
+            core::Event::Connection { state } => Self::Connection { state: state.into() },
             core::Event::AuthFailed => Self::AuthFailed,
             core::Event::OutboxChanged { token, items } => Self::OutboxChanged {
                 token,
@@ -1177,6 +1198,11 @@ impl TalkSession {
     /// Call when connectivity returns or changes: waiting messages are retried at once.
     pub fn network_changed(&self) {
         self.engine.network_changed();
+    }
+
+    /// The connection state right now (the event only reports changes).
+    pub fn connection_state(&self) -> ConnectionState {
+        self.engine.connection_state().into()
     }
 
     /// Number of messages still to deliver (failed ones excluded).

@@ -19,6 +19,7 @@ pub mod call;
 pub mod categories;
 pub(crate) mod cache;
 pub mod client;
+pub mod connection;
 pub mod engine;
 pub mod error;
 pub mod groups;
@@ -38,6 +39,7 @@ pub use call::{
 pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };
+pub use connection::ConnectionState;
 pub use engine::{ChatPage, Engine, Event, EventSink, MessageView, ReactionView, ReplyPreview, RoomView, reaction_error_text};
 pub use categories::{CategoryOp, CategoryView, SectionView, category_error_text};
 pub use error::{Error, Result};

@@ -26,6 +26,7 @@ use crate::outbox::{Outbox, PendingMessage};
 use crate::voice::VoiceStore;
 
 use crate::client::TalkClient;
+use crate::connection::ConnectionState;
 use crate::error::{Error, Result};
 use crate::models::{ChatMessage, FileAttachment, Reactions, Room, RoomType};
 use crate::notices::{MessageNotice, Notices};
@@ -127,7 +128,8 @@ pub enum Event {
     },
     /// Highest message id everybody has read (for read receipts).
     ReadStatus { token: String, last_common_read: i64 },
-    Connection { online: bool },
+    /// The connection state changed (docs/connection.md). A session starts as `connecting`.
+    Connection { state: ConnectionState },
     /// App password was revoked: the platform must sign out.
     AuthFailed,
     /// The pending (not yet delivered or failed) messages of a conversation changed.
@@ -293,7 +295,11 @@ pub struct Engine {
     display_name: RwLock<String>,
     /// `me` came from the server (the login name may differ from the user id).
     me_resolved: AtomicBool,
-    online: AtomicBool,
+    pub(crate) conn: Mutex<crate::connection::Conn>,
+    /// The state the platform was told last.
+    pub(crate) conn_told: Mutex<ConnectionState>,
+    /// Cuts the wait before the next retry short (network changed).
+    pub(crate) retry_wake: Arc<tokio::sync::Notify>,
     state: Mutex<State>,
     attachment_folder: RwLock<Option<String>>,
     /// Which permission bit allows reactions on this server.
@@ -347,7 +353,9 @@ impl Engine {
             display_name: RwLock::new(cache.meta("display_name").filter(|n| !n.is_empty()).unwrap_or_else(|| me.clone())),
             me: RwLock::new(me),
             me_resolved: AtomicBool::new(false),
-            online: AtomicBool::new(true),
+            conn: Mutex::default(),
+            conn_told: Mutex::new(ConnectionState::Connecting),
+            retry_wake: Arc::default(),
             state: Mutex::new(state),
             attachment_folder: RwLock::new(cache.meta("attachment_folder")),
             react_bit: AtomicI64::new(
@@ -406,15 +414,19 @@ impl Engine {
         if let Ok(caps) = caps {
             self.apply_capabilities(&caps);
         }
-        let user = match self.guard(user) {
-            Ok(u) => {
-                self.set_user(u);
-                Ok(())
-            }
-            Err(Error::Unauthorized) => return Err(Error::Unauthorized),
-            Err(e) => Err(e),
-        };
-        let first = self.guard(rooms).map(|batch| self.apply_rooms(batch, true));
+        if let Err(Error::Unauthorized) = &user {
+            return self.guard(user).map(|_| ());
+        }
+        // The list first, then the connection state: while a session is `connecting`, an
+        // empty list means "still loading" to the platform (docs/connection.md).
+        let user = user.map(|u| self.set_user(u));
+        let first = rooms.map(|batch| self.apply_rooms(batch, true));
+        self.track(&user);
+        self.track(&first);
+        if user.is_err() && first.is_err() {
+            // The server answered with errors only: not reachable for the user either.
+            self.unreachable();
+        }
 
         let weak = Arc::downgrade(self);
         let task = tokio::spawn(async move {
@@ -1279,25 +1291,16 @@ impl Engine {
 
     /// Tracks connectivity and auth state for every server call.
     pub(crate) fn guard<T>(&self, r: Result<T>) -> Result<T> {
-        match &r {
-            Ok(_) => self.set_online(true),
-            Err(Error::Unauthorized) => self.sink.emit(Event::AuthFailed),
-            Err(Error::Network(_)) => self.set_online(false),
-            Err(_) => {}
-        }
+        self.track(&r);
         r
     }
 
-    pub(crate) fn is_online(&self) -> bool {
-        self.online.load(Ordering::Relaxed)
-    }
-
-    fn set_online(&self, online: bool) {
-        if self.online.swap(online, Ordering::Relaxed) != online {
-            self.sink.emit(Event::Connection { online });
-            if online {
-                self.outbox.wake();
-            }
+    fn track<T>(&self, r: &Result<T>) {
+        match r {
+            Ok(_) => self.reached(),
+            Err(Error::Unauthorized) => self.sink.emit(Event::AuthFailed),
+            Err(Error::Network(_)) => self.unreachable(),
+            Err(_) => {}
         }
     }
 

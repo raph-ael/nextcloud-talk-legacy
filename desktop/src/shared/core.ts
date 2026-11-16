@@ -176,6 +176,8 @@ export interface ChatPage {
 
 /** Outbox state of a message that is not delivered yet. */
 export type PendingState = 'sending' | 'waiting' | 'failed'
+/** docs/connection.md */
+export type ConnectionState = 'online' | 'connecting' | 'offline'
 
 /** Why a message finally failed (talk-core `SendError`). */
 export type SendError = 'expired' | 'forbidden' | 'notFound' | 'tooLarge' | 'quotaExceeded' | 'fileMissing' | 'rejected'
@@ -237,7 +239,8 @@ export type CoreEvent =
   | { type: 'messagesAdded'; token: string; messages: MessageView[] }
   | { type: 'messagesUpdated'; token: string; messages: MessageView[] }
   | { type: 'readStatus'; token: string; lastCommonRead: number }
-  | { type: 'connection'; online: boolean }
+  /** docs/connection.md; a session starts as 'connecting'. */
+  | { type: 'connection'; state: ConnectionState }
   | { type: 'authFailed' }
   | { type: 'outboxChanged'; token: string; items: PendingMessage[] }
   | { type: 'callChanged'; call: CallView | null }

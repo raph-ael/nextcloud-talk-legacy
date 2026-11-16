@@ -29,6 +29,7 @@ import {
   type AppEvent,
   type AudioInfo,
   type CallView,
+  type ConnectionState,
   type MediaCommand,
   type MediaReport,
   type MessageNotice,
@@ -120,6 +121,7 @@ interface NativeSession {
   retrySend(referenceId: string): void
   discard(referenceId: string): void
   networkChanged(): void
+  connectionState(): ConnectionState
   outboxUnsent(): number
   waitOutboxIdle(): Promise<{ waiting: number; failed: number }>
   filePreview(fileId: string, width: number, height: number): Promise<Buffer>

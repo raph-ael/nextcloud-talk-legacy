@@ -232,7 +232,7 @@ export function handleEvent(e: TalkEvent): void {
         setChat(e.token, (c) => ({ ...c, lastCommonRead: Math.max(c.lastCommonRead, e.lastCommonRead) }))
       break
     case 'connection':
-      set({ online: e.online })
+      set({ online: e.state !== 'offline' })
       break
     case 'openRoom':
       // A notification click shows the chat, also from the settings.

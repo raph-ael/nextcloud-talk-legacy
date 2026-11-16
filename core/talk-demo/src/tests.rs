@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use talk_core::{Account, ChatMessage, ConversationTag, Engine, Event, EventSink, Participant, Platform, Reactions, Room, TalkClient};
+use talk_core::{
+    Account, ChatMessage, ConnectionState, ConversationTag, Engine, Event, EventSink, Participant, Platform, Reactions, Room,
+    TalkClient,
+};
 
 use crate::state::State;
 
@@ -461,4 +464,150 @@ async fn mark_read_from_a_notification_after_a_cold_start() {
     let rooms = TalkClient::new(account(), Platform::Cli).unwrap().rooms(None, true).await.unwrap().rooms;
     assert_eq!(rooms.iter().find(|r| r.token == "mira").unwrap().unread_messages, 0);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A demo server that can go away and come back at the same address with what it knew.
+struct Outage {
+    app: crate::App,
+    addr: std::net::SocketAddr,
+    running: Option<(tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>)>,
+}
+
+impl Outage {
+    async fn server() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut s = Self { app: crate::app_from(fixtures()).unwrap(), addr: listener.local_addr().unwrap(), running: None };
+        s.serve(listener);
+        s
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn serve(&mut self, listener: tokio::net::TcpListener) {
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let router = crate::router(self.app.clone());
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).with_graceful_shutdown(async { let _ = stopped.await; }).await;
+        });
+        self.running = Some((stop, task));
+    }
+
+    /// Closes the port and the idle connections: every request fails from now on.
+    async fn stop(&mut self) {
+        let (stop, task) = self.running.take().unwrap();
+        let _ = stop.send(());
+        tokio::time::timeout(Duration::from_secs(5), task).await.expect("server stops").unwrap();
+    }
+
+    async fn start(&mut self) {
+        let listener = tokio::net::TcpListener::bind(self.addr).await.unwrap();
+        self.serve(listener);
+    }
+
+    fn engine(&self) -> (Arc<Engine>, Arc<Sink>) {
+        let account = Account { server: self.url(), user: "demo".into(), app_password: "demo".into() };
+        let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+        (Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), None), sink)
+    }
+}
+
+/// The connection states the platform was told, in order.
+fn connections(sink: &Sink) -> Vec<ConnectionState> {
+    sink.0.lock().unwrap().iter().filter_map(|e| match e { Event::Connection { state } => Some(*state), _ => None }).collect()
+}
+
+async fn until(what: &str, cond: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("timed out: {what}");
+}
+
+/// docs/connection.md: one failed request shows as `connecting` and is retried at once;
+/// it never shows as an outage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_failure_is_no_outage() {
+    use ConnectionState::*;
+    let mut server = Outage::server().await;
+    let (engine, sink) = server.engine();
+    assert_eq!(engine.connection_state(), Connecting, "a session starts as connecting");
+    engine.start().await.unwrap();
+    // The list is there before the state says online: an empty list while connecting is
+    // "still loading".
+    let events = sink.0.lock().unwrap();
+    let rooms = events.iter().position(|e| matches!(e, Event::RoomsChanged { .. })).unwrap();
+    let online = events.iter().position(|e| matches!(e, Event::Connection { state: Online })).unwrap();
+    assert!(rooms < online, "rooms before online");
+    drop(events);
+    assert_eq!(connections(&sink), [Online]);
+
+    server.stop().await;
+    assert!(engine.refresh_rooms(false).await.is_err());
+    assert_eq!(engine.connection_state(), Connecting);
+    server.start().await;
+    // The retry after half a second, not the regular refresh after ten.
+    let since = std::time::Instant::now();
+    until("online again", || engine.connection_state() == Online).await;
+    assert!(since.elapsed() < Duration::from_secs(3), "took {:?}", since.elapsed());
+    assert_eq!(connections(&sink), [Online, Connecting, Online]);
+    engine.shutdown();
+}
+
+/// The server stays away: `offline` after two failed retries, a message written meanwhile
+/// waits, and both recover when the platform reports the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_outage_and_its_end() {
+    use ConnectionState::*;
+    let mut server = Outage::server().await;
+    let (engine, sink) = server.engine();
+    engine.start().await.unwrap();
+    server.stop().await;
+    assert!(engine.refresh_rooms(false).await.is_err());
+    until("offline", || engine.connection_state() == Offline).await;
+    assert_eq!(connections(&sink), [Online, Connecting, Offline]);
+
+    let pending = engine.enqueue_text("lena", "Bis gleich!", None, "ref-outage");
+    until("waiting", || engine.pending("lena").iter().any(|p| p.state == talk_core::PendingState::Waiting)).await;
+    assert_eq!(pending.message.text, "Bis gleich!");
+    // More failures change nothing, and a network report without a server does not flicker.
+    assert!(engine.refresh_rooms(false).await.is_err());
+    engine.network_changed();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(connections(&sink), [Online, Connecting, Offline]);
+
+    server.start().await;
+    engine.network_changed();
+    let since = std::time::Instant::now();
+    until("online again", || engine.connection_state() == Online).await;
+    assert!(since.elapsed() < Duration::from_secs(2), "took {:?}", since.elapsed());
+    until("message sent", || engine.outbox_unsent() == 0).await;
+    assert_eq!(connections(&sink), [Online, Connecting, Offline, Online]);
+    engine.shutdown();
+}
+
+/// A first start without a server: `connecting`, then `offline`, never "no chats" as a
+/// fact; the list arrives when the server does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_without_the_server() {
+    use ConnectionState::*;
+    let mut server = Outage::server().await;
+    server.stop().await;
+    let (engine, sink) = server.engine();
+    assert!(engine.start().await.is_err());
+    assert!(engine.rooms().is_empty());
+    assert_eq!(engine.connection_state(), Connecting);
+    until("offline", || engine.connection_state() == Offline).await;
+    assert_eq!(connections(&sink), [Offline]);
+
+    server.start().await;
+    engine.network_changed();
+    until("online", || engine.connection_state() == Online).await;
+    assert!(!engine.rooms().is_empty());
+    assert_eq!(connections(&sink), [Offline, Online]);
+    engine.shutdown();
 }
