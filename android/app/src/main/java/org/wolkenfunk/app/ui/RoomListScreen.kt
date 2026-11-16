@@ -82,6 +82,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.wolkenfunk.app.SessionManager
 import org.wolkenfunk.app.UiState
+import uniffi.talk_ffi.ConnectionState
 import uniffi.talk_ffi.RoomView
 import uniffi.talk_ffi.SectionView
 
@@ -120,6 +121,10 @@ fun RoomListScreen(
         }
     }
 
+    // docs/connection.md: spinner next to the title, „Keine Verbindung“ below it when offline.
+    val hint = connectionHint(state)
+    val listEmpty = sections.isEmpty() && query.isEmpty()
+
     Scaffold(
         floatingActionButton = {
             if (!searching) {
@@ -149,7 +154,16 @@ fun RoomListScreen(
                             modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         )
                     } else {
-                        Text("Chats", fontSize = 22.sp)
+                        TitleWithConnection(offline = hint == ConnectionHint.OFFLINE, spinner = true) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Chats", fontSize = 22.sp)
+                                // An empty list that still loads has its spinner in the middle.
+                                ConnectionSpinner(
+                                    hint == ConnectionHint.CONNECTING && !listEmpty,
+                                    Modifier.padding(start = 8.dp),
+                                )
+                            }
+                        }
                     }
                 },
                 navigationIcon = {
@@ -191,7 +205,6 @@ fun RoomListScreen(
             modifier = Modifier.padding(padding).fillMaxSize(),
         ) {
             LazyColumn(Modifier.fillMaxSize()) {
-                if (!state.online) item { OfflineBanner() }
                 if (query.isEmpty()) item(key = "recordings", contentType = "recordings") {
                     RecordingBanners(sessions) { sessions.openRoom(it) }
                 }
@@ -205,13 +218,21 @@ fun RoomListScreen(
                         RoomRow(room, sessions, now, onMenu = { menuFor = room.token }) { sessions.openRoom(room.token) }
                     }
                 }
-                if (sections.isEmpty()) {
-                    item {
+                when {
+                    sections.isNotEmpty() -> {}
+                    // Empty list (docs/connection.md): still loading, really empty, or offline
+                    // (then the header says so and the middle stays free).
+                    !listEmpty || state.connection == ConnectionState.ONLINE -> item {
                         Text(
-                            if (query.isNotEmpty()) "Keine Treffer" else "Noch keine Chats",
+                            if (listEmpty) "Noch keine Chats" else "Keine Treffer",
                             color = LocalTalkColors.current.muted,
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
                         )
+                    }
+                    hint == ConnectionHint.CONNECTING -> item {
+                        Box(Modifier.fillParentMaxSize(), Alignment.Center) {
+                            ConnectionSpinner(true, size = 24.dp, stroke = 2.dp)
+                        }
                     }
                 }
             }
@@ -231,21 +252,6 @@ fun RoomListScreen(
     if (accountMenu) {
         AccountMenu(sessions, state, onDismiss = { accountMenu = false }, onAdd = onAddAccount, onSettings = onSettings)
     }
-}
-
-@Composable
-fun OfflineBanner() {
-    Text(
-        "Keine Verbindung – wird erneut versucht …",
-        fontSize = 13.sp,
-        color = Color(0xFF6A5000),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFFFFF3CD))
-            .padding(10.dp),
-    )
 }
 
 /**

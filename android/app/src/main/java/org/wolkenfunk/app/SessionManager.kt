@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.SystemClock
 import android.util.LruCache
 import android.widget.Toast
 import androidx.compose.ui.graphics.ImageBitmap
@@ -149,7 +150,10 @@ data class UiState(
     /** Bumped on every `RoomsChanged`: sections may change (collapsed, categories) with equal rooms. */
     val roomsRev: Int = 0,
     val chats: Map<String, ChatState> = emptyMap(),
-    val online: Boolean = true,
+    /** Connection of the shown account (docs/connection.md); a session begins as connecting. */
+    val connection: ConnectionState = ConnectionState.CONNECTING,
+    /** `SystemClock.elapsedRealtime()` when [connection] last left `ONLINE`: the spinner waits 500 ms from here. */
+    val connectionSince: Long = 0,
     val activeToken: String? = null,
     val unreadLine: UnreadLine? = null,
     /** All signed-in accounts in the order they signed in (the active one included). */
@@ -189,7 +193,9 @@ class SessionManager(private val context: Context) {
         /** Notice ids of the last core list; `null` until the first one (the baseline) arrived. */
         var recordingsKnown: Set<Long>? = null
         var recordings: List<RecordingNotice> = emptyList()
-        @Volatile var online = true
+        /** docs/connection.md: kept per account, also while another one is shown. Main thread. */
+        var connection = ConnectionState.CONNECTING
+        var connectionSince = SystemClock.elapsedRealtime()
         @Volatile var rooms: List<RoomView> = emptyList()
         @Volatile var badge = 0
         /** `resolveAccount` for the adopted account's key is in flight. */
@@ -279,8 +285,10 @@ class SessionManager(private val context: Context) {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) = scheduleOutboxIfNeeded()
 
-            // Back in front with a chat open: the user sees it, its notification goes.
+            // Back in front: open connections are often dead by now, so the core retries at
+            // once (docs/connection.md). With a chat open the user sees it, its notification goes.
             override fun onResume(owner: LifecycleOwner) {
+                for (rt in runtimes.values) rt.session.networkChanged()
                 val st = _state.value
                 st.activeToken?.let { MessageNotifications.cancel(context, st.accountId, it) }
             }
@@ -370,7 +378,8 @@ class SessionManager(private val context: Context) {
             userId = rt.session.userId(),
             rooms = rt.session.rooms(),
             roomsRev = before.roomsRev + 1,
-            online = rt.online,
+            connection = rt.connection,
+            connectionSince = rt.connectionSince,
             accounts = accountViews(),
         )
         _recordings.value = rt.recordings
@@ -1014,10 +1023,14 @@ class SessionManager(private val context: Context) {
             is CoreEvent.ReadStatus -> updateChat(rt.id, event.token) {
                 it.copy(lastCommonRead = maxOf(it.lastCommonRead, event.lastCommonRead))
             }
-            is CoreEvent.Connection -> {
-                val online = event.state != ConnectionState.OFFLINE
-                rt.online = online
-                _state.update { if (it.accountId == rt.id) it.copy(online = online) else it }
+            // On the main queue like RoomsChanged: at the start the chat list arrives before
+            // `online`, and an empty list must not show „Noch keine Chats“ in between.
+            is CoreEvent.Connection -> scope.launch {
+                if (rt.connection == ConnectionState.ONLINE) rt.connectionSince = SystemClock.elapsedRealtime()
+                rt.connection = event.state
+                _state.update {
+                    if (it.accountId == rt.id) it.copy(connection = rt.connection, connectionSince = rt.connectionSince) else it
+                }
             }
             CoreEvent.AuthFailed -> scope.launch { expire(rt) }
             is CoreEvent.OutboxChanged -> {

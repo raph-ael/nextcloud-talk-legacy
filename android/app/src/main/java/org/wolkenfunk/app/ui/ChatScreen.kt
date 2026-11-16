@@ -213,14 +213,26 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     ) {
                         Avatar(room.name, 36.dp, room.token, room.avatarVersion, sessions)
                         Spacer(Modifier.width(12.dp))
-                        Text(room.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 18.sp)
+                        // docs/connection.md: spinner next to the name, „Keine Verbindung“ below it.
+                        val hint = connectionHint(state)
+                        TitleWithConnection(offline = hint == ConnectionHint.OFFLINE) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    room.name,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontSize = 18.sp,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                ConnectionSpinner(hint == ConnectionHint.CONNECTING, Modifier.padding(start = 8.dp))
+                            }
+                        }
                     }
                 },
             )
         },
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
-            if (!state.online) OfflineBanner()
             RecordingBanners(sessions, room.token)
             Box(Modifier.weight(1f)) {
                 LazyColumn(
