@@ -162,6 +162,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const isGroup = room.roomType !== 1 && room.roomType !== 6
   const messages = chat?.messages ?? []
   const unreadLine = useStore((s) => (s.unreadLine?.token === room.token ? s.unreadLine : null))
+  // A notification click on this chat while it was open: it is placed once more.
+  const reopened = useStore((s) => s.reopened)
+  const placedFor = useRef(reopened)
 
   // The line goes above the first foreign, non-system message after the snapshot, but only
   // once the snapshot itself is loaded (or the whole history): else it would sit too low.
@@ -236,9 +239,22 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   // load older pages until the line is there, then put it in the upper quarter.
   useLayoutEffect(() => {
     const el = scroller.current
+    if (placedFor.current !== reopened) {
+      placedFor.current = reopened
+      placed.current = false
+      pagesLoaded.current = 0
+    }
     if (placed.current || !el || !chat) return
     if (!unreadLine) {
       placed.current = true
+      // Only after a notification click: a chat that opens stands at the end by itself.
+      if (el.scrollTop < 0) {
+        ownScroll.current = true
+        el.scrollTop = 0
+        updateAtBottom(true)
+        setShowJump(false)
+        markVisibleRead(room.token)
+      }
       return
     }
     if (!chat.synced || chat.loadingOlder) return
@@ -265,7 +281,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     updateAtBottom(bottom)
     setShowJump(el.scrollTop < -el.clientHeight / 2)
     if (bottom) markVisibleRead(room.token)
-  }, [chat, unreadLine, lineCovered, room.token])
+  }, [chat, unreadLine, lineCovered, room.token, reopened])
 
   useEffect(() => () => window.clearTimeout(datePillTimer.current), [])
 

@@ -85,6 +85,8 @@ export interface State {
   /** The page „Kategorien“ replaces the chat area. */
   categories: boolean
   unreadLine: UnreadLine | null
+  /** Counts notification clicks on the chat that is open already: it places itself again. */
+  reopened: number
   /** „Einstellungen“ replace the whole window (docs/settings.md); the page shown on the right. */
   settings: SettingsPage | null
 }
@@ -107,6 +109,7 @@ let state: State = {
   query: '',
   categories: false,
   unreadLine: null,
+  reopened: 0,
   settings: null,
 }
 const listeners = new Set<() => void>()
@@ -271,6 +274,9 @@ export function handleEvent(e: TalkEvent): void {
     case 'openRoom':
       // A notification click shows the chat, also from the settings.
       set({ settings: null })
+      // The chat is open already (docs/notifications.md „War der Chat schon offen“): the
+      // view stands as after a new opening, at the unread line or else at the end.
+      if (state.activeToken === e.token) set({ unreadLine: lineOnOpening(e.token), reopened: state.reopened + 1 })
       void openRoom(e.token)
       break
     case 'openSettings':
@@ -438,6 +444,13 @@ export async function boot(): Promise<void> {
   void refreshSections()
 }
 
+/** The unread line of a chat that opens now, from what the chat list knows about it. */
+function lineOnOpening(token: string): UnreadLine | null {
+  const room = state.rooms.find((r) => r.token === token)
+  // Always, also without unread messages: the list may not know the newest ones yet.
+  return room && room.lastReadMessage > 0 ? { token, from: room.lastReadMessage, base: room.unreadMessages } : null
+}
+
 export async function openRoom(token: string): Promise<void> {
   const previous = state.activeToken
   if (previous === token) {
@@ -447,13 +460,7 @@ export async function openRoom(token: string): Promise<void> {
   }
   if (previous) void window.talk.closeChat(previous)
   // The snapshot comes first: the chat marks itself read as soon as it shows the end.
-  const opened = state.rooms.find((r) => r.token === token)
-  // Always, also without unread messages: the list may not know the newest ones yet.
-  const unreadLine =
-    opened && opened.lastReadMessage > 0
-      ? { token, from: opened.lastReadMessage, base: opened.unreadMessages }
-      : null
-  set({ activeToken: token, groupInfo: null, categories: false, unreadLine })
+  set({ activeToken: token, groupInfo: null, categories: false, unreadLine: lineOnOpening(token) })
   void refreshSections()
   setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status), synced: false }))
   try {
