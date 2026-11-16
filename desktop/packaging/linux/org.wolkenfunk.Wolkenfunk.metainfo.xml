@@ -81,6 +81,15 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.0" date="2026-11-16" type="development">
+      <description>
+        <p>Nachrichten bearbeiten und löschen: Eigene Nachrichten lassen sich 24 Stunden lang bearbeiten und jederzeit löschen, über das Menü der Nachricht. Pfeil nach oben im leeren Eingabefeld bearbeitet die letzte eigene Nachricht. Moderatoren können in Gruppen auch Nachrichten anderer löschen.</p>
+        <p>Neue Verbindungsanzeige: Ein kurzer Aussetzer zeigt nur noch einen kleinen Ladekreis in der Kopfzeile, der gelbe Balken ist weg. „Keine Verbindung“ steht dort erst, wenn der Server wirklich nicht erreichbar ist.</p>
+        <p>Nach dem Aufwachen und nach einem Netzwechsel verbindet sich die App schneller neu.</p>
+        <p>Behoben: Eine bearbeitete Antwort behält ihr Zitat. Zitate und die Vorschau in der Chatliste zeigen den neuen Text sofort.</p>
+        <p>Android: Nach dem Abmelden und einer neuen Anmeldung erscheint die Chatliste wieder.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-16" type="development">
       <description>
         <p>Benachrichtigungen kommen zuverlässig an: für jede neue Nachricht, auch für die erste in einem neuen Chat, und etwa eine Sekunde nach dem Eintreffen. Woanders Gelesenes verschwindet von selbst, viele Chats auf einmal werden zusammengefasst.</p>
