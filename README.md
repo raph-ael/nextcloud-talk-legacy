@@ -157,6 +157,8 @@ Prüfsummen: [SHA256SUMS](https://pkg.wolkenfunk.org/android/SHA256SUMS)
   Nachrichten“. Trenner mit „Heute“, „Gestern“ oder dem Datum gliedern den Verlauf.
 - **Sprachnachrichten, Bilder und Anhänge.** Dazu Antworten auf einzelne Nachrichten, Reaktionen
   und Lesebestätigungen.
+- **Nachrichten bearbeiten und löschen.** Eigene Nachrichten änderst du noch 24 Stunden lang,
+  löschen kannst du sie jederzeit. Beides gilt für alle im Chat.
 - **Anrufe mit Ton und Video,** zu zweit oder in der Gruppe. Am Computer teilst du auch deinen
   Bildschirm.
 - **Benachrichtigungen, die ankommen.** Auf Android melden sich Nachrichten und Anrufe auch bei
