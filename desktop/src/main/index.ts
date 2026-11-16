@@ -373,6 +373,14 @@ function accountInfo(rt: Runtime): AccountInfo {
   return { id: rt.id, server: s.server, user: s.loginName, userId: s.userId || s.loginName, name: s.name || s.userId || s.loginName }
 }
 
+/**
+ * What the window needs to show an account. The connection state is kept per account by
+ * its session, also while its events do not reach the window (docs/connection.md).
+ */
+function shownAccount(rt: Runtime): { account: AccountInfo; connection: ConnectionState } {
+  return { account: accountInfo(rt), connection: rt.session.connectionState() }
+}
+
 /** „{Name} · {Server}“ for notifications, only with two accounts or more. */
 function accountLine(rt: Runtime): string | null {
   if (runtimes.size < 2) return null
@@ -482,7 +490,7 @@ function bootRuntime(rt: Runtime, password: string): void {
       }
       saveAccounts()
       if (changed) sendAccounts()
-      if (rt.id === activeId) sendFrom(rt, { type: 'session', state: 'ready', account: accountInfo(rt) })
+      if (rt.id === activeId) sendFrom(rt, { type: 'session', state: 'ready', ...shownAccount(rt) })
     })
     .catch((err: Error) => {
       // Offline start: keep the session, background sync retries.
@@ -575,7 +583,7 @@ function switchTo(id: string, force = false): string | null {
   activeId = id
   list.active = id
   saveAccounts()
-  sendFrom(next, { type: 'session', state: 'ready', account: accountInfo(next), rooms: next.session.rooms() })
+  sendFrom(next, { type: 'session', state: 'ready', ...shownAccount(next), rooms: next.session.rooms() })
   sendAccounts()
   return null
 }
@@ -1335,7 +1343,11 @@ function createWindow(): void {
   startHidden = false
   if (!hidden) win.once('ready-to-show', () => win?.show())
   win.on('show', showTaskbarCount)
-  win.on('focus', () => win?.flashFrame(false))
+  win.on('focus', () => {
+    win?.flashFrame(false)
+    // Back in front: a retry that is waiting runs now (docs/connection.md).
+    runtimes.forEach((r) => r.session.networkChanged())
+  })
   // However it was entered (call view, green button, F11, menu): the call view shows it.
   win.on('enter-full-screen', () => send({ type: 'windowFullscreen', on: true } satisfies AppEvent))
   win.on('leave-full-screen', () => send({ type: 'windowFullscreen', on: false } satisfies AppEvent))
@@ -1405,7 +1417,7 @@ function registerIpc(): void {
   // Accounts (docs/accounts.md): not bound to the account shown.
   ipcMain.handle('talk:account', () => {
     const rt = activeRuntime()
-    return rt ? { account: accountInfo(rt), rooms: rt.session.rooms() } : null
+    return rt ? { ...shownAccount(rt), rooms: rt.session.rooms() } : null
   })
   ipcMain.handle('talk:accounts', () => accountsView())
   ipcMain.handle('talk:switchAccount', (_e, id: string) => switchTo(id))

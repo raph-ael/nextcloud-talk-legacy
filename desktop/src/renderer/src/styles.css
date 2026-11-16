@@ -280,9 +280,39 @@ body.resizing {
   gap: 12px;
   padding: 12px 12px 8px 16px;
 }
-.sidebar-header h2 {
+/*
+ * „Keine Verbindung“ (docs/connection.md) hangs below the title, so the header keeps its
+ * height and the list stays where it is; the title glides up to make room.
+ */
+.sidebar-title {
+  position: relative;
   flex: 1;
+  min-width: 0;
+}
+.sidebar-title.two-line h2 {
+  transform: translateY(-8px);
+}
+.connection-line {
+  position: absolute;
+  left: 0;
+  top: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--text-muted);
+  animation: connection-in 0.15s ease-out;
+}
+@keyframes connection-in {
+  from {
+    opacity: 0;
+  }
+}
+.sidebar-header h2 {
   margin: 0;
+  transition: transform 0.15s ease-out;
   font-size: 18px;
   line-height: 20px;
   font-weight: 600;
@@ -442,24 +472,6 @@ body.resizing {
   font-size: 13px;
   line-height: 18px;
   letter-spacing: -0.03px;
-}
-.offline {
-  margin: 0 11px 8px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  font-size: 13px;
-  line-height: 18px;
-  background: #fff3cd;
-  color: #6a5000;
-}
-.chat > .offline {
-  margin: 8px 16px 0;
-}
-@media (prefers-color-scheme: dark) {
-  .offline {
-    background: #3d3417;
-    color: #f2d98a;
-  }
 }
 .room-list {
   flex: 1;
@@ -671,6 +683,12 @@ body.resizing {
 .chat-title {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+}
+.chat-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 .chat-title h2 {
@@ -3130,6 +3148,24 @@ button.person-row:disabled {
 .spinner.tiny.light {
   border-color: rgb(255 255 255 / 0.35);
   border-top-color: #fff;
+}
+/* Connection state (docs/connection.md): muted, never the accent colour. */
+.spinner.quiet {
+  border-color: color-mix(in srgb, var(--text-muted) 25%, transparent);
+  border-top-color: var(--text-muted);
+}
+.spinner.tiny.quiet {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-width: 1.5px;
+}
+h2 > .spinner.tiny.quiet {
+  margin-left: 8px;
+  vertical-align: -1px;
+}
+.spinner.small.list-loading {
+  margin: 24px auto;
 }
 .load-error {
   display: flex;

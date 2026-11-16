@@ -8,6 +8,7 @@ import {
   retry,
   countsAsUnread,
   setChatAtBottom,
+  shownConnection,
   useStore,
   type UiMessage,
 } from '../store'
@@ -21,7 +22,7 @@ import { VoiceMessage } from './Voice'
 import { isAudioAttachment } from '../voice'
 import { ImageViewer } from './ImageViewer'
 import { MessageMenu, type MenuItem } from './MessageMenu'
-import { OfflineBanner } from './Sidebar'
+import { ConnectingSpinner } from './Sidebar'
 import { react, reactable, ReactionBar, ReactionPills, ReactionPopover, WhoReacted } from './Reactions'
 import { CallButton } from '../call/CallScreen'
 import { RecordingBanners } from '../call/RecordingBanners'
@@ -78,12 +79,22 @@ function topRow(el: HTMLElement): HTMLElement | null {
 }
 
 function ChatTitle({ room }: { room: RoomView }) {
+  // docs/connection.md: the circle next to the name; without a connection the text takes
+  // the place of the description.
+  const connection = useStore(shownConnection)
   return (
     <>
       <Avatar key={room.avatarVersion} name={room.name} token={room.token} version={room.avatarVersion} size={32} />
       <div className="chat-title">
-        <h2>{room.name}</h2>
-        {room.description && <span className="muted ellipsis">{plain(room.description)}</span>}
+        <div className="chat-name">
+          <h2>{room.name}</h2>
+          {connection === 'connecting' && <ConnectingSpinner />}
+        </div>
+        {connection === 'offline' ? (
+          <span className="muted ellipsis">Keine Verbindung</span>
+        ) : (
+          room.description && <span className="muted ellipsis">{plain(room.description)}</span>
+        )}
       </div>
     </>
   )
@@ -94,7 +105,6 @@ const GROUP_WINDOW_S = 3 * 60
 
 export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function Chat({ room }, composerRef) {
   const chat = useStore((s) => s.chats[room.token])
-  const online = useStore((s) => s.online)
   const [replyTo, setReplyTo] = useState<UiMessage | null>(null)
   const [menu, setMenu] = useState<{ msg: UiMessage; x: number; y: number } | null>(null)
   const [viewer, setViewer] = useState<UiMessage | null>(null)
@@ -328,7 +338,6 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           <CallButton room={room} />
         </div>
       </header>
-      {!online && <OfflineBanner />}
       <RecordingBanners token={room.token} />
 
       <div className="timeline-wrap">

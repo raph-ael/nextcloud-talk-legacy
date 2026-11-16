@@ -8,6 +8,7 @@ import {
   openRoom,
   openSettings,
   setQuery,
+  shownConnection,
   shownRooms,
   toggleSection,
   useStore,
@@ -27,7 +28,9 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
   const sections = useStore((s) => s.sections)
   const query = useStore((s) => s.query)
   const activeToken = useStore((s) => s.activeToken)
-  const online = useStore((s) => s.online)
+  const connection = useStore((s) => s.connection)
+  const shown = useStore(shownConnection)
+  const noRooms = useStore((s) => s.rooms.length === 0)
   const account = useStore((s) => s.account)
   const composing = useStore((s) => s.composing)
   const [menu, setMenu] = useState(false)
@@ -58,12 +61,26 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
   }
 
   const empty = sections.every((s) => s.total === 0)
+  // Nothing to list yet (docs/connection.md „Leere Chatliste“): the circle in the middle
+  // stands for the one in the header. `noRooms` is ahead of the sections by one answer.
+  const loadingList = empty && noRooms && !query && shown === 'connecting'
 
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
         <OwnAvatar />
-        <h2>Chats</h2>
+        <div className={`sidebar-title${shown === 'offline' ? ' two-line' : ''}`}>
+          <h2>
+            Chats
+            {shown === 'connecting' && !loadingList && <ConnectingSpinner />}
+          </h2>
+          {shown === 'offline' && (
+            <span className="connection-line">
+              <ConnectingSpinner />
+              Keine Verbindung
+            </span>
+          )}
+        </div>
         <button
           className="icon-button"
           aria-label="Neue Nachricht"
@@ -126,7 +143,6 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
           }}
         />
       </div>
-      {!online && <OfflineBanner />}
       <RecordingBanners />
       <nav className="room-list" aria-label="Chats">
         {sections.map((section) => (
@@ -143,7 +159,9 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
             ))}
           </div>
         ))}
-        {empty && <p className="muted center pad">{query ? 'Keine Treffer' : 'Noch keine Chats'}</p>}
+        {empty && query && <p className="muted center pad">Keine Treffer</p>}
+        {empty && !query && noRooms && connection === 'online' && <p className="muted center pad">Noch keine Chats</p>}
+        {loadingList && <div className="spinner small quiet list-loading" role="status" aria-label="Verbinde …" />}
       </nav>
       {chatMenu && (
         <ChatMenu
@@ -183,8 +201,9 @@ function SectionHeader({ section }: { section: SectionView }) {
   )
 }
 
-export function OfflineBanner() {
-  return <div className="offline">Keine Verbindung – wird erneut versucht …</div>
+/** docs/connection.md: small, thin and muted, next to a title. */
+export function ConnectingSpinner() {
+  return <span className="spinner tiny quiet" role="status" aria-label="Verbinde …" />
 }
 
 /** Current time, refreshed every `intervalMs` (relative times in the list). */

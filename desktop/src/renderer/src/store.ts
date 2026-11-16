@@ -7,6 +7,7 @@ import type {
   AccountInfo,
   AccountRow,
   ChatPage,
+  ConnectionState,
   MessageView,
   PendingMessage,
   PendingState,
@@ -68,7 +69,10 @@ export interface State {
   adding: boolean
   rooms: RoomView[]
   chats: Record<string, ChatState>
-  online: boolean
+  /** Of the account shown (docs/connection.md). */
+  connection: ConnectionState
+  /** `connection` has been other than 'online' for 500 ms: only then the header shows it. */
+  connectionHeld: boolean
   activeToken: string | null
   /** „Neue Nachricht“ replaces the conversation list (docs/groups.md). */
   composing: boolean
@@ -94,7 +98,8 @@ let state: State = {
   adding: false,
   rooms: [],
   chats: {},
-  online: true,
+  connection: 'connecting',
+  connectionHeld: false,
   activeToken: null,
   composing: false,
   groupInfo: null,
@@ -127,6 +132,31 @@ export function accountId(): string {
 function set(patch: Partial<State>): void {
   state = { ...state, ...patch }
   listeners.forEach((l) => l())
+}
+
+let connectionTimer = 0
+
+/**
+ * The connection state of the account shown, with `more` in the same step. A state other
+ * than 'online' shows once it held for 500 ms; back online it is gone at once.
+ */
+function setConnection(connection: ConnectionState, more: Partial<State> = {}): void {
+  const away = connection !== 'online'
+  if (!away) {
+    window.clearTimeout(connectionTimer)
+    connectionTimer = 0
+  } else if (!connectionTimer && !state.connectionHeld) {
+    connectionTimer = window.setTimeout(() => {
+      connectionTimer = 0
+      set({ connectionHeld: true })
+    }, 500)
+  }
+  set({ ...more, connection, connectionHeld: away && state.connectionHeld })
+}
+
+/** What the header shows: short phases without an answer stay invisible. */
+export function shownConnection(s: State): ConnectionState {
+  return s.connectionHeld ? s.connection : 'online'
 }
 
 function setChat(token: string, update: (c: ChatState) => ChatState): void {
@@ -196,12 +226,16 @@ function updateOnly(existing: UiMessage[], incoming: MessageView[]): UiMessage[]
 export function handleEvent(e: TalkEvent): void {
   switch (e.type) {
     case 'session':
-      if (e.state === 'loggedOut') set({ ...EMPTY, session: 'loggedOut', account: null, accounts: [], adding: false, settings: null })
-      else if (state.account?.id === e.account.id) set({ session: 'ready', account: e.account })
+      if (e.state === 'loggedOut') {
+        // The next sign-in starts as 'connecting' again, with its own 500 ms.
+        window.clearTimeout(connectionTimer)
+        connectionTimer = 0
+        set({ ...EMPTY, session: 'loggedOut', account: null, accounts: [], adding: false, settings: null, connection: 'connecting', connectionHeld: false })
+      } else if (state.account?.id === e.account.id) setConnection(e.connection, { session: 'ready', account: e.account })
       else {
         // Another account (docs/accounts.md „Wechseln“): its list at once, nothing of the
         // one before. Open settings stay open; drafts stay with their account.
-        set({ ...EMPTY, session: 'ready', account: e.account, rooms: e.rooms ?? [], adding: false })
+        setConnection(e.connection, { ...EMPTY, session: 'ready', account: e.account, rooms: e.rooms ?? [], adding: false })
         void refreshSections()
         if (!e.rooms) void window.talk.rooms().then((rooms) => set({ rooms }))
       }
@@ -232,7 +266,7 @@ export function handleEvent(e: TalkEvent): void {
         setChat(e.token, (c) => ({ ...c, lastCommonRead: Math.max(c.lastCommonRead, e.lastCommonRead) }))
       break
     case 'connection':
-      set({ online: e.state !== 'offline' })
+      setConnection(e.state)
       break
     case 'openRoom':
       // A notification click shows the chat, also from the settings.
@@ -396,7 +430,7 @@ export async function boot(): Promise<void> {
     set({ session: 'loggedOut' })
     return
   }
-  set({ session: 'ready', account: shown.account, rooms: shown.rooms })
+  setConnection(shown.connection, { session: 'ready', account: shown.account, rooms: shown.rooms })
   void refreshSections()
 }
 

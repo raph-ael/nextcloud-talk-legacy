@@ -441,7 +441,7 @@ export type AppEvent =
    * The window shows `account` (docs/accounts.md): after the start, and on a switch, then
    * with that account's list right away (`rooms`), no loading state.
    */
-  | { type: 'session'; state: 'ready'; account: AccountInfo; rooms?: RoomView[] }
+  | { type: 'session'; state: 'ready'; account: AccountInfo; connection: ConnectionState; rooms?: RoomView[] }
   /** The list, the names or the numbers of the accounts changed. */
   | ({ type: 'accountsChanged' } & AccountsView)
   /** A short text for a toast (signed out, switching refused). */
@@ -519,7 +519,7 @@ export interface TalkApi {
    * passes its id); answers that arrive after a switch are dropped and never settle.
    */
   /** The shown account and its cached list. */
-  account(): Promise<{ account: AccountInfo; rooms: RoomView[] } | null>
+  account(): Promise<{ account: AccountInfo; connection: ConnectionState; rooms: RoomView[] } | null>
   accounts(): Promise<AccountsView>
   /** A German text when it is refused (during a call). */
   switchAccount(id: string): Promise<string | null>
