@@ -48,7 +48,7 @@ Gesendet wird der eigene Standort im Moment des Sendens, einmal. Es gibt keinen 
 - Kartenbild 240 × 150 dp/pt mit den Ecken eines Bildes in der Blase, der Pin in `accent` mit der Spitze auf dem Ort, Kartenausschnitt etwa 1 km breit.
 - Darunter die Bezeichnung in der Textfarbe der Blase, höchstens zwei Zeilen, bei leerer Bezeichnung „Standort“. Die Uhrzeit steht darunter wie bei Text.
 - Antippen öffnet die Karten-App mit Pin und Bezeichnung. Gibt es auf Android keine, öffnet sich die Stelle auf openstreetmap.org im Browser.
-- Das Menü beim langen Druck ist das der anderen Nachrichten, ohne „Bearbeiten“. „Kopieren“ legt die Bezeichnung und in der zweiten Zeile den Link `https://www.openstreetmap.org/?mlat={Breite}&mlon={Länge}#map=16/{Breite}/{Länge}` ab. Reagieren und Löschen wie sonst.
+- Das Menü beim langen Druck ist das der anderen Nachrichten, ohne „Bearbeiten“. „Kopieren“ legt die Bezeichnung und in der zweiten Zeile den Link `https://www.openstreetmap.org/?mlat={Breite}&mlon={Länge}#map=16/{Breite}/{Länge}` ab. Breite und Länge stehen im Link immer mit sechs Nachkommastellen und Punkt (`52.528300`), wie im Kern und in Talk-Web. Reagieren und Löschen wie sonst.
 - **Ausstehend:** dieselbe Blase mit der Statuszeile. Ohne Netz wartet der Standort im Postausgang wie Text.
 - **Kartenquelle:**
   - iOS: Apple-Karten über `MKMapSnapshotter`.
@@ -57,7 +57,7 @@ Gesendet wird der eigene Standort im Moment des Sendens, einmal. Es gibt keinen 
   - Ohne Netz oder bei einem Fehler: eine Fläche in `chip` mit dem Pin. Der nächste Versuch kommt, wenn die Blase wieder sichtbar wird.
 
 ### Kachel (Desktop)
-Pin, Bezeichnung (leer: „Standort“) und darunter in `muted` die Koordinaten, „52,5283° N, 13,4356° O“. Ein Klick öffnet den Link von oben im Browser. Kein Kartenbild, also auch kein Abruf bei einem Kartendienst. „Kopieren“ wie auf Mobilgeräten.
+Pin, Bezeichnung (leer: „Standort“) und darunter in `muted` die Koordinaten mit vier Nachkommastellen, „52,5283° N, 13,4356° O“. Ein Klick öffnet den Link von oben im Browser, im Menü steht dafür zusätzlich „Im Browser öffnen“ wie bei Dateien. Kein Kartenbild, also auch kein Abruf bei einem Kartendienst. „Kopieren“ wie auf Mobilgeräten.
 
 ### Vorschau
 Chatliste, Zitat und Benachrichtigung zeigen „📍 {Bezeichnung}“, bei leerer Bezeichnung „📍 Standort“. Das gilt auf allen Plattformen und reiht sich in die Bezeichnungen aus `docs/notifications.md` ein.
