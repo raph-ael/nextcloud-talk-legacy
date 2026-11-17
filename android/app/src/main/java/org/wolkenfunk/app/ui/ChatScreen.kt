@@ -72,6 +72,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -84,7 +85,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -745,6 +748,9 @@ private fun MessageRow(
         val haptics = LocalHapticFeedback.current
         val scope = rememberCoroutineScope()
         var menu by remember { mutableStateOf(false) }
+        // How far the reaction pills hang under the bubble: the long-press menu starts below them.
+        var pillsHeight by remember { mutableIntStateOf(0) }
+        val pillsOverlap = with(LocalDensity.current) { 4.dp.roundToPx() }
         val clipboard = LocalClipboardManager.current
         val replyable = msg.kind == MessageKind.TEXT && m.status == null
         // Reactable like „Antworten“, files and voice messages included (docs/chat.md).
@@ -971,6 +977,7 @@ private fun MessageRow(
                                 onReact = { onReact(msg, it) },
                                 onMoreReactions = { onMoreReactions(msg) },
                                 onDismiss = { menu = false },
+                                below = if (msg.reactions.isEmpty()) 0 else pillsHeight,
                             )
                         }
                     }
@@ -980,7 +987,9 @@ private fun MessageRow(
                     msg.reactions,
                     msg.reactionsSelf,
                     // 8 dp in from the bubble's edge, off its round corner.
-                    Modifier.padding(start = if (isGroup && !own) 44.dp else 8.dp, end = 8.dp),
+                    Modifier
+                        .padding(start = if (isGroup && !own) 44.dp else 8.dp, end = 8.dp)
+                        .onSizeChanged { pillsHeight = (it.height - pillsOverlap).coerceAtLeast(0) },
                     onOpen = { onShowReactions(msg) },
                 )
             }

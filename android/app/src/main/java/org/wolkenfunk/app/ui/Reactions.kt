@@ -110,7 +110,8 @@ class MenuAction(val label: String, val danger: Boolean = false, val run: () -> 
  * Long-press menu: the quick reaction bar floats above the bubble, the actions sit below it,
  * both in one popup so they never overlap and always close together. Must be placed inside
  * the box that has the bubble's bounds (the popup anchor). [mine] is null when the message
- * cannot be reacted to (no bar then).
+ * cannot be reacted to (no bar then). [below] is how far the reaction pills hang under the
+ * bubble (px): the actions start under them, so the pills stay visible.
  */
 @Composable
 fun MessageMenu(
@@ -120,6 +121,7 @@ fun MessageMenu(
     onReact: (String) -> Unit,
     onMoreReactions: () -> Unit,
     onDismiss: () -> Unit,
+    below: Int = 0,
 ) {
     var anchor by remember { mutableStateOf<IntRect?>(null) }
     var window by remember { mutableStateOf(IntSize.Zero) }
@@ -196,12 +198,12 @@ fun MessageMenu(
                 val gap = 8.dp.roundToPx()
                 val margin = 8.dp.roundToPx()
                 fun x(width: Int) = (if (own) a.right - width else a.left).coerceIn(margin, maxOf(margin, w - width - margin))
-                // The actions go below the bubble, or as far up as they need to fit; the bar
+                // The actions go below the bubble and its pills, or as far up as they need to fit; the bar
                 // stays above the bubble and moves up with them.
                 var menuTop = Int.MAX_VALUE
                 if (menu != null) {
                     val top = margin + (bar?.let { it.height + gap } ?: 0)
-                    menuTop = maxOf(minOf(a.bottom + gap, h - margin - menu.height), top)
+                    menuTop = maxOf(minOf(a.bottom + below + gap, h - margin - menu.height), top)
                     menu.place(x(menu.width), menuTop)
                 }
                 if (bar != null) {
