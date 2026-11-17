@@ -70,7 +70,9 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -259,49 +261,93 @@ private fun ReactionBar(mine: List<String>, onReact: (String) -> Unit, onMore: (
     }
 }
 
-/** Reaction pills under the text; a tap opens „Wer hat reagiert“, a new pill pops in. */
+/** One pill under a bubble: an emoji with its count, or „+N“ ([emoji] null) for those that don't fit. */
+class Pill(val emoji: String?, val count: Long, val mine: Boolean)
+
+/**
+ * At most three pills: beyond three emojis the two most used and „+N“, N being the reactions
+ * (not the emojis) left over (docs/chat.md „Pillen unter der Blase“).
+ */
+fun reactionPills(reactions: Map<String, Long>, mine: List<String>): List<Pill> {
+    val sorted = sortedReactions(reactions)
+    val shown = if (sorted.size > 3) sorted.take(2) else sorted
+    val rest = sorted.drop(shown.size)
+    val pills = shown.map { (emoji, count) -> Pill(emoji, count, emoji in mine) }
+    return if (rest.isEmpty()) pills else pills + Pill(null, rest.sumOf { it.second }, rest.any { it.first in mine })
+}
+
+/**
+ * Reaction pills under the bubble (the caller pushes them into its lower edge); a tap opens
+ * „Wer hat reagiert“, a new pill pops in. The rim has the chat background's colour.
+ */
 @Composable
 fun ReactionPills(
     messageId: Long,
     reactions: Map<String, Long>,
     mine: List<String>,
-    color: Color,
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
 ) {
-    // Pills present when the row first appeared don't animate; later ones do.
-    val known = remember(messageId) { HashSet(reactions.keys) }
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        sortedReactions(reactions).forEach { (emoji, count) ->
-            key(emoji) {
-                val scale = remember { Animatable(if (emoji in known) 1f else 0.6f) }
+    val colors = LocalTalkColors.current
+    val rim = MaterialTheme.colorScheme.background
+    val textColor = MaterialTheme.colorScheme.onBackground
+    val pills = reactionPills(reactions, mine)
+    // Pills present when the message first appeared don't animate; later ones do, the first
+    // one included (so this is composed for messages without reactions too).
+    val known = remember(messageId) { pills.mapTo(HashSet()) { it.emoji ?: MORE } }
+    if (pills.isEmpty()) return
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        pills.forEach { pill ->
+            val id = pill.emoji ?: MORE
+            key(id) {
+                val scale = remember { Animatable(if (id in known) 1f else 0.6f) }
                 LaunchedEffect(Unit) { scale.animateTo(1f, tween(150)) }
                 DisposableEffect(Unit) {
-                    known += emoji
-                    onDispose { known -= emoji }
+                    known += id
+                    onDispose { known -= id }
                 }
-                val shape = RoundedCornerShape(10.dp)
-                val isMine = emoji in mine
-                Text(
-                    if (count > 1) "$emoji $count" else emoji,
-                    fontSize = 13.sp,
-                    color = color,
-                    modifier = Modifier
+                val label = if (pill.emoji == null) "${pill.count} weitere" else "${pill.emoji} ${pill.count}"
+                Row(
+                    Modifier
                         .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
-                        .clip(shape)
-                        .background(color.copy(alpha = if (isMine) 0.25f else 0.1f))
+                        // 26 dp including the rim; only a very large font size makes it higher.
+                        .heightIn(min = 26.dp)
+                        .background(rim, CircleShape)
+                        .padding(1.5.dp)
+                        .clip(CircleShape)
+                        .background(if (pill.mine) colors.reactionMine else colors.reaction)
                         .clickable(onClick = onOpen)
                         .clearAndSetSemantics {
-                            contentDescription = "$emoji $count, Reaktionen anzeigen"
+                            contentDescription = "$label, Reaktionen anzeigen"
                             role = Role.Button
                             onClick { onOpen(); true }
                         }
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                )
+                        .padding(horizontal = 6.5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val number = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = textColor)
+                    if (pill.emoji == null) {
+                        Text("+${pill.count}", style = number)
+                    } else {
+                        // A fixed line height: the emoji font's own line is higher than the pill.
+                        Text(pill.emoji, style = EmojiStyle)
+                        if (pill.count > 1) Text("${pill.count}", style = number)
+                    }
+                }
             }
         }
     }
 }
+
+/** Key of the „+N“ pill among the emojis. */
+private const val MORE = "+"
+
+private val EmojiStyle = TextStyle(
+    fontSize = 15.sp,
+    lineHeight = 20.sp,
+    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
+)
 
 /** ＋ in the bar: the full emoji picker in a bottom sheet. */
 @OptIn(ExperimentalMaterial3Api::class)

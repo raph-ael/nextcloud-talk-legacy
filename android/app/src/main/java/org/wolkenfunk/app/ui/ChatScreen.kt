@@ -734,7 +734,7 @@ private fun MessageRow(
         val jumbo = msg.kind == MessageKind.TEXT && attachment == null && msg.replyTo == null && isJumboEmoji(msg.text)
         val audio = attachment != null && !image && (attachment.voiceMessage || attachment.mimetype.startsWith("audio/"))
         // Signal: an audio bubble carries its time in the player's footer row.
-        val metaInVoice = audio && msg.text.isEmpty() && msg.reactions.isEmpty()
+        val metaInVoice = audio && msg.text.isEmpty()
         // ... and has more room above the player when nothing (name, quote) precedes it.
         val audioOnTop = audio && !(isGroup && !own && first) && msg.replyTo == null
         // Photos sit edge to edge in the bubble (3dp frame); everything else keeps the text inset.
@@ -787,200 +787,202 @@ private fun MessageRow(
                         .graphicsLayer { alpha = ((offset.value - 8f) / threshold).coerceIn(0f, 1f) },
                 )
             }
-            Row(
+            // The pills sit under the bubble, 4 dp pushed into its lower edge and drawn above it;
+            // the row is that much lower (docs/chat.md „Pillen unter der Blase“). They move with the swipe.
+            Column(
                 Modifier.fillMaxWidth().offset { IntOffset(offset.value.roundToInt(), 0) },
-                horizontalArrangement = if (own) Arrangement.End else Arrangement.Start,
-                verticalAlignment = Alignment.Bottom,
+                verticalArrangement = Arrangement.spacedBy((-4).dp),
+                horizontalAlignment = if (own) Alignment.End else Alignment.Start,
             ) {
-                if (isGroup && !own) {
-                    Box(Modifier.width(36.dp)) { if (last) UserAvatar(sessions, msg.author, if (msg.actorType == "users") msg.actorId else "", 28.dp) }
-                }
-                Box {
-                    Column(
-                        Modifier
-                            .then(if (image) Modifier.width(ChatImageWidth + 6.dp) else Modifier.widthIn(max = 300.dp))
-                            .clip(shape)
-                            .background(
-                                when {
-                                    jumbo -> androidx.compose.ui.graphics.Color.Transparent
-                                    own -> colors.bubbleOwn
-                                    else -> colors.bubbleOther
-                                },
-                            )
-                            .combinedClickable(
-                                onClick = { if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) onRetry(msg) },
-                                onLongClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    menu = true
-                                },
-                            )
-                            .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
-                            .padding(
-                                horizontal = if (jumbo) 0.dp else if (image) 3.dp else 12.dp,
-                            )
-                            .padding(
-                                top = if (image) 3.dp else if (audioOnTop) 12.dp else 7.dp,
-                                bottom = if (image) 3.dp else 7.dp,
-                            ),
-                    ) {
-                        val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
-                        if (isGroup && !own && first) {
-                            Text(
-                                msg.author,
-                                color = colorFor(msg.author),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = inset.padding(top = if (image) 4.dp else 0.dp, bottom = if (image) 4.dp else 0.dp),
-                            )
-                        }
-                        msg.replyTo?.let { r ->
-                            Column(
-                                inset
-                                    .padding(top = 2.dp, bottom = 6.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(textColor.copy(alpha = 0.1f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                            ) {
-                                Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text(withAttachment(r.text, r.attachment).ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                        val metaOnImage = image && msg.text.isEmpty() && msg.reactions.isEmpty()
-                        val showMeta = last || m.status != null
-                        if (image) {
-                            // Rounded like the bubble, but squarer where text continues above/below.
-                            val above = (isGroup && !own && first) || msg.replyTo != null
-                            val below = !metaOnImage
-                            val inner = androidx.compose.foundation.shape.CornerSize(4.dp)
-                            val imgShape = RoundedCornerShape(
-                                if (above) inner else shape.topStart,
-                                if (above) inner else shape.topEnd,
-                                if (below) inner else shape.bottomEnd,
-                                if (below) inner else shape.bottomStart,
-                            )
-                            ChatImage(
-                                sessions,
-                                m,
-                                shape = imgShape,
-                                onOpen = { bmp -> onOpenImage(attachment!!.id, bmp) },
-                                onLongPress = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    menu = true
-                                },
-                            ) {
-                                if (metaOnImage && showMeta) {
-                                    Box(
-                                        Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .padding(6.dp)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.4f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    ) {
-                                        MessageMeta(m, own, read, androidx.compose.ui.graphics.Color.White, colors.danger)
-                                    }
-                                }
-                            }
-                        } else if (audio) {
-                            val metaColor = textColor.copy(alpha = 0.75f)
-                            VoiceBubble(
-                                sessions.voice,
-                                m,
-                                textColor,
-                                metaColor,
-                                own,
-                                Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
-                                onLongPress = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    menu = true
-                                },
-                                meta = if (metaInVoice && showMeta) {
-                                    { MessageMeta(m, own, read, metaColor, colors.danger) }
-                                } else {
-                                    null
-                                },
-                            )
-                        } else if (attachment != null) {
-                            FileRow(
-                                attachment,
-                                textColor,
-                                Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
-                                onLongPress = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    menu = true
-                                },
-                            )
-                        }
-                        when {
-                            image && msg.text.isEmpty() -> Unit
-                            attachment != null && msg.text.isEmpty() -> Unit
-                            msg.kind == MessageKind.DELETED ->
-                                Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
-                            jumbo -> Text(msg.text, fontSize = 44.sp)
-                            else -> Text(
-                                remember(msg.text, msg.markdown, textColor) { renderMessage(msg.text, msg.markdown, textColor) },
-                                color = textColor,
-                                style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
-                                modifier = inset.padding(top = if (image) 6.dp else 0.dp),
-                            )
-                        }
-                        if (msg.reactions.isNotEmpty()) {
-                            ReactionPills(
-                                msg.id,
-                                msg.reactions,
-                                msg.reactionsSelf,
-                                textColor,
-                                inset.padding(top = 4.dp),
-                                onOpen = { onShowReactions(msg) },
-                            )
-                        }
-                        if (showMeta && !metaOnImage && !metaInVoice) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.End)
-                                    .then(inset)
-                                    .padding(top = 2.dp, bottom = if (image) 4.dp else 0.dp),
-                            ) {
-                                MessageMeta(
-                                    m,
-                                    own,
-                                    read,
-                                    if (jumbo) colors.muted else textColor.copy(alpha = 0.75f),
-                                    colors.danger,
+                Row(verticalAlignment = Alignment.Bottom) {
+                    if (isGroup && !own) {
+                        Box(Modifier.width(36.dp)) { if (last) UserAvatar(sessions, msg.author, if (msg.actorType == "users") msg.actorId else "", 28.dp) }
+                    }
+                    Box {
+                        Column(
+                            Modifier
+                                .then(if (image) Modifier.width(ChatImageWidth + 6.dp) else Modifier.widthIn(max = 300.dp))
+                                .clip(shape)
+                                .background(
+                                    when {
+                                        jumbo -> androidx.compose.ui.graphics.Color.Transparent
+                                        own -> colors.bubbleOwn
+                                        else -> colors.bubbleOther
+                                    },
+                                )
+                                .combinedClickable(
+                                    onClick = { if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) onRetry(msg) },
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        menu = true
+                                    },
+                                )
+                                .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
+                                .padding(
+                                    horizontal = if (jumbo) 0.dp else if (image) 3.dp else 12.dp,
+                                )
+                                .padding(
+                                    top = if (image) 3.dp else if (audioOnTop) 12.dp else 7.dp,
+                                    bottom = if (image) 3.dp else 7.dp,
+                                ),
+                        ) {
+                            val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
+                            if (isGroup && !own && first) {
+                                Text(
+                                    msg.author,
+                                    color = colorFor(msg.author),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = inset.padding(top = if (image) 4.dp else 0.dp, bottom = if (image) 4.dp else 0.dp),
                                 )
                             }
-                        }
-                    }
-                    if (menu) {
-                        // What is allowed is worked out when the menu opens (docs/chat.md „Bearbeiten und Löschen“).
-                        val now = remember { System.currentTimeMillis() / 1000 }
-                        val delivered = m.status == null
-                        val editable = delivered && msg.editable && canChat && (msg.editUntil?.let { now < it } ?: true)
-                        val deletable = delivered && msg.deletable && if (own) canChat else canDeleteOthers
-                        val actions = buildList {
-                            if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
-                                add(MenuAction("Erneut senden") { onRetry(msg) })
+                            msg.replyTo?.let { r ->
+                                Column(
+                                    inset
+                                        .padding(top = 2.dp, bottom = 6.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(textColor.copy(alpha = 0.1f))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                ) {
+                                    Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text(withAttachment(r.text, r.attachment).ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
                             }
-                            if (replyable) add(MenuAction("Antworten") { onReply(msg) })
-                            if (editable) add(MenuAction("Bearbeiten") { onEdit(msg) })
-                            if (msg.text.isNotEmpty()) add(MenuAction("Kopieren") { clipboard.setText(AnnotatedString(msg.text)) })
-                            // In the outbox „Löschen“ only discards locally, without asking.
-                            if (!delivered) {
-                                add(MenuAction("Löschen", danger = true) { onDiscard(msg) })
-                            } else if (deletable) {
-                                add(MenuAction("Löschen", danger = true) { onDelete(msg) })
+                            val metaOnImage = image && msg.text.isEmpty()
+                            val showMeta = last || m.status != null
+                            if (image) {
+                                // Rounded like the bubble, but squarer where text continues above/below.
+                                val above = (isGroup && !own && first) || msg.replyTo != null
+                                val below = !metaOnImage
+                                val inner = androidx.compose.foundation.shape.CornerSize(4.dp)
+                                val imgShape = RoundedCornerShape(
+                                    if (above) inner else shape.topStart,
+                                    if (above) inner else shape.topEnd,
+                                    if (below) inner else shape.bottomEnd,
+                                    if (below) inner else shape.bottomStart,
+                                )
+                                ChatImage(
+                                    sessions,
+                                    m,
+                                    shape = imgShape,
+                                    onOpen = { bmp -> onOpenImage(attachment!!.id, bmp) },
+                                    onLongPress = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        menu = true
+                                    },
+                                ) {
+                                    if (metaOnImage && showMeta) {
+                                        Box(
+                                            Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(6.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.4f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        ) {
+                                            MessageMeta(m, own, read, androidx.compose.ui.graphics.Color.White, colors.danger)
+                                        }
+                                    }
+                                }
+                            } else if (audio) {
+                                val metaColor = textColor.copy(alpha = 0.75f)
+                                VoiceBubble(
+                                    sessions.voice,
+                                    m,
+                                    textColor,
+                                    metaColor,
+                                    own,
+                                    Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
+                                    onLongPress = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        menu = true
+                                    },
+                                    meta = if (metaInVoice && showMeta) {
+                                        { MessageMeta(m, own, read, metaColor, colors.danger) }
+                                    } else {
+                                        null
+                                    },
+                                )
+                            } else if (attachment != null) {
+                                FileRow(
+                                    attachment,
+                                    textColor,
+                                    Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
+                                    onLongPress = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        menu = true
+                                    },
+                                )
+                            }
+                            when {
+                                image && msg.text.isEmpty() -> Unit
+                                attachment != null && msg.text.isEmpty() -> Unit
+                                msg.kind == MessageKind.DELETED ->
+                                    Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
+                                jumbo -> Text(msg.text, fontSize = 44.sp)
+                                else -> Text(
+                                    remember(msg.text, msg.markdown, textColor) { renderMessage(msg.text, msg.markdown, textColor) },
+                                    color = textColor,
+                                    style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                                    modifier = inset.padding(top = if (image) 6.dp else 0.dp),
+                                )
+                            }
+                            if (showMeta && !metaOnImage && !metaInVoice) {
+                                Box(
+                                    Modifier
+                                        .align(Alignment.End)
+                                        .then(inset)
+                                        .padding(top = 2.dp, bottom = if (image) 4.dp else 0.dp),
+                                ) {
+                                    MessageMeta(
+                                        m,
+                                        own,
+                                        read,
+                                        if (jumbo) colors.muted else textColor.copy(alpha = 0.75f),
+                                        colors.danger,
+                                    )
+                                }
                             }
                         }
-                        MessageMenu(
-                            own = own,
-                            mine = if (reactable) msg.reactionsSelf else null,
-                            actions = actions,
-                            onReact = { onReact(msg, it) },
-                            onMoreReactions = { onMoreReactions(msg) },
-                            onDismiss = { menu = false },
-                        )
+                        if (menu) {
+                            // What is allowed is worked out when the menu opens (docs/chat.md „Bearbeiten und Löschen“).
+                            val now = remember { System.currentTimeMillis() / 1000 }
+                            val delivered = m.status == null
+                            val editable = delivered && msg.editable && canChat && (msg.editUntil?.let { now < it } ?: true)
+                            val deletable = delivered && msg.deletable && if (own) canChat else canDeleteOthers
+                            val actions = buildList {
+                                if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
+                                    add(MenuAction("Erneut senden") { onRetry(msg) })
+                                }
+                                if (replyable) add(MenuAction("Antworten") { onReply(msg) })
+                                if (editable) add(MenuAction("Bearbeiten") { onEdit(msg) })
+                                if (msg.text.isNotEmpty()) add(MenuAction("Kopieren") { clipboard.setText(AnnotatedString(msg.text)) })
+                                // In the outbox „Löschen“ only discards locally, without asking.
+                                if (!delivered) {
+                                    add(MenuAction("Löschen", danger = true) { onDiscard(msg) })
+                                } else if (deletable) {
+                                    add(MenuAction("Löschen", danger = true) { onDelete(msg) })
+                                }
+                            }
+                            MessageMenu(
+                                own = own,
+                                mine = if (reactable) msg.reactionsSelf else null,
+                                actions = actions,
+                                onReact = { onReact(msg, it) },
+                                onMoreReactions = { onMoreReactions(msg) },
+                                onDismiss = { menu = false },
+                            )
+                        }
                     }
                 }
+                ReactionPills(
+                    msg.id,
+                    msg.reactions,
+                    msg.reactionsSelf,
+                    // 8 dp in from the bubble's edge, off its round corner.
+                    Modifier.padding(start = if (isGroup && !own) 44.dp else 8.dp, end = 8.dp),
+                    onOpen = { onShowReactions(msg) },
+                )
             }
         }
     }

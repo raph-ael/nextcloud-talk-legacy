@@ -26,6 +26,9 @@ data class TalkColors(
     val danger: Color,
     /** Floating surfaces (jump button), like --floating on desktop. */
     val floating: Color,
+    /** Reaction pill under a bubble, and the one holding the own reaction (docs/chat.md). */
+    val reaction: Color,
+    val reactionMine: Color,
 )
 
 private val LightTalk = TalkColors(
@@ -38,6 +41,8 @@ private val LightTalk = TalkColors(
     chip = Color(0xFFF1F1F3),
     danger = Color(0xFFD6342C),
     floating = Color(0xFFFFFFFF),
+    reaction = Color(0xFFE9E9E9),
+    reactionMine = Color(0xFFB9B9B9),
 )
 
 private val DarkTalk = TalkColors(
@@ -50,6 +55,8 @@ private val DarkTalk = TalkColors(
     chip = Color(0xFF232325),
     danger = Color(0xFFFF6B63),
     floating = Color(0xFF2E2E2E),
+    reaction = Color(0xFF1B1B1B),
+    reactionMine = Color(0xFF5E5E5E),
 )
 
 /** Conversation-list typography (Signal: BodyLarge/BodyMedium with tighter line spacing). */
