@@ -42,7 +42,7 @@ struct ReactionPills: View {
         let shown = all.count > 3 ? Array(all.prefix(2)) : all
         let rest = all.count > 3 ? Array(all.dropFirst(2)) : []
         let restCount = rest.reduce(Int64(0)) { $0 + $1.count }
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             ForEach(shown, id: \.emoji) { r in
                 pill(mine: msg.reactionsSelf.contains(r.emoji)) {
                     Text(r.emoji).font(.system(size: 15))
