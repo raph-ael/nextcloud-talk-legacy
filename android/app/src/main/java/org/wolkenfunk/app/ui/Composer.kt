@@ -72,6 +72,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextRange
@@ -131,6 +132,9 @@ fun Composer(
     onSend: (String) -> Unit,
     onOpenCamera: () -> Unit,
     onImagePicked: (Uri) -> Unit,
+    onFilesPicked: (List<Uri>) -> Unit,
+    /** „Standort“ in the attachment menu; the caller runs `sent` after sending, which closes the menu. */
+    onLocation: (sent: () -> Unit) -> Unit,
     voice: VoiceManager,
     onVoiceSent: () -> Unit,
 ) {
@@ -138,6 +142,7 @@ fun Composer(
     val context = LocalContext.current
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     var value by rememberSaveable(token, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     // The text being edited lives next to the draft: it never becomes the draft, and the draft
     // (like a started reply) is back untouched once the edit mode ends.
@@ -209,6 +214,13 @@ fun Composer(
         }
     }
 
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            panel = InputPanel.NONE
+            onFilesPicked(uris)
+        }
+    }
+
     val hasText = field.text.isNotBlank()
 
     // --- voice messages ---------------------------------------------------------------
@@ -270,7 +282,7 @@ fun Composer(
             ContextBar(
                 title = if (replyTo.isOwn) "Du" else replyTo.author,
                 icon = null,
-                text = withAttachment(replyTo.text, replyTo.attachment),
+                text = withAttachment(replyTo.text, replyTo.attachment, replyTo.location),
                 closeLabel = "Antwort abbrechen",
                 onClose = onCancelReply,
             )
@@ -439,6 +451,12 @@ fun Composer(
                         },
                         onGallery = {
                             pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        onFile = { pickFiles.launch(arrayOf("*/*")) },
+                        onLocation = {
+                            // Without the focus the keyboard stays away when the sheet closes.
+                            focusManager.clearFocus()
+                            onLocation { panel = InputPanel.NONE }
                         },
                     )
                     InputPanel.NONE -> Box(Modifier.fillMaxSize())

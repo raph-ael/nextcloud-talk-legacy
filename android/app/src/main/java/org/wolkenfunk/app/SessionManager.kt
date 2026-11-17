@@ -7,7 +7,10 @@ import android.net.Uri
 import android.os.SystemClock
 import android.util.LruCache
 import android.widget.Toast
+import android.content.ActivityNotFoundException
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.core.content.FileProvider
 import androidx.compose.ui.graphics.asImageBitmap
 import android.net.ConnectivityManager
 import android.net.Network
@@ -23,7 +26,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.wolkenfunk.app.media.PickedFile
+import org.wolkenfunk.app.media.PreparedFile
 import org.wolkenfunk.app.media.PreparedImage
+import org.wolkenfunk.app.media.prepareFile
 import org.wolkenfunk.app.media.decodeSampled
 import org.wolkenfunk.app.media.prepareImage
 import java.io.File
@@ -735,7 +741,7 @@ class SessionManager(private val context: Context) {
                     isGroup = item.isGroup,
                     canReply = room?.readOnly != true,
                     sender = if (m != null && !m.isSystem) m.author else "",
-                    text = m?.let { withAttachment(it.text, it.attachment) }.orEmpty(),
+                    text = m?.let { withAttachment(it.text, it.attachment, it.location) }.orEmpty(),
                     nid = 0,
                     avatar = avatar,
                 )
@@ -1404,7 +1410,7 @@ class SessionManager(private val context: Context) {
         OutboxWorker.schedule(context)
     }
 
-    private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment)
+    private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment, location)
 
     /**
      * Sets the own reaction like Signal (docs/chat.md „Reaktionen“): the core replaces,
@@ -1501,6 +1507,129 @@ class SessionManager(private val context: Context) {
             }
             sendImage(token, prepared, caption, replyTo)
         }
+    }
+
+    /**
+     * Sends files unchanged (docs/attachments.md „Datei senden“): copies them into the staging
+     * folder, then queues them in the given order, the quote on the first and [caption] on the
+     * last one. If one cannot be read nothing is queued: [onDone] gets the unreadable ones, so
+     * the send screen keeps the rest. Runs in the manager's scope, [onDone] on the main thread.
+     */
+    fun sendFiles(token: String, files: List<PickedFile>, caption: String, replyTo: MessageView?, onDone: (unreadable: List<Uri>) -> Unit) {
+        val rt = active ?: return onDone(emptyList())
+        scope.launch {
+            val prepared = ArrayList<PreparedFile>()
+            val unreadable = ArrayList<Uri>()
+            withContext(Dispatchers.IO) {
+                for (f in files) {
+                    runCatching { prepareFile(context, f) }.onSuccess { prepared += it }.onFailure { unreadable += f.uri }
+                }
+            }
+            if (unreadable.isNotEmpty()) {
+                prepared.forEach { it.file.delete() }
+                Toast.makeText(context, "Datei konnte nicht gelesen werden", Toast.LENGTH_SHORT).show()
+                onDone(unreadable)
+                return@launch
+            }
+            if (_state.value.let { it.accountId == rt.id && it.activeToken == token }) clearUnreadLine()
+            var failed = false
+            for ((i, p) in prepared.withIndex()) {
+                val ref = newReferenceId()
+                val localKey = "${rt.id}|$ref"
+                // An image shows itself in the pending bubble from the first frame, like a photo.
+                if (p.mime.startsWith("image/")) {
+                    withContext(Dispatchers.IO) { decodePreview(p.file) }?.let { localPreviews[localKey] = it }
+                }
+                val queued = withContext(Dispatchers.IO) {
+                    runCatching {
+                        rt.session.enqueueFile(
+                            token, p.file.path, p.name, p.mime, p.width.toLong(), p.height.toLong(),
+                            if (i == prepared.lastIndex) caption.trim() else "",
+                            if (i == 0) replyTo?.toReply() else null,
+                            ref,
+                        )
+                    }
+                }
+                if (queued.isFailure) {
+                    localPreviews.remove(localKey)
+                    p.file.delete()
+                    failed = true
+                }
+            }
+            if (failed) Toast.makeText(context, "Datei konnte nicht gespeichert werden", Toast.LENGTH_SHORT).show()
+            OutboxWorker.schedule(context)
+            onDone(emptyList())
+        }
+    }
+
+    /** Files being fetched for opening, by account and file id: their tile shows a spinner. */
+    private val openingFiles = mutableStateMapOf<String, Boolean>()
+
+    /** Whether [fileId] is being fetched after a tap (snapshot state: the tile follows it). */
+    fun isOpening(fileId: String): Boolean = active?.let { openingFiles["${it.id}|$fileId"] } == true
+
+    /**
+     * Fetches a received file and hands it to the app that opens it (docs/attachments.md
+     * „Empfangene Datei öffnen“). The core keeps the file, so the next time needs no network.
+     * A second tap meanwhile does nothing.
+     */
+    fun openFile(a: FileAttachment) {
+        val rt = active ?: return
+        val key = "${rt.id}|${a.id}"
+        if (openingFiles.put(key, true) != null) return
+        scope.launch {
+            val shared = try {
+                val path = rt.session.fetchFile(a.path, a.size)
+                withContext(Dispatchers.IO) { openCopy(rt.id, a, File(path)) }
+            } catch (e: Exception) {
+                null
+            }
+            openingFiles.remove(key)
+            if (shared == null) {
+                Toast.makeText(context, "Datei konnte nicht geladen werden", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            // Loaded while the app went to the background: it is there for the next tap.
+            if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", shared)
+            val view = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, a.mimetype.ifBlank { "application/octet-stream" })
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(view)
+            } catch (e: ActivityNotFoundException) {
+                Toast.makeText(context, "Keine App zum Öffnen von ${a.name}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * A copy of the fetched file under its real name, in the cache folder the FileProvider
+     * serves: other apps go by the name and its ending, not by the core's name for it. (A hard
+     * link would save the space, but Android does not let apps create one.) Blocking.
+     */
+    private fun openCopy(account: String, a: FileAttachment, source: File): File {
+        val root = File(context.cacheDir, "open")
+        // What was opened earlier goes after a day; the core still has the files.
+        val old = System.currentTimeMillis() - 24 * 3600 * 1000L
+        root.listFiles()?.filter { it.lastModified() < old }?.forEach { it.deleteRecursively() }
+        val dir = File(root, "$account-${a.id}".replace(Regex("[^A-Za-z0-9._-]"), "_")).apply { mkdirs() }
+        val name = a.name.replace('/', '_').replace('\u0000', '_').trim().trim('.').ifBlank { "Datei" }
+        val target = File(dir, name)
+        if (!target.exists() || target.length() != source.length()) source.copyTo(target, overwrite = true)
+        dir.setLastModified(System.currentTimeMillis())
+        return target
+    }
+
+    /**
+     * Queues the own position as a place (docs/attachments.md „Standort“): it shows up at once
+     * and waits for the network like a text. Talk has no quote for places.
+     */
+    fun sendLocation(token: String, latitude: Double, longitude: Double, name: String) {
+        val s = session ?: return
+        clearUnreadLine()
+        s.enqueueLocation(token, latitude, longitude, name, newReferenceId())
+        OutboxWorker.schedule(context)
     }
 
     /** Sends a failed message again (or a waiting one right now). */

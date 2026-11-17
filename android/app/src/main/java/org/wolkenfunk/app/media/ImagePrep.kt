@@ -61,14 +61,19 @@ fun prepareImage(context: Context, source: Uri): PreparedImage {
     return result
 }
 
-/** Decodes [file] so that it fits roughly into [maxEdge] px (for previews). */
+/** Decodes [file] so that it fits roughly into [maxEdge] px (for previews), honouring EXIF rotation. */
 fun decodeSampled(file: File, maxEdge: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.path, bounds)
     if (bounds.outWidth <= 0) return null
     var sample = 1
     while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
-    return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+    val bmp = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+    // Images sent as a file keep their metadata, so they may be stored rotated.
+    val rotation = runCatching { ExifInterface(file.path).rotationDegrees() }.getOrDefault(0)
+    if (rotation == 0) return bmp
+    val m = Matrix().apply { postRotate(rotation.toFloat()) }
+    return Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
 }
 
 /** Decodes a content [uri] so that it fits roughly into [maxEdge] px, honouring EXIF rotation. */
@@ -89,7 +94,7 @@ fun decodeSampled(context: Context, uri: Uri, maxEdge: Int): Bitmap? {
     return Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
 }
 
-private fun ExifInterface.rotationDegrees(): Int = when (
+internal fun ExifInterface.rotationDegrees(): Int = when (
     getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
 ) {
     ExifInterface.ORIENTATION_ROTATE_90, ExifInterface.ORIENTATION_TRANSPOSE -> 90

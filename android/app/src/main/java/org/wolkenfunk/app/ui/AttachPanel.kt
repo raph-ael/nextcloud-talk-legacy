@@ -72,10 +72,10 @@ private const val RECENT_LIMIT = 60
 
 /**
  * Signal's attachment keyboard: the latest photos on top (tap → send screen), the
- * attachment types below. Only "Galerie" works yet; the other types are placeholders.
+ * attachment types below. „Umfrage“ and „Kontakt“ are placeholders yet.
  */
 @Composable
-fun AttachPanel(onImage: (Uri) -> Unit, onGallery: () -> Unit) {
+fun AttachPanel(onImage: (Uri) -> Unit, onGallery: () -> Unit, onFile: () -> Unit, onLocation: () -> Unit) {
     val context = LocalContext.current
     val soon = { what: String -> Toast.makeText(context, "$what kommt bald", Toast.LENGTH_SHORT).show() }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
@@ -87,10 +87,10 @@ fun AttachPanel(onImage: (Uri) -> Unit, onGallery: () -> Unit) {
                 .padding(start = 15.dp, end = 15.dp, top = 12.dp, bottom = 12.dp),
         ) {
             AttachButton(TalkIcons.Gallery, "Galerie", onGallery)
-            AttachButton(TalkIcons.File, "Datei") { soon("Dateien senden") }
+            AttachButton(TalkIcons.File, "Datei", onFile)
             AttachButton(TalkIcons.Poll, "Umfrage") { soon("Umfragen") }
             AttachButton(TalkIcons.Contact, "Kontakt") { soon("Kontakte senden") }
-            AttachButton(TalkIcons.Location, "Standort") { soon("Standort senden") }
+            AttachButton(TalkIcons.Location, "Standort", onLocation)
         }
     }
 }

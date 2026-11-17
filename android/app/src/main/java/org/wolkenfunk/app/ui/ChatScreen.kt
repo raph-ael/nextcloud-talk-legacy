@@ -152,7 +152,10 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     val pickFromCamera = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) overlay = Overlay.Send(uri, fromCamera = false) }
-    DarkSystemBars(overlay != null)
+    // Runs after a place was sent: closes the attachment menu (handed over by the composer).
+    var locationSheet by remember(room.token) { mutableStateOf<(() -> Unit)?>(null) }
+    // The file send screen is in the app's colours; the other layers are black.
+    DarkSystemBars(overlay != null && overlay !is Overlay.Files)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -345,6 +348,8 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     },
                     onOpenCamera = openCamera,
                     onImagePicked = { uri -> overlay = Overlay.Send(uri, fromCamera = false) },
+                    onFilesPicked = { uris -> overlay = Overlay.Files(uris) },
+                    onLocation = { sent -> locationSheet = sent },
                     voice = sessions.voice,
                     onVoiceSent = {
                         sessions.clearUnreadLine()
@@ -386,7 +391,32 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                 scope.launch { listState.animateScrollToItem(0) }
             },
         )
+        is Overlay.Files -> FileSendScreen(
+            uris = o.uris,
+            onClose = { overlay = null },
+            send = { files, caption, done ->
+                askNotifications()
+                sessions.sendFiles(room.token, files, caption, replyTo, done)
+            },
+            onSent = {
+                replyTo = null
+                overlay = null
+                scope.launch { listState.animateScrollToItem(0) }
+            },
+        )
         is Overlay.Viewer -> ImageViewer(sessions, o.fileId, o.initial, onClose = { overlay = null })
+    }
+    locationSheet?.let { sent ->
+        LocationSheet(
+            onSend = { latitude, longitude, name ->
+                // Talk has no quote for places: an open reply bar stays for the next message.
+                sessions.sendLocation(room.token, latitude, longitude, name)
+                locationSheet = null
+                sent()
+                scope.launch { listState.animateScrollToItem(0) }
+            },
+            onDismiss = { locationSheet = null },
+        )
     }
     deleting?.let { d ->
         val text = buildString {
@@ -641,6 +671,7 @@ private fun JumpToEnd(listState: LazyListState, unread: Int, modifier: Modifier)
 private sealed interface Overlay {
     data object Camera : Overlay
     data class Send(val uri: android.net.Uri, val fromCamera: Boolean) : Overlay
+    data class Files(val uris: List<android.net.Uri>) : Overlay
     data class Viewer(val fileId: String, val initial: androidx.compose.ui.graphics.ImageBitmap?) : Overlay
 }
 
@@ -734,14 +765,17 @@ private fun MessageRow(
         }
         val attachment = msg.attachment.takeIf { msg.kind != MessageKind.DELETED }
         val image = attachment?.isImage() == true
-        val jumbo = msg.kind == MessageKind.TEXT && attachment == null && msg.replyTo == null && isJumboEmoji(msg.text)
+        // A place (docs/attachments.md „Blase“): the map like a photo, its name below. `text` is the name.
+        val location = msg.location.takeIf { msg.kind != MessageKind.DELETED }
+        val jumbo = msg.kind == MessageKind.TEXT && attachment == null && location == null && msg.replyTo == null && isJumboEmoji(msg.text)
         val audio = attachment != null && !image && (attachment.voiceMessage || attachment.mimetype.startsWith("audio/"))
         // Signal: an audio bubble carries its time in the player's footer row.
         val metaInVoice = audio && msg.text.isEmpty()
         // ... and has more room above the player when nothing (name, quote) precedes it.
         val audioOnTop = audio && !(isGroup && !own && first) && msg.replyTo == null
-        // Photos sit edge to edge in the bubble (3dp frame); everything else keeps the text inset.
-        val inset = if (image) Modifier.padding(horizontal = 9.dp) else Modifier
+        // Photos and maps sit edge to edge in the bubble (3dp frame); everything else keeps the text inset.
+        val media = image || location != null
+        val inset = if (media) Modifier.padding(horizontal = 9.dp) else Modifier
 
         // Swipe right to reply (Signal gesture).
         val offset = remember { Animatable(0f) }
@@ -807,7 +841,13 @@ private fun MessageRow(
                     Box {
                         Column(
                             Modifier
-                                .then(if (image) Modifier.width(ChatImageWidth + 6.dp) else Modifier.widthIn(max = 300.dp))
+                                .then(
+                                    when {
+                                        image -> Modifier.width(ChatImageWidth + 6.dp)
+                                        location != null -> Modifier.width(LocationMapWidth + 6.dp)
+                                        else -> Modifier.widthIn(max = 300.dp)
+                                    },
+                                )
                                 .clip(shape)
                                 .background(
                                     when {
@@ -825,11 +865,11 @@ private fun MessageRow(
                                 )
                                 .graphicsLayer { alpha = if (m.status == SendStatus.FAILED) 0.6f else 1f }
                                 .padding(
-                                    horizontal = if (jumbo) 0.dp else if (image) 3.dp else 12.dp,
+                                    horizontal = if (jumbo) 0.dp else if (media) 3.dp else 12.dp,
                                 )
                                 .padding(
-                                    top = if (image) 3.dp else if (audioOnTop) 12.dp else 7.dp,
-                                    bottom = if (image) 3.dp else 7.dp,
+                                    top = if (media) 3.dp else if (audioOnTop) 12.dp else 7.dp,
+                                    bottom = if (media) 3.dp else 7.dp,
                                 ),
                         ) {
                             val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
@@ -839,7 +879,7 @@ private fun MessageRow(
                                     color = colorFor(msg.author),
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    modifier = inset.padding(top = if (image) 4.dp else 0.dp, bottom = if (image) 4.dp else 0.dp),
+                                    modifier = inset.padding(top = if (media) 4.dp else 0.dp, bottom = if (media) 4.dp else 0.dp),
                                 )
                             }
                             msg.replyTo?.let { r ->
@@ -851,22 +891,22 @@ private fun MessageRow(
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
                                 ) {
                                     Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text(withAttachment(r.text, r.attachment).ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(withAttachment(r.text, r.attachment, r.location).ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                             val metaOnImage = image && msg.text.isEmpty()
                             val showMeta = last || m.status != null
+                            // Rounded like the bubble, but squarer where text continues above/below.
+                            val above = (isGroup && !own && first) || msg.replyTo != null
+                            val below = !metaOnImage
+                            val inner = androidx.compose.foundation.shape.CornerSize(4.dp)
+                            val imgShape = RoundedCornerShape(
+                                if (above) inner else shape.topStart,
+                                if (above) inner else shape.topEnd,
+                                if (below) inner else shape.bottomEnd,
+                                if (below) inner else shape.bottomStart,
+                            )
                             if (image) {
-                                // Rounded like the bubble, but squarer where text continues above/below.
-                                val above = (isGroup && !own && first) || msg.replyTo != null
-                                val below = !metaOnImage
-                                val inner = androidx.compose.foundation.shape.CornerSize(4.dp)
-                                val imgShape = RoundedCornerShape(
-                                    if (above) inner else shape.topStart,
-                                    if (above) inner else shape.topEnd,
-                                    if (below) inner else shape.bottomEnd,
-                                    if (below) inner else shape.bottomStart,
-                                )
                                 ChatImage(
                                     sessions,
                                     m,
@@ -911,16 +951,51 @@ private fun MessageRow(
                                 )
                             } else if (attachment != null) {
                                 FileRow(
-                                    attachment,
+                                    sessions,
+                                    m,
                                     textColor,
                                     Modifier.padding(bottom = if (msg.text.isEmpty()) 0.dp else 4.dp),
+                                    onRetry = { onRetry(msg) },
                                     onLongPress = {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         menu = true
                                     },
                                 )
+                            } else if (location != null) {
+                                val context = androidx.compose.ui.platform.LocalContext.current
+                                LocationMap(
+                                    location.latitude,
+                                    location.longitude,
+                                    Modifier
+                                        .size(LocationMapWidth, LocationMapHeight)
+                                        .clip(imgShape)
+                                        .combinedClickable(
+                                            onClickLabel = "In Karten öffnen",
+                                            onClick = {
+                                                if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) {
+                                                    onRetry(msg)
+                                                } else {
+                                                    openInMaps(context, location.latitude, location.longitude, msg.text)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                menu = true
+                                            },
+                                        ),
+                                )
+                                Text(
+                                    locationName(msg.text),
+                                    color = textColor,
+                                    style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = inset.padding(top = 6.dp),
+                                )
                             }
                             when {
+                                // The name of a place stands under its map already.
+                                location != null -> Unit
                                 image && msg.text.isEmpty() -> Unit
                                 attachment != null && msg.text.isEmpty() -> Unit
                                 msg.kind == MessageKind.DELETED ->
@@ -938,7 +1013,7 @@ private fun MessageRow(
                                     Modifier
                                         .align(Alignment.End)
                                         .then(inset)
-                                        .padding(top = 2.dp, bottom = if (image) 4.dp else 0.dp),
+                                        .padding(top = 2.dp, bottom = if (media) 4.dp else 0.dp),
                                 ) {
                                     MessageMeta(
                                         m,
@@ -962,7 +1037,16 @@ private fun MessageRow(
                                 }
                                 if (replyable) add(MenuAction("Antworten") { onReply(msg) })
                                 if (editable) add(MenuAction("Bearbeiten") { onEdit(msg) })
-                                if (msg.text.isNotEmpty()) add(MenuAction("Kopieren") { clipboard.setText(AnnotatedString(msg.text)) })
+                                if (location != null) {
+                                    // The name and, in the second line, the place on openstreetmap.org.
+                                    add(
+                                        MenuAction("Kopieren") {
+                                            clipboard.setText(AnnotatedString(locationName(msg.text) + "\n" + osmLink(location.latitude, location.longitude)))
+                                        },
+                                    )
+                                } else if (msg.text.isNotEmpty()) {
+                                    add(MenuAction("Kopieren") { clipboard.setText(AnnotatedString(msg.text)) })
+                                }
                                 // In the outbox „Löschen“ only discards locally, without asking.
                                 if (!delivered) {
                                     add(MenuAction("Löschen", danger = true) { onDiscard(msg) })

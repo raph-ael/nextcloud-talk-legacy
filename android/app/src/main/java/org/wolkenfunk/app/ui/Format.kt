@@ -10,6 +10,7 @@ import java.time.format.FormatStyle
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 import uniffi.talk_ffi.FileAttachment
+import uniffi.talk_ffi.GeoLocation
 
 private val zone get() = ZoneId.systemDefault()
 private val de = Locale.GERMANY
@@ -104,11 +105,42 @@ fun attachmentLabel(a: FileAttachment): String = when {
     else -> "📎 ${a.name}"
 }
 
-/** One-line preview of a message that may carry a file: label plus caption. */
-fun withAttachment(text: String, a: FileAttachment?): String = when {
+/**
+ * One-line preview of a message that may carry a file or a place: label plus caption. For a
+ * place [text] is its name (docs/attachments.md „Vorschau“).
+ */
+fun withAttachment(text: String, a: FileAttachment?, location: GeoLocation? = null): String = when {
+    location != null -> "📍 ${locationName(text)}"
     a == null -> text
     text.isEmpty() -> attachmentLabel(a)
     else -> "${attachmentLabel(a)} · $text"
+}
+
+/** What a place is called where it has no name. */
+fun locationName(name: String): String = name.ifBlank { "Standort" }
+
+/** Degrees for links: always six decimals and a dot (`52.528300`), whatever the device's language. */
+private fun degrees(v: Double): String = String.format(Locale.US, "%.6f", v)
+
+/** The place on openstreetmap.org (docs/attachments.md): what „Kopieren“ puts below the name. */
+fun osmLink(latitude: Double, longitude: Double): String {
+    val lat = degrees(latitude)
+    val lon = degrees(longitude)
+    return "https://www.openstreetmap.org/?mlat=$lat&mlon=$lon#map=16/$lat/$lon"
+}
+
+/** `geo:` address with a pin and its label, as map apps expect it. */
+fun geoUri(latitude: Double, longitude: Double, name: String): String {
+    val at = "${degrees(latitude)},${degrees(longitude)}"
+    val label = locationName(name).replace('(', ' ').replace(')', ' ').trim()
+    return "geo:$at?q=" + android.net.Uri.encode("$at($label)")
+}
+
+/** „Auf etwa 20 m genau“, from 1000 m on in km (docs/attachments.md). */
+fun accuracyLabel(meters: Float): String = when {
+    meters < 1000f -> "Auf etwa ${meters.toInt().coerceAtLeast(1)} m genau"
+    meters < 10_000f -> String.format(de, "Auf etwa %.1f km genau", meters / 1000f)
+    else -> "Auf etwa ${(meters / 1000f).toInt()} km genau"
 }
 
 /** 1,2 MB style file size. */

@@ -325,7 +325,7 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onMenu:
     val type = room.roomType.toInt()
     val preview = remember(last, type, onSurface) {
         buildAnnotatedString {
-            val text = last?.let { withAttachment(it.text, it.attachment) }.orEmpty()
+            val text = last?.let { withAttachment(it.text, it.attachment, it.location) }.orEmpty()
             when {
                 last == null -> {}
                 text.isEmpty() -> append("Nachricht gelöscht")

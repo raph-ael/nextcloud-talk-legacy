@@ -111,19 +111,38 @@ fun ChatImage(
     }
 }
 
-/** A non-image file or voice message: icon, name, size. Tapping opens it in the browser for now. */
+/**
+ * A file tile (docs/attachments.md „Dateikachel“): symbol, name and size. While the file is on
+ * its way out the symbol is the upload ring; tapping a failed or waiting one sends it again.
+ * A received file is fetched on a tap (a spinner meanwhile) and opens in the app made for it.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FileRow(a: FileAttachment, textColor: Color, modifier: Modifier = Modifier, onLongPress: () -> Unit = {}) {
+fun FileRow(
+    sessions: SessionManager,
+    m: UiMessage,
+    textColor: Color,
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit = {},
+    onLongPress: () -> Unit = {},
+) {
+    val a = m.msg.attachment ?: return
     val context = LocalContext.current
+    val onWay = m.status == SendStatus.SENDING || m.status == SendStatus.WAITING
+    val opening = m.status == null && sessions.isOpening(a.id)
     Row(
         modifier
             .clip(RoundedCornerShape(10.dp))
             // A long press belongs to the message menu, like on the rest of the bubble.
             .combinedClickable(
+                onClickLabel = if (m.status == null) "Öffnen" else null,
                 onClick = {
-                    if (a.link.isNotEmpty()) {
-                        runCatching {
+                    when {
+                        m.status == SendStatus.FAILED || m.status == SendStatus.WAITING -> onRetry()
+                        m.status != null -> Unit
+                        a.path.isNotEmpty() -> sessions.openFile(a)
+                        // Not among the own files (no path): the page of the share.
+                        a.link.isNotEmpty() -> runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(a.link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         }
                     }
@@ -137,7 +156,17 @@ fun FileRow(a: FileAttachment, textColor: Color, modifier: Modifier = Modifier, 
             Modifier.size(40.dp).clip(CircleShape).background(textColor.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(if (a.voiceMessage) TalkIcons.Mic else TalkIcons.File, null, tint = textColor, modifier = Modifier.size(22.dp))
+            when {
+                onWay && m.progress in 0f..1f -> CircularProgressIndicator(
+                    progress = { m.progress.coerceAtLeast(0.03f) },
+                    modifier = Modifier.size(30.dp),
+                    color = textColor,
+                    trackColor = textColor.copy(alpha = 0.25f),
+                    strokeWidth = 3.dp,
+                )
+                onWay || opening -> CircularProgressIndicator(Modifier.size(26.dp), color = textColor, strokeWidth = 3.dp)
+                else -> Icon(if (a.voiceMessage) TalkIcons.Mic else TalkIcons.File, null, tint = textColor, modifier = Modifier.size(22.dp))
+            }
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f, fill = false)) {

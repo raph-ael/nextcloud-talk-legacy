@@ -245,7 +245,7 @@ class VoiceManager(
         }
     }
 
-    private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment)
+    private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment, location)
 
     // --- playback -----------------------------------------------------------------
 
