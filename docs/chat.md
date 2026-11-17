@@ -149,9 +149,9 @@ Schlank wie bei Signal: **eine Reaktion pro Person und Nachricht.** Ein anderes 
   - Es gibt keine Outbox: Offline kommt sofort „Keine Verbindung – Reaktion nicht gesendet“.
 - `reactions(token, messageId) → ReactionView[]` (`emoji`, `actorType`, `actorId`, `name`, `isOwn`, `timestamp`): wer reagiert hat, die eigenen zuerst, dann die neuesten.
 - `RoomView.canReact`: Darf der User reagieren? Das ist Talk-Berechtigung 256, auf älteren Servern 128, und nie in schreibgeschützten Räumen.
-- **Fremde Reaktionen im offenen Chat** kommen nach höchstens etwa 5 s als `MessagesUpdated`, im Schnitt nach 2 bis 3 s.
+- **Fremde Reaktionen im offenen Chat** kommen nach höchstens etwa 6 s als `MessagesUpdated`, im Schnitt nach 2 bis 3 s.
   - Der Grund für die Wartezeit liegt am Server (Talk 24): Er merkt sich je Unterhaltung 30 s lang, dass es nach dem zuletzt gefragten Stand nichts Neues gibt, und beantwortet die Warteabfrage des Chats aus diesem Merker. Eine neue Nachricht oder eine entfernte Reaktion löscht ihn, eine neu gesetzte Reaktion nicht. Sie käme sonst erst nach bis zu 30 s (gemessen: 27 s).
-  - Der Kern fragt deshalb neben der Warteabfrage alle 5 s mit dem Stand davor nach, an diesem Merker vorbei. Das sind 12 kleine Anfragen pro Minute je offenem Chat. Die Plattform muss nichts tun.
+  - Der Kern fragt deshalb neben der Warteabfrage alle 5 s mit dem Stand davor nach, an diesem Merker vorbei. Die 5 s zählen ab dem Ende der letzten Nachfrage, ihre Laufzeit kommt also dazu (auf einem langsamen Telefon gemessen: 1,5 bis 6 s). Das sind knapp 12 kleine Anfragen pro Minute je offenem Chat. Die Plattform muss nichts tun.
   - `networkChanged()` und ein Chat-Push lösen die Nachfrage sofort aus. Nach `handlePush` für eine Reaktion steht sie also schon im Chat bzw. im Zwischenspeicher.
   - Gemessen im Testraum (8 Läufe): 0,9 bis 4,8 s, im Schnitt 2,5 s. Entfernen: 0,5 s.
 - **Reagierbar ist** eine Nachricht mit `kind == "text"` (auch Datei und Sprachnachricht), die zugestellt ist, also nicht in der Outbox steht. System- und gelöschte Nachrichten nicht.
