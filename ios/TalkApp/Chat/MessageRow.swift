@@ -85,7 +85,8 @@ struct UnreadDivider: View {
     }
 }
 
-/// One bubble with its content, reactions and meta line (also drawn by the long-press menu).
+/// One bubble with its content and meta line, the reaction pills under it (also drawn by the
+/// long-press menu).
 struct Bubble: View {
     let m: UiMessage
     let first: Bool
@@ -111,14 +112,15 @@ struct Bubble: View {
                                      bottomTrailingRadius: big, topTrailingRadius: big)
         let textColor = own && !jumbo ? Talk.bubbleOwnText : Talk.bubbleOtherText
         let inset: CGFloat = image ? 9 : 0
-        let metaOnImage = image && msg.text.isEmpty && msg.reactions.isEmpty
+        let metaOnImage = image && msg.text.isEmpty
         let showMeta = last || m.status != nil
         let audio = !image && attachment?.isAudio == true
         // Signal: an audio bubble carries its time in the player's footer row …
-        let metaInVoice = audio && msg.text.isEmpty && msg.reactions.isEmpty
+        let metaInVoice = audio && msg.text.isEmpty
         // … and has more room above the player when nothing (name, quote) precedes it.
         let audioOnTop = audio && !(isGroup && !own && first) && msg.replyTo == nil
         let metaColor = jumbo ? Talk.muted : textColor.opacity(0.75)
+        let pills = !msg.reactions.isEmpty && msg.kind != .deleted
 
         HStack(alignment: .bottom, spacing: 0) {
             if own { Spacer(minLength: 48) }
@@ -128,98 +130,105 @@ struct Bubble: View {
                 }
                 .frame(width: 36, alignment: .leading)
             }
-            BubbleStack(maxWidth: image ? chatImageWidth : 276) {
-                if isGroup && !own && first {
-                    Text(msg.author)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Format.color(for: msg.author))
-                        .padding(.horizontal, inset)
-                        .padding(.vertical, image ? 4 : 0)
-                }
-                if let r = msg.replyTo {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(r.isOwn ? "Du" : r.author).font(.system(size: 13, weight: .semibold))
-                        let quoted = Format.withAttachment(r.text, r.attachment)
-                        Text(quoted.isEmpty ? "Nachricht gelöscht" : quoted)
-                            .font(.system(size: 13))
-                            .opacity(0.85)
-                            .lineLimit(2)
+            // The pills hang below the bubble on its side (others left, own right), reach into
+            // its bottom edge and are drawn above it; a short bubble may be narrower than them.
+            VStack(alignment: own ? .trailing : .leading, spacing: -ReactionPills.overlap) {
+                BubbleStack(maxWidth: image ? chatImageWidth : 276) {
+                    if isGroup && !own && first {
+                        Text(msg.author)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Format.color(for: msg.author))
+                            .padding(.horizontal, inset)
+                            .padding(.vertical, image ? 4 : 0)
                     }
-                    .foregroundStyle(textColor)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(textColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-                    .padding(.horizontal, inset)
-                    .padding(.top, 2)
-                    .padding(.bottom, 6)
-                }
-                if image, let a = attachment {
-                    let above = (isGroup && !own && first) || msg.replyTo != nil
-                    let below = !metaOnImage
-                    let r: CGFloat = 15
-                    let inner: CGFloat = 4
-                    ChatImage(m: m, attachment: a, onOpen: { onOpenImage(a.id, $0) })
-                        .clipShape(UnevenRoundedRectangle(
-                            topLeadingRadius: above ? inner : (own || first ? r : inner),
-                            bottomLeadingRadius: below ? inner : (own || last ? r : inner),
-                            bottomTrailingRadius: below ? inner : (!own || last ? r : inner),
-                            topTrailingRadius: above ? inner : (!own || first ? r : inner)
-                        ))
-                        .overlay(alignment: .bottomTrailing) {
-                            if metaOnImage && showMeta {
-                                MessageMeta(m: m, own: own, read: read, color: .white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
-                                    .padding(6)
-                            }
+                    if let r = msg.replyTo {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(r.isOwn ? "Du" : r.author).font(.system(size: 13, weight: .semibold))
+                            let quoted = Format.withAttachment(r.text, r.attachment)
+                            Text(quoted.isEmpty ? "Nachricht gelöscht" : quoted)
+                                .font(.system(size: 13))
+                                .opacity(0.85)
+                                .lineLimit(2)
                         }
-                } else if audio {
-                    VoiceBubble(
-                        m: m, textColor: textColor, metaColor: metaColor, own: own,
-                        meta: metaInVoice && showMeta ? MessageMeta(m: m, own: own, read: read, color: metaColor) : nil
-                    )
-                    .padding(.bottom, msg.text.isEmpty ? 0 : 4)
-                } else if let a = attachment {
-                    FileRow(attachment: a, textColor: textColor)
-                        .padding(.bottom, msg.text.isEmpty ? 0 : 4)
-                }
-                if msg.kind == .deleted {
-                    Text("Diese Nachricht wurde gelöscht.").italic().foregroundStyle(textColor)
-                } else if jumbo {
-                    Text(msg.text).font(.system(size: 44))
-                } else if !msg.text.isEmpty {
-                    Text(Markdown.render(msg.text, markdown: msg.markdown))
-                        .font(.system(size: 15))
-                        .lineSpacing(3)
                         .foregroundStyle(textColor)
-                        .tint(textColor)
-                        .padding(.horizontal, inset)
-                        .padding(.top, image ? 6 : 0)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if !msg.reactions.isEmpty {
-                    ReactionPills(msg: msg, color: textColor) { onShowReactions(msg) }
-                        .padding(.horizontal, inset)
-                        .padding(.top, 4)
-                }
-                if showMeta && !metaOnImage && !metaInVoice {
-                    MessageMeta(m: m, own: own, read: read, color: metaColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(textColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
                         .padding(.horizontal, inset)
                         .padding(.top, 2)
-                        .padding(.bottom, image ? 4 : 0)
-                        .layoutValue(key: TrailingInBubble.self, value: true)
+                        .padding(.bottom, 6)
+                    }
+                    if image, let a = attachment {
+                        let above = (isGroup && !own && first) || msg.replyTo != nil
+                        let below = !metaOnImage
+                        let r: CGFloat = 15
+                        let inner: CGFloat = 4
+                        ChatImage(m: m, attachment: a, onOpen: { onOpenImage(a.id, $0) })
+                            .clipShape(UnevenRoundedRectangle(
+                                topLeadingRadius: above ? inner : (own || first ? r : inner),
+                                bottomLeadingRadius: below ? inner : (own || last ? r : inner),
+                                bottomTrailingRadius: below ? inner : (!own || last ? r : inner),
+                                topTrailingRadius: above ? inner : (!own || first ? r : inner)
+                            ))
+                            .overlay(alignment: .bottomTrailing) {
+                                if metaOnImage && showMeta {
+                                    MessageMeta(m: m, own: own, read: read, color: .white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                                        .padding(6)
+                                }
+                            }
+                    } else if audio {
+                        VoiceBubble(
+                            m: m, textColor: textColor, metaColor: metaColor, own: own,
+                            meta: metaInVoice && showMeta ? MessageMeta(m: m, own: own, read: read, color: metaColor) : nil
+                        )
+                        .padding(.bottom, msg.text.isEmpty ? 0 : 4)
+                    } else if let a = attachment {
+                        FileRow(attachment: a, textColor: textColor)
+                            .padding(.bottom, msg.text.isEmpty ? 0 : 4)
+                    }
+                    if msg.kind == .deleted {
+                        Text("Diese Nachricht wurde gelöscht.").italic().foregroundStyle(textColor)
+                    } else if jumbo {
+                        Text(msg.text).font(.system(size: 44))
+                    } else if !msg.text.isEmpty {
+                        Text(Markdown.render(msg.text, markdown: msg.markdown))
+                            .font(.system(size: 15))
+                            .lineSpacing(3)
+                            .foregroundStyle(textColor)
+                            .tint(textColor)
+                            .padding(.horizontal, inset)
+                            .padding(.top, image ? 6 : 0)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if showMeta && !metaOnImage && !metaInVoice {
+                        MessageMeta(m: m, own: own, read: read, color: metaColor)
+                            .padding(.horizontal, inset)
+                            .padding(.top, 2)
+                            .padding(.bottom, image ? 4 : 0)
+                            .layoutValue(key: TrailingInBubble.self, value: true)
+                    }
+                }
+                .padding(.horizontal, jumbo ? 0 : image ? 3 : 12)
+                .padding(.top, image ? 3 : audioOnTop ? 12 : 7)
+                .padding(.bottom, image ? 3 : 7)
+                .background(jumbo ? Color.clear : own ? Talk.bubbleOwn : Talk.bubbleOther, in: shape)
+                .opacity(m.status == .failed ? 0.6 : 1)
+                .scaleEffect(highlighted ? 0.97 : 1)
+                .animation(.easeOut(duration: 0.15), value: highlighted)
+                .onTapGesture {
+                    if m.status == .failed || m.status == .waiting { onRetry(msg) }
+                }
+                if pills {
+                    ReactionPills(msg: msg) { onShowReactions(msg) }
+                        .padding(.horizontal, 8)
                 }
             }
-            .padding(.horizontal, jumbo ? 0 : image ? 3 : 12)
-            .padding(.top, image ? 3 : audioOnTop ? 12 : 7)
-            .padding(.bottom, image ? 3 : 7)
-            .background(jumbo ? Color.clear : own ? Talk.bubbleOwn : Talk.bubbleOther, in: shape)
-            .opacity(m.status == .failed ? 0.6 : 1)
-            .scaleEffect(highlighted ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.15), value: highlighted)
-            .onTapGesture {
-                if m.status == .failed || m.status == .waiting { onRetry(msg) }
+            // The avatar stays at the bubble's foot, not the pills'.
+            .alignmentGuide(.bottom) { d in
+                d[.bottom] - (pills ? ReactionPills.height - ReactionPills.overlap : 0)
             }
             if !own { Spacer(minLength: 48) }
         }

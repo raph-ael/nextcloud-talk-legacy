@@ -29,6 +29,9 @@ enum Talk {
     static let groupedBackground = dynamic(light: 0xF1F1F3, dark: 0x121212)
     static let groupedRow = dynamic(light: 0xFFFFFF, dark: 0x232325)
     static let callDot = Color(hex: 0x2FB35A)
+    /// Reaction pills under the bubble (docs/chat.md "Pillen unter der Blase"), the own one darker.
+    static let reaction = dynamic(light: 0xE9E9E9, dark: 0x1B1B1B)
+    static let reactionMine = dynamic(light: 0xB9B9B9, dark: 0x5E5E5E)
 
     static let uiBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x121212) : .white }
 

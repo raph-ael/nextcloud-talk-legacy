@@ -24,34 +24,55 @@ enum Reactions {
     }
 }
 
-/// Pills under the bubble: emoji and from 2 the count, the own one highlighted. A tap opens
-/// "Wer hat reagiert" (the pills do not toggle). A new pill pops in (0.6 → 1).
+/// Pills under the bubble (docs/chat.md "Pillen unter der Blase", Android and iOS): emoji and
+/// from 2 the count, the own one darker, each with a ring in the chat background so it stands
+/// off the bubble. At most three: with more emojis the two most used and "+N" for the remaining
+/// reactions (highlighted when the own one is among them). A tap opens "Wer hat reagiert" (the
+/// pills do not toggle). A new pill pops in (0.6 → 1).
 struct ReactionPills: View {
     let msg: MessageView
-    let color: Color
     let onTap: () -> Void
 
+    /// Height of a pill; it reaches `overlap` into the bubble's bottom edge.
+    static let height: CGFloat = 26
+    static let overlap: CGFloat = 4
+
     var body: some View {
-        let list = Reactions.sorted(msg.reactions)
+        let all = Reactions.sorted(msg.reactions)
+        let shown = all.count > 3 ? Array(all.prefix(2)) : all
+        let rest = all.count > 3 ? Array(all.dropFirst(2)) : []
+        let restCount = rest.reduce(Int64(0)) { $0 + $1.count }
         HStack(spacing: 4) {
-            ForEach(list, id: \.emoji) { r in
-                let mine = msg.reactionsSelf.contains(r.emoji)
-                Button(action: onTap) {
-                    Text(r.count > 1 ? "\(r.emoji) \(r.count)" : r.emoji)
-                        .font(.system(size: 13, weight: mine ? .semibold : .regular))
-                        .foregroundStyle(color)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(color.opacity(mine ? 0.24 : 0.1), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(mine ? 0.5 : 0), lineWidth: 1))
+            ForEach(shown, id: \.emoji) { r in
+                pill(mine: msg.reactionsSelf.contains(r.emoji)) {
+                    Text(r.emoji).font(.system(size: 15))
+                    if r.count > 1 { Text("\(r.count)").font(.system(size: 12, weight: .semibold)) }
                 }
-                .buttonStyle(.plain)
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
                 .accessibilityLabel("\(r.emoji) \(r.count), Reaktionen anzeigen")
-                .accessibilityIdentifier("reaction-pill")
+            }
+            if !rest.isEmpty {
+                pill(mine: rest.contains { msg.reactionsSelf.contains($0.emoji) }) {
+                    Text("+\(restCount)").font(.system(size: 12, weight: .semibold))
+                }
+                .accessibilityLabel("\(restCount) weitere, Reaktionen anzeigen")
             }
         }
-        .animation(.easeOut(duration: 0.15), value: list.map(\.emoji))
+        .animation(.easeOut(duration: 0.15), value: shown.map(\.emoji) + (rest.isEmpty ? [] : ["+"]))
+    }
+
+    private func pill(mine: Bool, @ViewBuilder _ label: () -> some View) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 3) { label() }
+                .foregroundStyle(Talk.onSurface)
+                .padding(.horizontal, 8)
+                .frame(minWidth: Self.height, minHeight: Self.height, maxHeight: Self.height)
+                .background(mine ? Talk.reactionMine : Talk.reaction, in: Capsule())
+                .overlay(Capsule().strokeBorder(Talk.background, lineWidth: 1.5))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .transition(.scale(scale: 0.6).combined(with: .opacity))
+        .accessibilityIdentifier("reaction-pill")
     }
 }
 
