@@ -46,9 +46,9 @@ export function coordinates(l: GeoLocation): string {
 
 /** The place on openstreetmap.org, with a marker (docs/attachments.md). */
 export function locationLink(l: GeoLocation): string {
-  // At most six decimals as in the core's `geo:`, without zeros at the end.
-  const lat = String(Number(l.latitude.toFixed(6)))
-  const lon = String(Number(l.longitude.toFixed(6)))
+  // Always six decimals, as in the core's `geo:` and in Talk's web client.
+  const lat = l.latitude.toFixed(6)
+  const lon = l.longitude.toFixed(6)
   return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}`
 }
 
