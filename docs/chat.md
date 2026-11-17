@@ -159,9 +159,27 @@ Schlank wie bei Signal: **eine Reaktion pro Person und Nachricht.** Ein anderes 
 - Ohne `canReact`, bei ausstehenden, System- und gelöschten Nachrichten gibt es keine Leiste. Das übrige Menü bleibt.
 
 **Pillen unter der Blase**
-- Wie bisher: Emoji und ab 2 die Zahl, die eigene ist hervorgehoben.
+- Emoji und ab 2 die Zahl, die eigene ist hervorgehoben.
+- Die Pillen liegen unter der Blase und ragen in ihren unteren Rand hinein, auf allen Plattformen. In der Blase stehen sie nie.
 - Tippen bzw. Klicken öffnet „Wer hat reagiert“, die Pillen schalten also nicht um.
 - Eine neu gesetzte Pille „ploppt“ kurz (Skalierung 0,6 → 1, etwa 150 ms). Mehr Animation gibt es nicht.
+- Farben: Fläche `reaction` (hell `#E9E9E9`, dunkel `#1B1B1B`), die eigene `reactionMine` (hell `#B9B9B9`, dunkel `#5E5E5E`). Der Rand hat die Farbe des Chat-Hintergrunds, so hebt sich die Pille von der Blase ab.
+- Die Uhrzeit bleibt, wo sie ohne Reaktion stünde: bei Bildern auf dem Bild, bei Sprachnachrichten in der Fußzeile des Players.
+
+| | Desktop | Android, iOS (wie Signal Mobile) |
+|---|---|---|
+| Seite | fremde Nachricht rechts an der Blase, eigene links | fremde Nachricht links an der Blase, eigene rechts |
+| Überlappung | 6 px | 4 dp/pt |
+| Einzug vom Blasenrand | 8 px | 8 dp/pt, damit die Pille nicht auf der runden Ecke sitzt |
+| Pille | 22 px hoch, Rand 1 px, Emoji 14, Zahl 11 halbfett | 26 hoch, Rand 1,5, Emoji 15, Zahl 12 halbfett |
+| Viele Emojis | alle, die Reihe bricht um | höchstens drei Pillen |
+
+Auf Mobilgeräten gilt bei mehr als drei verschiedenen Emojis:
+- Es stehen die zwei häufigsten und eine Pille „+N“. N ist die Zahl der übrigen Reaktionen, nicht der übrigen Emojis.
+- Ist die eigene Reaktion unter den übrigen, ist „+N“ hervorgehoben.
+- „Wer hat reagiert“ zeigt immer alle.
+- Die Reihe darf über die Blase hinausragen (kurze Nachricht, drei Pillen). Sie wächst von ihrer Seite der Blase zur Bildschirmmitte.
+- Die Zeile wird durch die Pillen um 22 höher. Der Abstand zur nächsten Nachricht bleibt.
 
 **„Wer hat reagiert“**
 - Ein Bottom-Sheet auf Mobilgeräten, ein kleines Modal am Desktop.
@@ -184,7 +202,7 @@ Schlank wie bei Signal: **eine Reaktion pro Person und Nachricht.** Ein anderes 
   - ＋ öffnet die Emoji-Tastatur. Das erste Emoji wird übernommen, dann schließt sie.
   - Leichtes haptisches Feedback beim Setzen.
 
-**Barrierefreiheit:** Die Knöpfe der Leiste heißen „Mit ❤️ reagieren“ und „Weitere Reaktionen“, die Pillen „❤️ 2, Reaktionen anzeigen“.
+**Barrierefreiheit:** Die Knöpfe der Leiste heißen „Mit ❤️ reagieren“ und „Weitere Reaktionen“, die Pillen „❤️ 2, Reaktionen anzeigen“, die Sammelpille „3 weitere, Reaktionen anzeigen“.
 
 ## Bearbeiten und Löschen
 
