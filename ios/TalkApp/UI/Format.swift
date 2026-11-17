@@ -118,10 +118,35 @@ enum Format {
         return "📎 \(a.name)"
     }
 
-    /// One-line preview of a message that may carry a file: label plus caption.
-    static func withAttachment(_ text: String, _ a: FileAttachment?) -> String {
+    /// One-line preview of a message that may carry a file (label plus caption) or a place
+    /// ("📍 {Bezeichnung}", docs/attachments.md "Vorschau"; `text` is then the name).
+    static func withAttachment(_ text: String, _ a: FileAttachment?, _ place: GeoLocation? = nil) -> String {
+        if let place { return "📍 \(placeName(place))" }
         guard let a else { return text }
         return text.isEmpty ? attachmentLabel(a) : "\(attachmentLabel(a)) · \(text)"
+    }
+
+    /// The name of a place, "Standort" when it has none.
+    static func placeName(_ l: GeoLocation) -> String {
+        let name = l.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Standort" : name
+    }
+
+    /// The link "Kopieren" puts under the name (docs/attachments.md "Blase").
+    static func placeLink(_ l: GeoLocation) -> String {
+        let lat = degrees(l.latitude), lon = degrees(l.longitude)
+        return "https://www.openstreetmap.org/?mlat=\(lat)&mlon=\(lon)#map=16/\(lat)/\(lon)"
+    }
+
+    /// Always six decimals with a point, whatever the device language: "52.528300".
+    private static func degrees(_ v: Double) -> String {
+        String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), v)
+    }
+
+    /// "Auf etwa 20 m genau", from 1000 m on in km ("Auf etwa 1,5 km genau").
+    static func accuracy(_ meters: Double) -> String {
+        if meters < 999.5 { return "Auf etwa \(max(1, Int(meters.rounded()))) m genau" }
+        return "Auf etwa " + String(format: "%.1f", locale: de, meters / 1000) + " km genau"
     }
 
     /// 1,2 MB style file size.
@@ -146,7 +171,7 @@ extension FileAttachment {
 
 extension MessageView {
     var toReply: ReplyPreview {
-        ReplyPreview(id: id, author: author, text: text, isOwn: isOwn, attachment: attachment)
+        ReplyPreview(id: id, author: author, text: text, isOwn: isOwn, attachment: attachment, location: location)
     }
 }
 

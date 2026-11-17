@@ -1,4 +1,5 @@
 import PhotosUI
+import QuickLook
 import SwiftUI
 
 /// One conversation (port of Android `ChatScreen.kt`): message list, input row, attachment
@@ -29,6 +30,9 @@ struct ChatView: View {
     @State private var viewer: ViewerItem?
     @State private var cameraGallery: PhotosPickerItem?
     @State private var cameraGalleryOpen = false
+    /// docs/attachments.md: the system's file picker, the picked files, the place sheet.
+    @State private var filePicker = false
+    @State private var placeSheet = false
     @AppStorage("keyboard_height") private var keyboardHeight: Double = 300
 
     var body: some View {
@@ -142,7 +146,9 @@ struct ChatView: View {
                             sendingFromCamera = false
                             sending = img
                         },
-                        onCamera: { camera = true }
+                        onCamera: { camera = true },
+                        onFile: { filePicker = true },
+                        onPlace: { placeSheet = true }
                     )
                     .transition(.move(edge: .bottom))
                 }
@@ -313,6 +319,10 @@ struct ChatView: View {
         .fullScreenCover(item: $viewer) { item in
             ImageViewer(item: item) { viewer = nil }
         }
+        .modifier(AttachmentSheets(
+            store: store, token: token, replyTo: $replyTo, panelOpen: $panelOpen,
+            scrollTick: $scrollTick, filePicker: $filePicker, placeSheet: $placeSheet
+        ))
         .onAppear { store.markVisibleRead(token) }
     }
 
@@ -358,7 +368,11 @@ struct ChatView: View {
         if canEdit {
             list.append(MenuAction(id: "edit", label: "Bearbeiten", icon: "pencil") { startEdit(msg) })
         }
-        if !msg.text.isEmpty && msg.kind != .deleted {
+        if let place = msg.location, msg.kind != .deleted {
+            list.append(MenuAction(id: "copy", label: "Kopieren", icon: "doc.on.doc") {
+                UIPasteboard.general.string = Places.copyText(place)
+            })
+        } else if !msg.text.isEmpty && msg.kind != .deleted {
             list.append(MenuAction(id: "copy", label: "Kopieren", icon: "doc.on.doc") { UIPasteboard.general.string = msg.text })
         }
         if !delivered {
@@ -451,5 +465,61 @@ private struct JumpToBottomButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .accessibilityIdentifier("jump-to-bottom")
+    }
+}
+
+/// docs/attachments.md: the file picker, the "Datei senden" screen, the place sheet and the
+/// QuickLook preview of received files.
+private struct AttachmentSheets: ViewModifier {
+    let store: SessionStore
+    let token: String
+    @Binding var replyTo: MessageView?
+    @Binding var panelOpen: Bool
+    @Binding var scrollTick: Int
+    @Binding var filePicker: Bool
+    @Binding var placeSheet: Bool
+    @State private var files: FileBatch?
+
+    func body(content: Content) -> some View {
+        content
+            .fileImporter(isPresented: $filePicker, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                guard case .success(let urls) = result, !urls.isEmpty else { return }
+                Task {
+                    let read = await Task.detached { urls.map { PickedFile.read($0) } }.value
+                    if read.contains(where: { $0 == nil }) { Toast.show("Datei konnte nicht gelesen werden") }
+                    let ok = read.compactMap { $0 }
+                    if !ok.isEmpty { files = FileBatch(files: ok) }
+                }
+            }
+            .sheet(item: $files) { batch in
+                FileSendView(
+                    files: batch.files,
+                    onClose: { files = nil },
+                    onSend: { list, caption in
+                        let failed = await store.sendFiles(token, files: list, caption: caption, replyTo: replyTo)
+                        if failed.isEmpty {
+                            replyTo = nil
+                            files = nil
+                            panelOpen = false
+                            scrollTick += 1
+                        }
+                        return failed
+                    }
+                )
+            }
+            .sheet(isPresented: $placeSheet) {
+                PlaceSendSheet(
+                    onSend: { place in
+                        store.sendLocation(token, place)
+                        placeSheet = false
+                        panelOpen = false
+                        scrollTick += 1
+                    },
+                    onClose: { placeSheet = false }
+                )
+                .presentationDetents([.height(420)])
+                .presentationDragIndicator(.visible)
+            }
+            .quickLookPreview(Binding(get: { FileOpener.shared.preview }, set: { FileOpener.shared.preview = $0 }))
     }
 }

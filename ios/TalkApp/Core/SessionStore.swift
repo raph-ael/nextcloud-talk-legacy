@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import Network
 import SwiftUI
 import UIKit
@@ -1171,6 +1172,81 @@ final class SessionStore {
             Toast.show("Bild konnte nicht gespeichert werden")
             return
         }
+        BackgroundSender.shared.queued()
+    }
+
+    /// docs/attachments.md "Datei senden": copies every file unchanged into the staging
+    /// folder, then queues them in order, the quote on the first and the caption on the
+    /// last. When one cannot be read nothing is sent; the result is the ids of those.
+    func sendFiles(_ token: String, files: [PickedFile], caption: String, replyTo: MessageView?) async -> Set<UUID> {
+        guard let s = session else { return [] }
+        let staged = await Task.detached { files.map { Self.stage($0) } }.value
+        let failed = Set(zip(files, staged).filter { $0.1 == nil }.map(\.0.id))
+        guard failed.isEmpty else {
+            for f in staged.compactMap({ $0 }) { try? FileManager.default.removeItem(atPath: f.path) }
+            return failed
+        }
+        clearUnreadLine(token)
+        let text = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        for (i, (f, st)) in zip(files, staged).enumerated() {
+            guard let st else { continue }
+            let ref = newReferenceId()
+            if f.mime.hasPrefix("image/") { media.setLocalPreview(ref, path: st.path) }
+            do {
+                _ = try s.enqueueFile(
+                    token: token, localPath: st.path, name: f.name, mime: f.mime,
+                    width: st.width, height: st.height,
+                    caption: i == files.count - 1 ? text : "",
+                    replyTo: i == 0 ? replyTo?.toReply : nil, referenceId: ref
+                )
+            } catch {
+                media.removeLocalPreview(ref)
+                try? FileManager.default.removeItem(atPath: st.path)
+                Toast.show("Datei konnte nicht gelesen werden")
+            }
+        }
+        BackgroundSender.shared.queued()
+        return []
+    }
+
+    private struct StagedFile {
+        let path: String
+        let width: Int64
+        let height: Int64
+    }
+
+    /// A copy in the staging folder; images also get their size from the file header.
+    nonisolated private static func stage(_ f: PickedFile) -> StagedFile? {
+        let scoped = f.url.startAccessingSecurityScopedResource()
+        defer { if scoped { f.url.stopAccessingSecurityScopedResource() } }
+        let ext = (f.name as NSString).pathExtension
+        let dest = stagingDir.appendingPathComponent(UUID().uuidString.lowercased() + (ext.isEmpty ? "" : ".\(ext)"))
+        do {
+            try FileManager.default.copyItem(at: f.url, to: dest)
+        } catch {
+            Log.media.error("stage file: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        var w: Int64 = 0, h: Int64 = 0
+        if f.mime.hasPrefix("image/"), let src = CGImageSourceCreateWithURL(dest as CFURL, nil),
+           let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] {
+            w = (p[kCGImagePropertyPixelWidth] as? NSNumber)?.int64Value ?? 0
+            h = (p[kCGImagePropertyPixelHeight] as? NSNumber)?.int64Value ?? 0
+            // Turned by EXIF (5–8): shown the other way round.
+            if let o = (p[kCGImagePropertyOrientation] as? NSNumber)?.intValue, (5...8).contains(o) { swap(&w, &h) }
+        }
+        return StagedFile(path: dest.path, width: w, height: h)
+    }
+
+    /// docs/attachments.md "Standort": queued like a text, never with a quote (Talk has none
+    /// for places), so an open reply bar stays for the next message.
+    func sendLocation(_ token: String, _ place: GeoLocation) {
+        guard let s = session else { return }
+        clearUnreadLine(token)
+        _ = s.enqueueLocation(
+            token: token, latitude: place.latitude, longitude: place.longitude, name: place.name,
+            referenceId: newReferenceId()
+        )
         BackgroundSender.shared.queued()
     }
 

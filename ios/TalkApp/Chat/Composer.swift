@@ -248,7 +248,7 @@ private struct ReplyBar: View {
                 Text(reply.isOwn ? "Du" : reply.author)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Talk.accent)
-                Text(Format.withAttachment(reply.text, reply.attachment))
+                Text(Format.withAttachment(reply.text, reply.attachment, reply.location))
                     .font(.system(size: 13))
                     .foregroundStyle(Talk.muted)
                     .lineLimit(1)

@@ -103,7 +103,11 @@ struct Bubble: View {
         let own = msg.isOwn
         let attachment = msg.kind == .deleted ? nil : msg.attachment
         let image = attachment?.isImage == true
-        let jumbo = msg.kind == .text && attachment == nil && msg.replyTo == nil && Format.isJumboEmoji(msg.text)
+        let place = msg.kind == .deleted ? nil : msg.location
+        // Photos and places: the picture fills the bubble up to a thin edge.
+        let media = image || place != nil
+        let jumbo = msg.kind == .text && attachment == nil && place == nil && msg.replyTo == nil
+            && Format.isJumboEmoji(msg.text)
         let big: CGFloat = 18, small: CGFloat = 4
         let shape = own
             ? UnevenRoundedRectangle(topLeadingRadius: big, bottomLeadingRadius: big,
@@ -111,7 +115,7 @@ struct Bubble: View {
             : UnevenRoundedRectangle(topLeadingRadius: first ? big : small, bottomLeadingRadius: last ? big : small,
                                      bottomTrailingRadius: big, topTrailingRadius: big)
         let textColor = own && !jumbo ? Talk.bubbleOwnText : Talk.bubbleOtherText
-        let inset: CGFloat = image ? 9 : 0
+        let inset: CGFloat = media ? 9 : 0
         let metaOnImage = image && msg.text.isEmpty
         let showMeta = last || m.status != nil
         let audio = !image && attachment?.isAudio == true
@@ -133,18 +137,18 @@ struct Bubble: View {
             // The pills hang below the bubble on its side (others left, own right), reach into
             // its bottom edge and are drawn above it; a short bubble may be narrower than them.
             VStack(alignment: own ? .trailing : .leading, spacing: -ReactionPills.overlap) {
-                BubbleStack(maxWidth: image ? chatImageWidth : 276) {
+                BubbleStack(maxWidth: image ? chatImageWidth : place != nil ? placeMapSize.width : 276) {
                     if isGroup && !own && first {
                         Text(msg.author)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Format.color(for: msg.author))
                             .padding(.horizontal, inset)
-                            .padding(.vertical, image ? 4 : 0)
+                            .padding(.vertical, media ? 4 : 0)
                     }
                     if let r = msg.replyTo {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(r.isOwn ? "Du" : r.author).font(.system(size: 13, weight: .semibold))
-                            let quoted = Format.withAttachment(r.text, r.attachment)
+                            let quoted = Format.withAttachment(r.text, r.attachment, r.location)
                             Text(quoted.isEmpty ? "Nachricht gelöscht" : quoted)
                                 .font(.system(size: 13))
                                 .opacity(0.85)
@@ -186,14 +190,21 @@ struct Bubble: View {
                         )
                         .padding(.bottom, msg.text.isEmpty ? 0 : 4)
                     } else if let a = attachment {
-                        FileRow(attachment: a, textColor: textColor)
+                        FileRow(m: m, attachment: a, textColor: textColor, onRetry: onRetry)
                             .padding(.bottom, msg.text.isEmpty ? 0 : 4)
+                    } else if let place {
+                        PlaceContent(
+                            m: m, place: place, textColor: textColor, inset: inset,
+                            above: (isGroup && !own && first) || msg.replyTo != nil,
+                            corners: (own || first, own || last, !own || last, !own || first),
+                            onRetry: onRetry
+                        )
                     }
                     if msg.kind == .deleted {
                         Text("Diese Nachricht wurde gelöscht.").italic().foregroundStyle(textColor)
                     } else if jumbo {
                         Text(msg.text).font(.system(size: 44))
-                    } else if !msg.text.isEmpty {
+                    } else if !msg.text.isEmpty && place == nil {
                         Text(Markdown.render(msg.text, markdown: msg.markdown))
                             .font(.system(size: 15))
                             .lineSpacing(3)
@@ -207,13 +218,13 @@ struct Bubble: View {
                         MessageMeta(m: m, own: own, read: read, color: metaColor)
                             .padding(.horizontal, inset)
                             .padding(.top, 2)
-                            .padding(.bottom, image ? 4 : 0)
+                            .padding(.bottom, media ? 4 : 0)
                             .layoutValue(key: TrailingInBubble.self, value: true)
                     }
                 }
-                .padding(.horizontal, jumbo ? 0 : image ? 3 : 12)
-                .padding(.top, image ? 3 : audioOnTop ? 12 : 7)
-                .padding(.bottom, image ? 3 : 7)
+                .padding(.horizontal, jumbo ? 0 : media ? 3 : 12)
+                .padding(.top, media ? 3 : audioOnTop ? 12 : 7)
+                .padding(.bottom, media ? 3 : 7)
                 .background(jumbo ? Color.clear : own ? Talk.bubbleOwn : Talk.bubbleOther, in: shape)
                 .opacity(m.status == .failed ? 0.6 : 1)
                 .scaleEffect(highlighted ? 0.97 : 1)
@@ -364,22 +375,44 @@ struct ChatImage: View {
     }
 }
 
-/// A non-image file: icon, name, size. Tapping opens it in the browser for now.
+/// A non-image file (docs/attachments.md "Dateikachel"): icon, name, size. Sending or
+/// waiting: the upload ring in place of the icon (a spinner while the progress is unknown),
+/// failed: the icon again; tapping a failed or waiting one sends it again.
+/// Delivered: tapping loads it once (spinner) and opens it in the preview.
 struct FileRow: View {
+    let m: UiMessage
     let attachment: FileAttachment
     let textColor: Color
-    @Environment(\.openURL) private var openURL
+    let onRetry: (MessageView) -> Void
 
     var body: some View {
         let a = attachment
+        let opener = FileOpener.shared
+        let loading = opener.isLoading(a)
         Button {
-            if let url = URL(string: a.link), !a.link.isEmpty { openURL(url) }
+            switch m.status {
+            case .failed, .waiting: onRetry(m.msg)
+            case .sending: break
+            case nil: opener.open(a)
+            }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "doc")
-                    .font(.system(size: 18))
-                    .frame(width: 40, height: 40)
-                    .background(textColor.opacity(0.12), in: Circle())
+                ZStack {
+                    Circle().fill(textColor.opacity(0.12))
+                    let pending = m.status == .sending || m.status == .waiting
+                    if pending && (0..<0.999).contains(m.progress) {
+                        Circle().stroke(textColor.opacity(0.25), lineWidth: 3).padding(5)
+                        Circle().trim(from: 0, to: CGFloat(max(0.03, m.progress)))
+                            .stroke(textColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .padding(5)
+                    } else if pending || loading {
+                        ProgressView().tint(textColor)
+                    } else {
+                        Image(systemName: FileIcon.name(a.mimetype)).font(.system(size: 18))
+                    }
+                }
+                .frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(a.name).font(.system(size: 15, weight: .medium)).lineLimit(2)
                     Text(Format.fileSize(a.size)).font(.system(size: 12)).opacity(0.75)
@@ -387,7 +420,71 @@ struct FileRow: View {
             }
             .foregroundStyle(textColor)
             .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(a.name), \(Format.fileSize(a.size))")
+        .accessibilityValue(loading ? "Wird geladen" : "")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("file-row")
+    }
+}
+
+/// SF Symbols for file types.
+enum FileIcon {
+    static func name(_ mime: String) -> String {
+        if mime.hasPrefix("video/") { return "film" }
+        if mime.hasPrefix("audio/") { return "music.note" }
+        if mime.hasPrefix("image/") { return "photo" }
+        if mime == "application/pdf" { return "doc.richtext" }
+        if mime.hasPrefix("text/") { return "doc.text" }
+        if mime.contains("zip") || mime.contains("compressed") || mime.contains("tar") { return "doc.zipper" }
+        return "doc"
+    }
+}
+
+/// A shared place in a bubble (docs/attachments.md "Blase"): the map with the corners of a
+/// photo, the name below in the bubble's text colour. Tapping opens Apple Maps.
+private struct PlaceContent: View {
+    let m: UiMessage
+    let place: GeoLocation
+    let textColor: Color
+    let inset: CGFloat
+    let above: Bool
+    /// Outer corners that may be round: top leading, bottom leading, bottom trailing, top trailing.
+    let corners: (Bool, Bool, Bool, Bool)
+    let onRetry: (MessageView) -> Void
+
+    var body: some View {
+        let r: CGFloat = 15, inner: CGFloat = 4
+        VStack(alignment: .leading, spacing: 6) {
+            PlaceMap(latitude: place.latitude, longitude: place.longitude, size: placeMapSize)
+                .clipShape(UnevenRoundedRectangle(
+                    topLeadingRadius: above ? inner : (corners.0 ? r : inner),
+                    bottomLeadingRadius: inner,
+                    bottomTrailingRadius: inner,
+                    topTrailingRadius: above ? inner : (corners.3 ? r : inner)
+                ))
+            Text(Format.placeName(place))
+                .font(.system(size: 15))
+                .foregroundStyle(textColor)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, inset)
+        }
+        .frame(width: placeMapSize.width, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            switch m.status {
+            case .failed, .waiting: onRetry(m.msg)
+            case .sending: break
+            case nil: Places.openInMaps(place)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Standort: \(Format.placeName(place))")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("place-bubble")
     }
 }

@@ -283,7 +283,7 @@ private struct RoomRow: View {
 
     private var preview: Text {
         guard let last = room.lastMessage else { return Text("") }
-        let text = Format.withAttachment(last.text, last.attachment)
+        let text = Format.withAttachment(last.text, last.attachment, last.location)
         if text.isEmpty { return Text("Nachricht gelöscht") }
         if last.isSystem { return Text(text).italic() }
         if !room.isGroup { return Text(text) }

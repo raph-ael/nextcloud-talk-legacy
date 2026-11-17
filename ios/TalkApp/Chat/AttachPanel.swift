@@ -8,6 +8,8 @@ struct AttachPanel: View {
     let height: CGFloat
     let onImage: (PreparedImage) -> Void
     let onCamera: () -> Void
+    let onFile: () -> Void
+    let onPlace: () -> Void
 
     @State private var assets: [PHAsset] = []
     @State private var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -22,11 +24,15 @@ struct AttachPanel: View {
                     Source(icon: "photo.on.rectangle", label: "Galerie")
                 }
                 .accessibilityIdentifier("gallery")
+                // docs/attachments.md: "Datei" and "Standort" right after "Galerie", before the
+                // placeholders, so narrow phones show them without swiping.
+                Button(action: onFile) { Source(icon: "doc", label: "Datei") }
+                    .accessibilityIdentifier("attach-file")
+                Button(action: onPlace) { Source(icon: "location", label: "Standort") }
+                    .accessibilityIdentifier("attach-place")
                 Button(action: onCamera) { Source(icon: "camera", label: "Kamera") }
-                Button { Toast.show("Dateien senden kommt bald") } label: { Source(icon: "doc", label: "Datei") }
                 Button { Toast.show("Umfragen kommen bald") } label: { Source(icon: "chart.bar", label: "Umfrage") }
                 Button { Toast.show("Kontakte senden kommt bald") } label: { Source(icon: "person.crop.circle", label: "Kontakt") }
-                Button { Toast.show("Standort senden kommt bald") } label: { Source(icon: "location", label: "Standort") }
             }
             .buttonStyle(.plain)
             Spacer(minLength: 0)
