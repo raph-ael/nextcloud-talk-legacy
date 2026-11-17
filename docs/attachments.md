@@ -2,13 +2,13 @@
 
 Verbindlich für Android und iOS, wo nichts anderes steht. Der Desktop sendet Dateien schon (Büroklammer, Ablegen, Einfügen) und liest Standorte, er sendet keine. Bilder aus der Galerie, Kamera und Sprachnachrichten bleiben, wie sie sind.
 
-Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste, mit den Knöpfen „Datei“ und „Standort“. Sie stehen gleich nach „Galerie“, vor den Platzhaltern „Umfrage“ und „Kontakt“, damit sie auch auf schmalen Geräten ohne Wischen zu sehen sind. Beim Bearbeiten einer Nachricht ist das Menü ausgeblendet (`docs/chat.md`).
+Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste, mit den Knöpfen „Datei“ und „Standort“. Sie stehen gleich nach „Galerie“, vor den Platzhaltern „Umfrage“ und „Kontakt“ (auf iOS steht dazwischen noch „Kamera“), damit sie auch auf schmalen Geräten ohne Wischen zu sehen sind. Beim Bearbeiten einer Nachricht ist das Menü ausgeblendet (`docs/chat.md`).
 
 ## Datei senden
 
 | Punkt | Regel |
 |---|---|
-| Auswahl | „Datei“ öffnet den Dateiwähler des Systems, mit Mehrfachauswahl. Abbrechen ändert nichts. |
+| Auswahl | „Datei“ öffnet den Dateiwähler des Systems, mit Mehrfachauswahl. Abbrechen ändert nichts. Die Liste übernimmt die Reihenfolge, die der Dateiwähler liefert. Auf Android ist das die Reihenfolge des Antippens, auf iOS legt sie der Dateiwähler selbst fest. |
 | Sendebildschirm | Titel „Datei senden“ bzw. „3 Dateien senden“. Je Datei eine Zeile mit Symbol, Name (in der Mitte gekürzt), Größe und ✕ „Entfernen“. Darunter das Feld „Beschreibung hinzufügen“ und der Senden-Knopf. Ohne Datei schließt sich der Bildschirm. |
 | Senden | Die Dateien werden in den Zwischenordner kopiert (der Knopf zeigt solange einen Kreisel) und der Reihe nach eingestellt. Wie am Desktop hängt das Antwort-Zitat an der ersten Datei und die Beschreibung an der letzten. Danach schließt der Bildschirm, die Antwortleiste auch, und der Chat steht am Ende. |
 | Inhalt | Die Datei geht unverändert raus. Ein Bild über „Datei“ wird nicht verkleinert und behält seine Metadaten, auch den Aufnahmeort. Über „Galerie“ und Kamera bleibt es beim Verkleinern ohne Metadaten. |
