@@ -1228,3 +1228,61 @@ async fn a_place_is_sent_and_read() {
     engine.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// docs/attachments.md „Datei senden“: a file whose first attempt ran without network is
+/// uploaded afterwards, also when the folder already holds a file of the same name and
+/// size. That one is somebody else's and is never shared in its place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_of_the_same_name_and_size_is_not_taken_for_ours() {
+    let mut server = Outage::server().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let account = Account { server: server.url(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let send = |content: &str, reference: &str| {
+        let path = dir.join(reference);
+        std::fs::write(&path, content).unwrap();
+        engine
+            .enqueue_file("sommerfest", &path.to_string_lossy(), "notiz.txt", "text/plain", 0, 0, "", None, reference)
+            .unwrap();
+    };
+    // Where the message with this reference points to, and what lies there.
+    let base = server.url();
+    let sent = |reference: &'static str| {
+        let (engine, base) = (engine.clone(), base.clone());
+        async move {
+            let batch = engine.client().history("sommerfest", None, 50).await.unwrap();
+            let m = batch.messages.iter().find(|m| m.reference_id == reference).expect("sent");
+            let path = m.attachment().unwrap().path;
+            let url = format!("{base}/remote.php/dav/files/demo/{path}");
+            let r = reqwest::Client::new().get(url).basic_auth("demo", Some("demo")).send().await.unwrap();
+            assert!(r.status().is_success(), "{path}: {}", r.status());
+            (path, r.text().await.unwrap())
+        }
+    };
+
+    // The older file, sent with network.
+    send("alt-alt", "ref-old");
+    until("the first file is sent", || engine.pending("sommerfest").is_empty()).await;
+    let old = sent("ref-old").await;
+    assert_eq!(old.1, "alt-alt");
+
+    // Same name, same size, first attempt without the server.
+    server.stop().await;
+    send("neu-neu", "ref-new");
+    until("waiting for the network", || {
+        engine.pending("sommerfest").iter().any(|p| p.state == talk_core::PendingState::Waiting)
+    })
+    .await;
+    server.start().await;
+    until("the second file is sent", || engine.pending("sommerfest").is_empty()).await;
+    let new = sent("ref-new").await;
+    assert_ne!(new.0, old.0);
+    assert_eq!(new.1, "neu-neu");
+    assert_eq!(sent("ref-old").await.1, "alt-alt");
+
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}

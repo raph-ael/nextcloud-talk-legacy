@@ -692,16 +692,18 @@ impl Engine {
         let mut made_folder = false;
         loop {
             let target = remote_path(folder, &f.name, n);
-            if f.candidate.as_deref() == Some(target.as_str()) {
-                // An earlier attempt may have completed without us hearing back.
-                match self.guard(self.client.stat(&user, &target).await)? {
-                    Some(size) if size == f.size => return Ok(target),
-                    Some(_) => {
-                        n += 1;
-                        continue;
-                    }
-                    None => {}
+            // A name becomes the candidate only after the server said it is free. So a
+            // file found under it later is ours: an earlier attempt completed without us
+            // hearing back. Without that check a file of the same name and size that was
+            // there before would be shared instead of this one.
+            let ours = f.candidate.as_deref() == Some(target.as_str());
+            match self.guard(self.client.stat(&user, &target).await)? {
+                Some(size) if ours && size == f.size => return Ok(target),
+                Some(_) => {
+                    n += 1;
+                    continue;
                 }
+                None => {}
             }
             self.outbox.update(r, |i| {
                 if let Some(file) = i.file.as_mut() {
