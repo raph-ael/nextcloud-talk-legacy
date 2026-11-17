@@ -172,6 +172,7 @@ Schlank wie bei Signal: **eine Reaktion pro Person und Nachricht.** Ein anderes 
 | Überlappung | 6 px | 4 dp/pt |
 | Einzug vom Blasenrand | 8 px | 8 dp/pt, damit die Pille nicht auf der runden Ecke sitzt |
 | Pille | 22 px hoch, Rand 1 px, Emoji 14, Zahl 11 halbfett | 26 hoch, Rand 1,5, Emoji 15, Zahl 12 halbfett |
+| Abstände | 2 px zwischen den Pillen, 4 px zwischen Emoji und Zahl | 2 zwischen den Pillen, 3 zwischen Emoji und Zahl, 8 vom Außenrand der Pille zum Inhalt |
 | Viele Emojis | alle, die Reihe bricht um | höchstens drei Pillen |
 
 Auf Mobilgeräten gilt bei mehr als drei verschiedenen Emojis:
@@ -180,6 +181,7 @@ Auf Mobilgeräten gilt bei mehr als drei verschiedenen Emojis:
 - „Wer hat reagiert“ zeigt immer alle.
 - Die Reihe darf über die Blase hinausragen (kurze Nachricht, drei Pillen). Sie wächst von ihrer Seite der Blase zur Bildschirmmitte.
 - Die Zeile wird durch die Pillen um 22 höher. Der Abstand zur nächsten Nachricht bleibt.
+- Beim langen Druck bleiben die Pillen der Nachricht sichtbar, das Aktionsmenü steht unter ihnen. Kürzt iOS eine sehr lange Nachricht im Overlay, fallen sie wie die Uhrzeit mit weg.
 
 **„Wer hat reagiert“**
 - Ein Bottom-Sheet auf Mobilgeräten, ein kleines Modal am Desktop.
