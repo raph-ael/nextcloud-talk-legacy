@@ -52,6 +52,6 @@ pub use push::{ChatPushParts, PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
 pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};
-pub use models::{ChatMessage, ConversationTag, FileAttachment, IceServer, LoginCredentials, Participant, Reaction, Reactions, Room, RoomType, SignalingSettings};
+pub use models::{ChatMessage, ConversationTag, FileAttachment, GeoLocation, IceServer, LoginCredentials, Participant, Reaction, Reactions, Room, RoomType, SignalingSettings};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

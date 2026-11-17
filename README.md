@@ -216,6 +216,7 @@ website/       wolkenfunk.org
 - [Releases](docs/release.md): Kanäle, Updates und der Weg zu einer neuen Version
 - Wie sich die Apps verhalten:
   [Chat](docs/chat.md) ·
+  [Anhänge](docs/attachments.md) ·
   [Anrufe](docs/calls.md) ·
   [Benachrichtigungen](docs/notifications.md) ·
   [Verbindungsanzeige](docs/connection.md) ·

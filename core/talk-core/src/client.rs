@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::models::{ChatMessage, Reactions, Room, SignalingSettings};
+use crate::models::{ChatMessage, GeoLocation, Reactions, Room, SignalingSettings};
 
 const SPREED: &str = "/ocs/v2.php/apps/spreed/api";
 
@@ -316,6 +316,39 @@ impl TalkClient {
         }
         let rb = self
             .request(Method::POST, &format!("{SPREED}/v1/chat/{token}"))
+            .form(&form);
+        let msg = self.ocs::<ChatMessage>(rb).await?.0;
+        fault("send")?;
+        Ok(msg)
+    }
+
+    /// `POST /chat/{token}/share`: posts a place as a rich object of type `geo-location`,
+    /// the form the official apps send and read. The server has no quote for it.
+    pub async fn share_location(
+        &self,
+        token: &str,
+        place: &GeoLocation,
+        reference_id: &str,
+    ) -> Result<ChatMessage> {
+        let id = place.geo_uri();
+        // The server refuses an object without a name.
+        let name = if place.name.is_empty() { id.trim_start_matches("geo:") } else { place.name.as_str() };
+        let meta = serde_json::json!({
+            "type": "geo-location",
+            "id": id,
+            "name": name,
+            "latitude": format!("{:.6}", place.latitude),
+            "longitude": format!("{:.6}", place.longitude),
+        });
+        let form = [
+            ("objectType", "geo-location".to_string()),
+            ("objectId", id.clone()),
+            ("metaData", meta.to_string()),
+            ("referenceId", reference_id.to_string()),
+            ("actorDisplayName", String::new()),
+        ];
+        let rb = self
+            .request(Method::POST, &format!("{SPREED}/v1/chat/{token}/share"))
             .form(&form);
         let msg = self.ocs::<ChatMessage>(rb).await?.0;
         fault("send")?;

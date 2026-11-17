@@ -58,7 +58,7 @@ Der Kern merkt sich pro Chat die zuletzt gemeldete Nachricht und speichert das. 
 | Titel | Name des Chats, aus der Chatliste (`rooms()`) über den Token |
 | Text, Einzelchat | die Nachricht |
 | Text, Gruppe | „{Autor}: {Nachricht}“, auf Android der Autor als `Person` im `MessagingStyle` |
-| Anhang | die Bezeichnungen der Chatliste: „🎤 Sprachnachricht“, „📷 Foto“, „🎬 Video“, „📎 {Name}“ |
+| Anhang | die Bezeichnungen der Chatliste: „🎤 Sprachnachricht“, „📷 Foto“, „🎬 Video“, „📎 {Name}“, „📍 {Bezeichnung}“ (`docs/attachments.md`) |
 | ohne lesbaren Text | „Neue Nachricht“ |
 | Kontozeile | ab zwei Konten „{Name} · {Server}“, wie in `docs/accounts.md`. Android zeichnet `setSubText` im `MessagingStyle` nicht: Dort steht sie zusätzlich im Gesprächstitel, „{Chat} – {Name} · {Server}“ (`setConversationTitle`, mit `setGroupConversation` passend zum Chat). |
 | Ton | der Standardton des Systems |

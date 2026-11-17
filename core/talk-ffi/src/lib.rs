@@ -190,6 +190,26 @@ impl From<core::FileAttachment> for FileAttachment {
     }
 }
 
+/// A place shared into a conversation (WGS 84, degrees). `name` may be empty.
+#[derive(uniffi::Record, Clone)]
+pub struct GeoLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub name: String,
+}
+
+impl From<core::GeoLocation> for GeoLocation {
+    fn from(l: core::GeoLocation) -> Self {
+        Self { latitude: l.latitude, longitude: l.longitude, name: l.name }
+    }
+}
+
+impl From<GeoLocation> for core::GeoLocation {
+    fn from(l: GeoLocation) -> Self {
+        Self { latitude: l.latitude, longitude: l.longitude, name: l.name }
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct MessagePreview {
     pub author: String,
@@ -198,6 +218,8 @@ pub struct MessagePreview {
     pub is_own: bool,
     pub is_system: bool,
     pub attachment: Option<FileAttachment>,
+    /// For location messages; `text` is then its name.
+    pub location: Option<GeoLocation>,
 }
 
 impl From<core::engine::MessagePreview> for MessagePreview {
@@ -208,6 +230,7 @@ impl From<core::engine::MessagePreview> for MessagePreview {
             is_own: m.is_own,
             is_system: m.is_system,
             attachment: m.attachment.map(Into::into),
+            location: m.location.map(Into::into),
         }
     }
 }
@@ -453,6 +476,7 @@ pub struct ReplyPreview {
     pub text: String,
     pub is_own: bool,
     pub attachment: Option<FileAttachment>,
+    pub location: Option<GeoLocation>,
 }
 
 impl From<ReplyPreview> for core::ReplyPreview {
@@ -474,6 +498,7 @@ impl From<ReplyPreview> for core::ReplyPreview {
                 link: a.link,
                 voice_message: a.voice_message,
             }),
+            location: r.location.map(Into::into),
         }
     }
 }
@@ -587,6 +612,8 @@ pub struct MessageView {
     pub reactions_self: Vec<String>,
     /// For file messages; `text` is then the caption.
     pub attachment: Option<FileAttachment>,
+    /// For location messages; `text` is then its name (may be empty).
+    pub location: Option<GeoLocation>,
     /// Can be deleted: by its author with `RoomView.can_chat`, by others with
     /// `RoomView.can_delete_others`.
     pub deletable: bool,
@@ -622,10 +649,12 @@ impl From<core::MessageView> for MessageView {
                 text: r.text,
                 is_own: r.is_own,
                 attachment: r.attachment.map(Into::into),
+                location: r.location.map(Into::into),
             }),
             reactions: m.reactions.into_iter().collect(),
             reactions_self: m.reactions_self,
             attachment: m.attachment.map(Into::into),
+            location: m.location.map(Into::into),
             deletable: m.deletable,
             editable: m.editable,
             edit_until: m.edit_until,
@@ -1222,6 +1251,21 @@ impl TalkSession {
                 &reference_id,
             )?
             .into())
+    }
+
+    /// Queues a place (WGS 84, degrees); `name` is what the chat shows for it, usually
+    /// the address. It waits for the network like a text. Talk has no quote for places.
+    pub fn enqueue_location(
+        &self,
+        token: String,
+        latitude: f64,
+        longitude: f64,
+        name: String,
+        reference_id: String,
+    ) -> PendingMessage {
+        self.engine
+            .enqueue_location(&token, latitude, longitude, &name, &reference_id)
+            .into()
     }
 
     /// Pending and failed messages of a conversation, in send order.

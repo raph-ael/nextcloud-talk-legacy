@@ -559,10 +559,40 @@ pub async fn chat_post(AxState(app): S, Path(token): Path<String>, p: Params) ->
     ocs_with_headers(StatusCode::CREATED, data, &chat_headers(None, r.common_read()))
 }
 
+/// `POST /chat/{token}/share`: a rich object as a message. Like Talk it wants a name and,
+/// for a place, a `geo:` id; the demo knows no other object types.
+pub async fn chat_share(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {
+    let mut st = app.st.lock().unwrap();
+    if st.room(&token).is_none() {
+        return not_found();
+    }
+    let id = p.str("objectId").unwrap_or_default();
+    let mut meta: Value = serde_json::from_str(&p.str("metaData").unwrap_or_default()).unwrap_or(Value::Null);
+    let named = meta["name"].as_str().is_some_and(|n| !n.is_empty());
+    let place = id.strip_prefix("geo:").and_then(|c| c.split_once(',')).is_some_and(|(lat, lon)| {
+        lat.parse::<f64>().is_ok_and(|v| v.abs() < 100.0) && lon.parse::<f64>().is_ok_and(|v| v.abs() < 1000.0)
+    });
+    if p.str("objectType").as_deref() != Some("geo-location") || !named || !place {
+        return bad_request("object");
+    }
+    meta["type"] = json!("geo-location");
+    meta["id"] = json!(id);
+    let mut m = st.new_msg(&st.me.clone(), "{object}".into());
+    m.params.insert("actor".into(), st.user_param(&st.me));
+    m.params.insert("object".into(), meta);
+    m.reference_id = p.str("referenceId").unwrap_or_default();
+    let Some(id) = st.push_msg(&token, m) else { return not_found() };
+    st.room_mut(&token).unwrap().last_read = id;
+    let r = st.room(&token).unwrap();
+    let data = st.msg_json(r, r.msg(id).unwrap(), true);
+    ocs_with_headers(StatusCode::CREATED, data, &chat_headers(None, r.common_read()))
+}
+
 /// Test hook, not part of Nextcloud: somebody else writes into a conversation, so the
 /// signed-in user gets something unread (several accounts: the badge of the account you
 /// are not in, docs/accounts.md). `token`, `text` ("@id" mentions) and optionally `from`
-/// (a member; default: the first other member).
+/// (a member; default: the first other member). With `lat` and `lon` it is a shared place
+/// and `text` its name.
 pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
     let mut st = app.st.lock().unwrap();
     let token = p.str("token").unwrap_or_default();
@@ -570,6 +600,7 @@ pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
     if text.trim().is_empty() {
         return bad_request("text");
     }
+    let place = p.str("lat").and_then(|v| v.parse::<f64>().ok()).zip(p.str("lon").and_then(|v| v.parse::<f64>().ok()));
     let Some(room) = st.room(&token) else { return not_found() };
     let from = p
         .str("from")
@@ -578,9 +609,20 @@ pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
     if from == st.me || !room.is_member(&from) {
         return bad_request("from");
     }
-    let (text, params) = st.mentions(&text);
-    let mut m = st.new_msg(&from, text);
-    m.params = params;
+    let m = match place {
+        Some((lat, lon)) => {
+            let mut m = st.new_msg(&from, "{object}".into());
+            m.params.insert("actor".into(), st.user_param(&from));
+            m.params.insert("object".into(), crate::state::location_param(lat, lon, text.trim()));
+            m
+        }
+        None => {
+            let (text, params) = st.mentions(&text);
+            let mut m = st.new_msg(&from, text);
+            m.params = params;
+            m
+        }
+    };
     let Some(id) = st.push_msg(&token, m) else { return not_found() };
     let r = st.room(&token).unwrap();
     ocs_status(StatusCode::CREATED, st.msg_json(r, r.msg(id).unwrap(), true))

@@ -213,6 +213,29 @@ impl ChatMessage {
         })
     }
 
+    /// The place of a location message (`{object}` parameter of type `geo-location`).
+    /// The coordinates come from `latitude`/`longitude`, else from the `geo:` id.
+    pub fn location(&self) -> Option<GeoLocation> {
+        let p = self.message_parameters.get("object")?;
+        if p.get("type").and_then(Value::as_str) != Some("geo-location") {
+            return None;
+        }
+        let num = |k: &str| match p.get(k) {
+            Some(Value::String(v)) => v.trim().parse::<f64>().ok(),
+            Some(Value::Number(n)) => n.as_f64(),
+            _ => None,
+        };
+        let (latitude, longitude) = match (num("latitude"), num("longitude")) {
+            (Some(lat), Some(lon)) => (lat, lon),
+            _ => parse_geo_uri(p.get("id").and_then(Value::as_str)?)?,
+        };
+        if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+            return None;
+        }
+        let name = p.get("name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        Some(GeoLocation { latitude, longitude, name })
+    }
+
     /// Text a file message carries besides the file: its caption (empty for plain `{file}`).
     /// For other messages the same as [`Self::rendered_text`].
     pub fn caption_text(&self) -> String {
@@ -273,6 +296,32 @@ impl FileAttachment {
     pub fn is_image(&self) -> bool {
         self.mimetype.starts_with("image/")
     }
+}
+
+/// A place shared into a conversation (WGS 84, degrees). `name` is what the sender called
+/// it, usually an address; it may be empty.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub name: String,
+}
+
+impl GeoLocation {
+    /// `geo:<lat>,<lon>` with six decimals (about 10 cm), the object id Talk expects.
+    pub fn geo_uri(&self) -> String {
+        format!("geo:{:.6},{:.6}", self.latitude, self.longitude)
+    }
+}
+
+/// Latitude and longitude of a `geo:` URI (RFC 5870); altitude and parameters are ignored.
+fn parse_geo_uri(uri: &str) -> Option<(f64, f64)> {
+    let rest = uri.get(..4).filter(|p| p.eq_ignore_ascii_case("geo:")).map(|_| &uri[4..])?;
+    let mut parts = rest.split(';').next()?.split(',');
+    let lat = parts.next()?.trim().parse::<f64>().ok()?;
+    let lon = parts.next()?.trim().parse::<f64>().ok()?;
+    Some((lat, lon))
 }
 
 /// Result of `GET /ocs/v2.php/apps/spreed/api/v3/signaling/settings`.
@@ -553,5 +602,44 @@ mod tests {
         let msg: ChatMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.caption_text(), "");
         assert_eq!(msg.attachment().unwrap().size, 3);
+    }
+
+    fn object_message(object: &str) -> ChatMessage {
+        let json = format!(
+            r#"{{"id":8,"token":"abc","actorType":"users","actorId":"a","actorDisplayName":"A",
+            "timestamp":1,"message":"{{object}}","messageType":"comment","messageParameters":
+            {{"actor":{{"type":"user","id":"a","name":"A"}},"object":{object}}}}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn location_message() {
+        let msg = object_message(
+            r#"{"type":"geo-location","id":"geo:52.5450511,13.3741463","name":"Büro, Berlin",
+            "latitude":"52.5450511","longitude":"13.3741463"}"#,
+        );
+        let l = msg.location().unwrap();
+        assert_eq!((l.latitude, l.longitude), (52.5450511, 13.3741463));
+        assert_eq!(l.name, "Büro, Berlin");
+        // The text stays the name, for everything that does not know locations.
+        assert_eq!(msg.caption_text(), "Büro, Berlin");
+        assert!(msg.attachment().is_none());
+        assert_eq!(l.geo_uri(), "geo:52.545051,13.374146");
+    }
+
+    #[test]
+    fn location_from_the_geo_id_alone() {
+        let l = object_message(r#"{"type":"geo-location","id":"GEO:-33.9,151.2,12;crs=wgs84;u=35","name":"Hafen"}"#)
+            .location()
+            .unwrap();
+        assert_eq!((l.latitude, l.longitude), (-33.9, 151.2));
+    }
+
+    #[test]
+    fn other_objects_and_bad_coordinates_are_no_location() {
+        assert!(object_message(r#"{"type":"talk-poll","id":"3","name":"Wann?"}"#).location().is_none());
+        assert!(object_message(r#"{"type":"geo-location","id":"geo:91,10","name":"x"}"#).location().is_none());
+        assert!(object_message(r#"{"type":"geo-location","id":"somewhere","name":"x"}"#).location().is_none());
     }
 }

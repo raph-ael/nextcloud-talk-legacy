@@ -221,7 +221,7 @@ Eigene Nachrichten lassen sich bearbeiten und löschen. Moderatoren einer Gruppe
 |---|---|---|
 | Wer | eigene Nachrichten | eigene; Moderatoren in Gruppen auch fremde, nie im 1:1-Chat |
 | Wie lange | 24 Stunden, in „Notiz an mich“ unbegrenzt | unbegrenzt |
-| Was | Text, Bildunterschrift einer Datei | Text, Datei, Sprachnachricht |
+| Was | Text, Bildunterschrift einer Datei | Text, Datei, Sprachnachricht, Standort |
 | Nicht | Sprachnachricht, Umfrage, Standort; leerer Text | Systemnachrichten |
 
 Bei einer Datei endet nur die Freigabe für den Chat. Die Datei selbst bleibt beim Besitzer.

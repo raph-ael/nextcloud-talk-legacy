@@ -91,6 +91,7 @@ pub fn router(app: App) -> Router {
         // chat
         .route(&sp("/v1/chat/{token}"), get(api::chat_get).post(api::chat_post))
         .route(&sp("/v1/chat/{token}/read"), post(api::read_marker).delete(api::unread_marker))
+        .route(&sp("/v1/chat/{token}/share"), post(api::chat_share))
         .route(&sp("/v1/chat/{token}/{id}"), put(api::chat_edit).delete(api::chat_delete))
         .route(
             &sp("/v1/reaction/{token}/{id}"),

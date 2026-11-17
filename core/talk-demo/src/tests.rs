@@ -1175,3 +1175,56 @@ async fn reacts_back(server: &str, token: &str, id: i64, from: &str, emoji: &str
     let r = reqwest::Client::new().post(format!("{server}/demo/react")).form(&form).send().await.unwrap();
     assert!(r.status().is_success(), "{}", r.status());
 }
+
+/// docs/attachments.md „Standort“: a place is sent through the outbox like a text and comes
+/// back with its coordinates; somebody else's place carries them too, in the chat and in
+/// the preview of the list.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_place_is_sent_and_read() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+
+    // A place in the history: coordinates, the name as text, nothing to edit.
+    let page = engine.open_chat("sommerfest").await.unwrap();
+    let park = page.messages.iter().find(|m| m.location.is_some()).expect("the place of the fixtures");
+    let l = park.location.clone().unwrap();
+    assert_eq!((l.latitude, l.longitude), (52.5283, 13.4356));
+    assert_eq!(park.text, "Volkspark Friedrichshain, Berlin");
+    assert!(park.attachment.is_none() && !park.editable && park.kind == "text");
+
+    // Sending: pending at once, then the server's message replaces it.
+    let pending = engine.enqueue_location("sommerfest", 50.927054, 11.589237, "  Markt 1, Jena ", "ref-place");
+    assert!(pending.message.id < 0 && pending.message.text == "Markt 1, Jena");
+    assert_eq!(pending.message.location.as_ref().unwrap().name, "Markt 1, Jena");
+    let sent = arrived(&sink, "Markt 1, Jena").await;
+    assert!(sent.id > 0 && sent.is_own && sent.reference_id == "ref-place");
+    let l = sent.location.unwrap();
+    assert_eq!((l.latitude, l.longitude, l.name.as_str()), (50.927054, 11.589237, "Markt 1, Jena"));
+    until("the outbox is empty", || engine.pending("sommerfest").is_empty()).await;
+
+    // Without a name the server still gets one (it refuses an object without).
+    engine.enqueue_location("sommerfest", -33.9, 151.2, "", "ref-nameless");
+    let sent = arrived(&sink, "-33.900000,151.200000").await;
+    assert_eq!(sent.location.map(|l| (l.latitude, l.longitude)), Some((-33.9, 151.2)));
+
+    // Somebody else's place: in the chat and in the list.
+    let r = reqwest::Client::new()
+        .post(format!("{server}/demo/incoming"))
+        .form(&[("token", "sommerfest"), ("text", "Am Brunnen"), ("lat", "52.52"), ("lon", "13.405"), ("from", "paul")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+    let theirs = arrived(&sink, "Am Brunnen").await;
+    assert!(!theirs.is_own && theirs.location.is_some_and(|l| l.latitude == 52.52 && l.longitude == 13.405));
+    let preview = || engine.rooms().into_iter().find(|r| r.token == "sommerfest").and_then(|r| r.last_message);
+    until("the preview of the list", || preview().is_some_and(|m| m.text == "Am Brunnen" && m.location.is_some())).await;
+
+    engine.close_chat("sommerfest");
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}

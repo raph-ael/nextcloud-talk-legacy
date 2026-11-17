@@ -28,7 +28,7 @@ use crate::voice::VoiceStore;
 use crate::client::TalkClient;
 use crate::connection::ConnectionState;
 use crate::error::{Error, Result};
-use crate::models::{ChatMessage, FileAttachment, Reactions, Room, RoomType};
+use crate::models::{ChatMessage, FileAttachment, GeoLocation, Reactions, Room, RoomType};
 use crate::notices::{MessageNotice, Notices};
 
 /// Room list refresh while no signaling connection exists yet.
@@ -237,6 +237,8 @@ pub struct MessagePreview {
     pub is_own: bool,
     pub is_system: bool,
     pub attachment: Option<FileAttachment>,
+    /// For location messages; `text` is then its name.
+    pub location: Option<GeoLocation>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -261,6 +263,8 @@ pub struct MessageView {
     pub reactions: BTreeMap<String, i64>,
     pub reactions_self: Vec<String>,
     pub attachment: Option<FileAttachment>,
+    /// For location messages; `text` is then its name (may be empty).
+    pub location: Option<GeoLocation>,
     /// Can be deleted: by its author with `RoomView.can_chat`, by others with
     /// `RoomView.can_delete_others`.
     pub deletable: bool,
@@ -278,6 +282,8 @@ pub struct ReplyPreview {
     pub text: String,
     pub is_own: bool,
     pub attachment: Option<FileAttachment>,
+    #[serde(default)]
+    pub location: Option<GeoLocation>,
 }
 
 /// One person's reaction to a message, for the "who reacted" list.
@@ -1730,10 +1736,12 @@ impl Engine {
                 },
                 is_own: self.is_own(&p.actor_type, &p.actor_id),
                 attachment: p.attachment(),
+                location: p.location(),
             }),
             reactions: m.reactions.clone(),
             reactions_self: m.reactions_self.clone(),
             attachment: if deleted { None } else { m.attachment() },
+            location: if deleted { None } else { m.location() },
             deletable,
             // Text and files (their caption); no voice message, poll or location.
             editable: deletable
@@ -1766,6 +1774,7 @@ impl Engine {
             is_own: self.is_own(&m.actor_type, &m.actor_id),
             is_system: m.is_system(),
             attachment: m.attachment(),
+            location: m.location(),
         }
     }
 

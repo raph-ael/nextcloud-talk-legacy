@@ -29,7 +29,7 @@ use tokio::task::AbortHandle;
 use crate::client::{PutOutcome, remote_path};
 use crate::engine::{Engine, Event, MessageView, ReplyPreview};
 use crate::error::{Error, Result};
-use crate::models::FileAttachment;
+use crate::models::{FileAttachment, GeoLocation};
 
 /// How long an item is retried before it is marked failed (Signal: one day).
 pub const LIFESPAN: Duration = Duration::from_secs(24 * 3600);
@@ -40,6 +40,8 @@ const PARALLEL_UPLOADS: usize = 3;
 /// A posted file stays visible as pending until its echo arrives, at most this long.
 const ECHO_GRACE: Duration = Duration::from_secs(30);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+/// Characters of a place name; longer ones are cut.
+const LOCATION_NAME_MAX: usize = 200;
 
 /// Why an item finally failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +106,9 @@ pub struct OutboxItem {
     pub text: String,
     pub reply_to: Option<ReplyPreview>,
     pub file: Option<OutFile>,
+    /// A place to share; `text` is then its name.
+    #[serde(default)]
+    pub location: Option<GeoLocation>,
     /// A post request was started and its outcome is unknown: check before repeating.
     #[serde(default)]
     pub post_attempted: bool,
@@ -272,7 +277,23 @@ impl Engine {
         reply_to: Option<ReplyPreview>,
         reference_id: &str,
     ) -> PendingMessage {
-        self.enqueue(token, text, reply_to, None, reference_id)
+        self.enqueue(token, text, reply_to, None, None, reference_id)
+    }
+
+    /// Queues a place (WGS 84, degrees) with the name the chat shows for it. Talk has no
+    /// quote for shared objects, so there is no `reply_to`. The coordinates are the ones
+    /// the system's location service gave; nothing checks them here.
+    pub fn enqueue_location(
+        self: &Arc<Self>,
+        token: &str,
+        latitude: f64,
+        longitude: f64,
+        name: &str,
+        reference_id: &str,
+    ) -> PendingMessage {
+        let name: String = name.trim().chars().take(LOCATION_NAME_MAX).collect();
+        let location = GeoLocation { latitude, longitude, name: name.clone() };
+        self.enqueue(token, &name, None, None, Some(location), reference_id)
     }
 
     /// Queues a file (with optional caption). The file at `local_path` is moved into the
@@ -330,7 +351,7 @@ impl Engine {
             remote: None,
             voice,
         };
-        Ok(self.enqueue(token, caption.trim(), reply_to, Some(file), reference_id))
+        Ok(self.enqueue(token, caption.trim(), reply_to, Some(file), None, reference_id))
     }
 
     fn enqueue(
@@ -339,6 +360,7 @@ impl Engine {
         text: &str,
         reply_to: Option<ReplyPreview>,
         file: Option<OutFile>,
+        location: Option<GeoLocation>,
         reference_id: &str,
     ) -> PendingMessage {
         let now = unix_now();
@@ -351,6 +373,7 @@ impl Engine {
             text: text.to_string(),
             reply_to,
             file,
+            location,
             post_attempted: false,
             attempts: 0,
             failed: None,
@@ -585,14 +608,18 @@ impl Engine {
         }
         self.outbox.update(r, |i| i.post_attempted = true);
         let reply = item.reply_to.as_ref().map(|p| p.id).filter(|id| *id > 0);
-        match &item.file {
-            Some(f) => {
+        match (&item.file, &item.location) {
+            (Some(f), _) => {
                 let remote = f.remote.as_deref().unwrap_or_default();
                 let caption = Some(item.text.as_str()).filter(|t| !t.is_empty());
                 self.guard(self.client.share_to_room(&item.token, remote, r, caption, reply, f.voice).await)?;
                 self.delivered(r, None);
             }
-            None => {
+            (None, Some(place)) => {
+                let msg = self.guard(self.client.share_location(&item.token, place, r).await)?;
+                self.delivered(r, Some(msg));
+            }
+            (None, None) => {
                 let msg = self.guard(self.client.send_message(&item.token, &item.text, r, reply).await)?;
                 self.delivered(r, Some(msg));
             }
@@ -973,6 +1000,7 @@ impl Engine {
                     link: String::new(),
                     voice_message: f.voice,
                 }),
+                location: item.location.clone(),
                 // Not on the server yet: `discard` removes it.
                 deletable: false,
                 editable: false,
@@ -1260,6 +1288,7 @@ mod tests {
                 remote: None,
                 voice: false,
             }),
+            location: None,
             post_attempted: true,
             attempts: 2,
             failed: None,
@@ -1292,6 +1321,25 @@ mod tests {
         assert_eq!(again[0].file.as_ref().unwrap().local, moved.to_string_lossy());
         assert!(moved.is_file());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A place waits like a text; records written before places existed still load.
+    #[test]
+    fn a_place_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("outbox-test-{}", uuid::Uuid::new_v4()));
+        let store = Store { dir: Some(dir.join("outbox")) };
+        let mut place = item("r1", 1, None);
+        place.text = "Markt 1, Jena".into();
+        place.location = Some(GeoLocation { latitude: 50.9281, longitude: 11.5879, name: place.text.clone() });
+        store.save(&place);
+        let mut old = serde_json::to_value(item("r2", 2, None)).unwrap();
+        old.as_object_mut().unwrap().remove("location");
+        std::fs::write(dir.join("outbox/r2.json"), old.to_string()).unwrap();
+
+        let loaded = store.load();
+        assert_eq!(loaded[0].location, place.location);
+        assert!(loaded[1].location.is_none() && loaded[1].text == "hi");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

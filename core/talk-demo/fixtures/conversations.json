@@ -169,6 +169,7 @@
         { "at": "-12 18:02", "from": "lena", "text": "Wer hat Lust, ein kleines Nachbarschaftsfest zu organisieren? 🎈" },
         { "at": "-12 18:10", "from": "jonas", "text": "Ich kann Grill und Bierbänke besorgen." },
         { "at": "-12 18:20", "from": "paul", "text": "Ich bringe Musik mit 🎶" },
+        { "at": "-12 18:26", "from": "jonas", "location": { "lat": 52.5283, "lon": 13.4356, "name": "Volkspark Friedrichshain, Berlin" } },
         { "at": "-10 12:00", "from": "lena", "text": "Danke euch allen, das war ein toller Tag!", "reactions": { "❤️": ["mira", "jonas", "paul", "tobias", "sophie"] } }
       ]
     }

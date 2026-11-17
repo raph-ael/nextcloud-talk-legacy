@@ -274,6 +274,15 @@ struct MsgFx {
     reactions: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default)]
     file: Option<FileFx>,
+    #[serde(default)]
+    location: Option<LocationFx>,
+}
+
+#[derive(Deserialize)]
+struct LocationFx {
+    lat: f64,
+    lon: f64,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -282,6 +291,17 @@ struct FileFx {
     name: String,
     #[serde(default)]
     voice: bool,
+}
+
+/// The `{object}` parameter of a shared place, as Talk stores it.
+pub fn location_param(lat: f64, lon: f64, name: &str) -> Value {
+    json!({
+        "type": "geo-location",
+        "id": format!("geo:{lat},{lon}"),
+        "name": name,
+        "latitude": lat.to_string(),
+        "longitude": lon.to_string(),
+    })
 }
 
 /// `-2 18:30` (two days ago at 18:30 local time), `-45m`, `-3h`, `-2d`.
@@ -552,6 +572,10 @@ impl State {
                     Some(caption) => caption.clone(),
                     None => "{file}".into(),
                 };
+            } else if let Some(l) = &m.location {
+                msg.params.insert("actor".into(), self.user_param(&actor));
+                msg.params.insert("object".into(), location_param(l.lat, l.lon, &l.name));
+                msg.text = "{object}".into();
             } else {
                 let text = m.text.clone().ok_or("Nachricht ohne text, file oder system")?;
                 let (text, params) = self.mentions(&text);

@@ -168,6 +168,17 @@ enum Cmd {
         #[arg(short, long)]
         caption: Option<String>,
     },
+    /// Share a place (WGS 84, degrees) into a conversation; prints the message id
+    SendLocation {
+        token: String,
+        #[arg(allow_negative_numbers = true)]
+        latitude: f64,
+        #[arg(allow_negative_numbers = true)]
+        longitude: f64,
+        /// What the chat shows for the place, usually an address
+        #[arg(short, long, default_value = "")]
+        name: String,
+    },
     /// Print recent messages, then follow new ones via long polling
     Tail {
         token: String,
@@ -591,6 +602,11 @@ async fn main() -> Result<()> {
                 .share_to_room(&token, &remote, &new_reference_id(), caption.as_deref(), None, false)
                 .await?;
             eprintln!("gesendet: {remote} in {:?}", t.elapsed());
+        }
+        Cmd::SendLocation { token, latitude, longitude, name } => {
+            let place = talk_core::GeoLocation { latitude, longitude, name };
+            let msg = client.share_location(&token, &place, &new_reference_id()).await?;
+            println!("{}", msg.id);
         }
         Cmd::Tail {
             token,
@@ -1194,7 +1210,8 @@ fn print_message(m: &ChatMessage) {
             .attachment()
             .map(|a| format!("  [{} {} {} B]", m.message_type, a.mimetype, a.size))
             .unwrap_or_default();
-        println!("[{time}] {}: {}{file}", m.actor_display_name, m.rendered_text());
+        let place = m.location().map(|l| format!("  [{}]", l.geo_uri())).unwrap_or_default();
+        println!("[{time}] {}: {}{file}{place}", m.actor_display_name, m.rendered_text());
     }
 }
 
