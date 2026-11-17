@@ -241,6 +241,29 @@ impl TalkClient {
         self.chat_request(rb).await
     }
 
+    /// Messages newer than `last_known`, without waiting, at most `limit` of them.
+    ///
+    /// Asks from one id earlier and leaves the known message out. Talk remembers per
+    /// conversation for 30 s that nothing is newer than the id it was asked with and answers
+    /// from that memory. A new message clears it, a new reaction does not, so a request with
+    /// the very id a long poll waits on does not see a reaction before the 30 s are over
+    /// (docs/chat.md „Reaktionen“).
+    pub async fn newer_messages(&self, token: &str, last_known: i64, limit: usize) -> Result<ChatBatch> {
+        let rb = self.request(Method::GET, &format!("{SPREED}/v1/chat/{token}")).query(&[
+            ("lookIntoFuture", 1i64),
+            ("lastKnownMessageId", (last_known - 1).max(0)),
+            ("timeout", 0),
+            // One more for the known message that comes along.
+            ("limit", (limit as i64 + 1).min(200)),
+            ("setReadMarker", 0),
+            ("markNotificationsAsRead", 0),
+        ]);
+        let mut batch = self.chat_request(rb).await?;
+        batch.messages.retain(|m| m.id > last_known);
+        batch.last_given = batch.last_given.filter(|id| *id > last_known);
+        Ok(batch)
+    }
+
     /// History: up to `limit` messages older than `before` (or the newest ones when `None`).
     pub async fn history(&self, token: &str, before: Option<i64>, limit: u32) -> Result<ChatBatch> {
         let mut rb = self

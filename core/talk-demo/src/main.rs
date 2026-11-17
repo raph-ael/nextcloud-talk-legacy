@@ -11,6 +11,7 @@
 //!     curl -d token=mira -d text=Hallo http://127.0.0.1:8098/demo/incoming
 //!     curl -d status=dnd http://127.0.0.1:8098/demo/status          # "do not disturb"
 //!     curl -d token=mira http://127.0.0.1:8098/demo/missed-call     # a missed call
+//!     curl -d token=mira -d id=12 -d emoji=👍 http://127.0.0.1:8098/demo/react   # a reaction
 //!
 //! Calls and signaling are out of scope. Unknown endpoints are logged as
 //! "nicht implementiert" and answered with an empty OCS success.
@@ -63,6 +64,7 @@ pub fn router(app: App) -> Router {
         .route("/demo/missed-call", post(api::demo_missed_call))
         .route("/demo/edit", post(api::demo_edit))
         .route("/demo/delete", post(api::demo_delete))
+        .route("/demo/react", post(api::demo_react))
         .route("/ocs/v2.php/apps/user_status/api/v1/user_status", get(api::user_status))
         .route(&format!("{SPREED}/v4/call/{{token}}/notification-state"), get(api::call_notification_state))
         .route("/ocs/v2.php/cloud/capabilities", get(api::capabilities))

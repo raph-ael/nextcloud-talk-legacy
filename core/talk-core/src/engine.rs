@@ -38,6 +38,9 @@ const ROOMS_FULL_INTERVAL: Duration = Duration::from_secs(60);
 /// notify_push announced something: wait this long, then fetch what changed.
 const NOTIFY_REFRESH_DELAY: Duration = Duration::from_millis(300);
 const POLL_TIMEOUT_S: u32 = 30;
+/// An open chat asks past the server's "nothing new" memory this often: a new reaction
+/// shows after this long at the latest instead of after up to 30 s (docs/chat.md „Reaktionen“).
+const PEEK_EVERY: Duration = Duration::from_secs(5);
 /// No answer from the server for this long (wall clock: the app may have slept): the kept
 /// connections are suspect. While the app runs, the room list alone answers every 10 s.
 const STALE_AFTER: Duration = Duration::from_secs(20);
@@ -1174,7 +1177,7 @@ impl Engine {
         let mut out = Vec::new();
         let mut last_common_read = None;
         loop {
-            let batch = self.guard(self.client.poll_messages(token, last, 0).await)?;
+            let batch = self.guard(self.client.newer_messages(token, last, DELTA_PAGE).await)?;
             last_common_read = batch.last_common_read.or(last_common_read);
             let n = batch.messages.len();
             let before = last;
@@ -1974,7 +1977,29 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, seen: Arc<Ato
         let client = e.client.clone();
         let wake = e.poll_wake.clone();
         drop(e); // don't keep the engine alive across the long poll
-        let result = client.poll_messages(&token, last, POLL_TIMEOUT_S).await;
+        let result = {
+            let poll = client.poll_messages(&token, last, POLL_TIMEOUT_S);
+            tokio::pin!(poll);
+            // The long poll does not see a new reaction before its time is up: Talk answers
+            // it from memory (see `TalkClient::newer_messages`). Looking past that memory every
+            // few seconds, and whenever something wakes the chats, brings it.
+            loop {
+                tokio::select! {
+                    r = &mut poll => break r,
+                    _ = tokio::time::sleep(PEEK_EVERY) => {}
+                    _ = wake.notified() => {}
+                }
+                let peek = client.newer_messages(&token, last, DELTA_PAGE);
+                tokio::pin!(peek);
+                tokio::select! {
+                    r = &mut poll => break r,
+                    // What failed here is the long poll's to report.
+                    r = &mut peek => if let Ok(batch) = r && !batch.messages.is_empty() {
+                        break Ok(batch);
+                    },
+                }
+            }
+        };
         let Some(e) = engine.upgrade() else { return };
         match e.guard(result) {
             Ok(batch) => {

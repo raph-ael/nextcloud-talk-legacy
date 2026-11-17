@@ -291,6 +291,7 @@ fn new_room(st: &mut State, kind: u8, name: &str, members: Vec<String>) -> Room 
         modified: now(),
         created: now(),
         tx: tokio::sync::watch::channel(0).0,
+        nothing_newer: None,
     }
 }
 
@@ -464,8 +465,16 @@ fn chat_headers(last_given: Option<i64>, common: i64) -> Vec<(&'static str, Stri
     h
 }
 
+/// How long Talk remembers that nothing is newer than the id a long poll asked with.
+const NOTHING_NEWER_FOR: Duration = Duration::from_secs(30);
+
 /// History (`lookIntoFuture=0`, newest first) or long poll (`lookIntoFuture=1`: waits up
 /// to `timeout` seconds for new messages, then 304).
+///
+/// Like Talk, the long poll remembers for 30 s that nothing is newer than the id it was
+/// asked with and answers every request with that id from this memory. A new message
+/// clears it, a new reaction does not: a waiting poll sees the reaction when the memory
+/// has run out, a request with another id sees it at once.
 pub async fn chat_get(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {
     let future = p.i64("lookIntoFuture") == Some(1);
     let limit = p.i64("limit").unwrap_or(100).clamp(1, 200) as usize;
@@ -478,7 +487,10 @@ pub async fn chat_get(AxState(app): S, Path(token): Path<String>, p: Params) -> 
             let mut st = app.st.lock().unwrap();
             let Some(room) = st.room(&token) else { return not_found() };
             let rx = room.tx.subscribe();
-            let picked: Vec<&crate::state::Msg> = if future {
+            let remembered = room.nothing_newer.filter(|(id, until)| future && *id == last_known && Instant::now() < *until);
+            let picked: Vec<&crate::state::Msg> = if remembered.is_some() {
+                Vec::new()
+            } else if future {
                 room.messages.iter().filter(|m| m.id > last_known).take(limit).collect()
             } else {
                 let older: Vec<_> = room.messages.iter().filter(|m| last_known <= 0 || m.id < last_known).collect();
@@ -502,15 +514,26 @@ pub async fn chat_get(AxState(app): S, Path(token): Path<String>, p: Params) -> 
             if !future {
                 return StatusCode::NOT_MODIFIED.into_response();
             }
-            rx
+            let until = match remembered {
+                Some((_, until)) => until,
+                None => {
+                    let until = Instant::now() + NOTHING_NEWER_FOR;
+                    if let Some(r) = st.room_mut(&token) {
+                        r.nothing_newer = Some((last_known, until));
+                    }
+                    until
+                }
+            };
+            (rx, until)
         };
+        let (rx, until) = &mut rx;
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             return StatusCode::NOT_MODIFIED.into_response();
         }
-        if tokio::time::timeout(left, rx.changed()).await.is_err() {
-            return StatusCode::NOT_MODIFIED.into_response();
-        }
+        // Wakes for a change of the room, or to look again once the memory has run out.
+        let wait = left.min(until.saturating_duration_since(Instant::now()) + Duration::from_millis(10));
+        let _ = tokio::time::timeout(wait, rx.changed()).await;
     }
 }
 
@@ -717,9 +740,10 @@ pub async fn reactions_get(AxState(app): S, Path((token, id)): Path<(String, i64
     ocs(st.reactions_json(m, p.str("reaction").as_deref()))
 }
 
-/// Adds or removes our reaction and posts the hidden `reaction` system message whose
-/// `parent` is the updated message (that is how the other clients learn about it).
-fn change_reaction(app: &App, token: &str, id: i64, emoji: &str, add: bool) -> Response {
+/// Adds or removes the reaction of `actor` (`None`: the signed-in user) and posts the
+/// hidden `reaction` system message whose `parent` is the updated message (that is how the
+/// other clients learn about it).
+fn change_reaction(app: &App, token: &str, id: i64, emoji: &str, add: bool, actor: Option<String>) -> Response {
     let mut st = app.st.lock().unwrap();
     if let Err(e) = reactable(&st, token, id) {
         return *e;
@@ -727,7 +751,7 @@ fn change_reaction(app: &App, token: &str, id: i64, emoji: &str, add: bool) -> R
     if emoji.is_empty() {
         return bad_request("reaction");
     }
-    let me = st.me.clone();
+    let me = actor.unwrap_or_else(|| st.me.clone());
     let r = st.room_mut(token).unwrap();
     let m = r.messages.iter_mut().find(|m| m.id == id).unwrap();
     let had = m.reactions.iter().any(|x| x.actor == me && x.emoji == emoji);
@@ -747,19 +771,47 @@ fn change_reaction(app: &App, token: &str, id: i64, emoji: &str, add: bool) -> R
         let r = st.room(token).unwrap();
         let snapshot = st.msg_json(r, r.msg(id).unwrap(), false);
         let mut sys = st.system_msg(if add { "reaction" } else { "reaction_deleted" }, emoji.into());
+        sys.params.insert("actor".into(), st.user_param(&me));
+        sys.actor = me.clone();
         sys.parent_snapshot = Some(snapshot);
-        st.push_msg(token, sys);
+        // Talk wakes the long polls for a reaction taken back, not for a new one.
+        if add {
+            st.push_quietly(token, sys);
+        } else {
+            st.push_msg(token, sys);
+        }
     }
     let m = st.room(token).unwrap().msg(id).unwrap();
     ocs_status(status, st.reactions_json(m, None))
 }
 
 pub async fn reaction_add(AxState(app): S, Path((token, id)): Path<(String, i64)>, p: Params) -> Response {
-    change_reaction(&app, &token, id, &p.str("reaction").unwrap_or_default(), true)
+    change_reaction(&app, &token, id, &p.str("reaction").unwrap_or_default(), true, None)
+}
+
+/// Test hook: somebody else reacts to a message, or takes the reaction back with
+/// `remove=1`. `token`, `id`, `emoji` and optionally `from` (a member; default: the first
+/// other member).
+pub async fn demo_react(AxState(app): S, p: Params) -> Response {
+    let (token, id) = (p.str("token").unwrap_or_default(), p.i64("id").unwrap_or(0));
+    let from = {
+        let st = app.st.lock().unwrap();
+        let Some(room) = st.room(&token) else { return not_found() };
+        let from = p
+            .str("from")
+            .or_else(|| room.members.iter().find(|m| m.person != st.me).map(|m| m.person.clone()))
+            .unwrap_or_default();
+        if from == st.me || !room.is_member(&from) {
+            return bad_request("from");
+        }
+        from
+    };
+    let add = !p.bool("remove").unwrap_or(false);
+    change_reaction(&app, &token, id, &p.str("emoji").unwrap_or_default(), add, Some(from))
 }
 
 pub async fn reaction_remove(AxState(app): S, Path((token, id)): Path<(String, i64)>, p: Params) -> Response {
-    change_reaction(&app, &token, id, &p.str("reaction").unwrap_or_default(), false)
+    change_reaction(&app, &token, id, &p.str("reaction").unwrap_or_default(), false, None)
 }
 
 // --- categories (conversation tags) ------------------------------------------------------------

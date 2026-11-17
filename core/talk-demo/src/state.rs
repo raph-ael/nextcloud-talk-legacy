@@ -107,6 +107,9 @@ pub struct Room {
     pub created: i64,
     /// Bumped on every change: wakes the long polls of this room.
     pub tx: watch::Sender<u64>,
+    /// Like Talk: "nothing is newer than this id", kept for 30 s and answered from memory.
+    /// A new message clears it, a new reaction does not ([`State::push_quietly`]).
+    pub nothing_newer: Option<(i64, std::time::Instant)>,
 }
 
 impl Room {
@@ -116,6 +119,7 @@ impl Room {
 
     pub fn touch(&mut self) {
         self.modified = now();
+        self.nothing_newer = None;
         self.tx.send_modify(|v| *v += 1);
     }
 
@@ -474,6 +478,7 @@ impl State {
             modified: start,
             created: start,
             tx: watch::channel(0).0,
+            nothing_newer: None,
         };
 
         let mut keys: HashMap<String, i64> = HashMap::new();
@@ -858,14 +863,22 @@ impl State {
     }
 
     /// Appends a message to a room (new id, now) and wakes its long polls.
-    pub fn push_msg(&mut self, token: &str, mut msg: Msg) -> Option<i64> {
+    pub fn push_msg(&mut self, token: &str, msg: Msg) -> Option<i64> {
+        let id = self.push_quietly(token, msg)?;
+        self.rooms.iter_mut().find(|r| r.token == token)?.touch();
+        Some(id)
+    }
+
+    /// Adds a message the way Talk adds a new reaction: nothing wakes the long polls and
+    /// the room does not count as changed. They find it when their memory of "nothing
+    /// new" has run out, or when they ask from another id.
+    pub fn push_quietly(&mut self, token: &str, mut msg: Msg) -> Option<i64> {
         let id = self.next_msg;
         self.next_msg += 1;
         msg.id = id;
         let room = self.rooms.iter_mut().find(|r| r.token == token)?;
         msg.ts = msg.ts.max(room.messages.last().map_or(0, |m| m.ts));
         room.messages.push(msg);
-        room.touch();
         Some(id)
     }
 

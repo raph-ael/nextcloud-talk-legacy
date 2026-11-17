@@ -1102,3 +1102,76 @@ async fn an_open_chat_catches_up_when_the_app_returns() {
     engine.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Somebody else reacts to a message, or takes the reaction back (test hook of the demo server).
+async fn reacts(server: &str, token: &str, id: i64, from: &str, emoji: &str) {
+    let id = id.to_string();
+    let form = [("token", token), ("id", &id), ("from", from), ("emoji", emoji)];
+    let r = reqwest::Client::new().post(format!("{server}/demo/react")).form(&form).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+}
+
+/// docs/chat.md „Reaktionen“, fremde Reaktionen im offenen Chat: Talk answers a waiting long poll from
+/// its memory of "nothing new", and a new reaction does not clear that memory. The open
+/// chat looks past it every few seconds, and at once when a push announces the reaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reaction_shows_in_the_open_chat() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let page = engine.open_chat("garten").await.unwrap();
+    let id = page.messages.last().unwrap().id;
+    let count = |emoji: &str| updates(&sink, id).last().and_then(|m| m.reactions.get(emoji).copied()).unwrap_or(0);
+    // The poll waits now, the server remembers that nothing is newer.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Nothing announces the reaction: the look past the memory brings it.
+    let started = std::time::Instant::now();
+    reacts(&server, "garten", id, "jonas", "👍").await;
+    until("the reaction shows", || count("👍") == 1).await;
+    assert!(started.elapsed() < Duration::from_secs(7), "took {:?}", started.elapsed());
+
+    // A push announces the next one: it is there when the call returns.
+    let started = std::time::Instant::now();
+    reacts(&server, "garten", id, "lena", "👍").await;
+    engine.handle_push(chat_push("garten"), None).await;
+    assert_eq!(count("👍"), 2, "the open chat has the reaction when the call returns");
+    assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+
+    // Taking one back wakes the poll at the server, as before.
+    let started = std::time::Instant::now();
+    reacts_back(&server, "garten", id, "jonas", "👍").await;
+    until("the reaction goes", || count("👍") == 1).await;
+    assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+
+    // Messages come once, whichever of the two requests brings them.
+    incoming(&server, "garten", "Schon gesehen.").await;
+    arrived(&sink, "Schon gesehen.").await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(added(&sink, "Schon gesehen."), 1);
+    engine.close_chat("garten");
+
+    // The chat is closed and somebody else's app waits with the id this one knows: the
+    // push still fetches the reaction.
+    let known = engine.cached_chat("garten").messages.last().unwrap().id;
+    let other = client(&server);
+    let waiting = tokio::spawn(async move { other.poll_messages("garten", known, 20).await });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    reacts(&server, "garten", id, "clara", "🌱").await;
+    engine.handle_push(chat_push("garten"), None).await;
+    let cached = engine.cached_chat("garten");
+    assert_eq!(cached.messages.iter().find(|m| m.id == id).unwrap().reactions.get("🌱"), Some(&1));
+    waiting.abort();
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+async fn reacts_back(server: &str, token: &str, id: i64, from: &str, emoji: &str) {
+    let id = id.to_string();
+    let form = [("token", token), ("id", &id), ("from", from), ("emoji", emoji), ("remove", "1")];
+    let r = reqwest::Client::new().post(format!("{server}/demo/react")).form(&form).send().await.unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+}
