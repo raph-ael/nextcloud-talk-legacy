@@ -2,7 +2,7 @@
 
 Verbindlich für Android und iOS, wo nichts anderes steht. Der Desktop sendet Dateien schon (Büroklammer, Ablegen, Einfügen) und liest Standorte, er sendet keine. Bilder aus der Galerie, Kamera und Sprachnachrichten bleiben, wie sie sind.
 
-Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste, mit den Knöpfen „Datei“ und „Standort“. Beim Bearbeiten einer Nachricht ist das Menü ausgeblendet (`docs/chat.md`).
+Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste, mit den Knöpfen „Datei“ und „Standort“. Sie stehen gleich nach „Galerie“, vor den Platzhaltern „Umfrage“ und „Kontakt“, damit sie auch auf schmalen Geräten ohne Wischen zu sehen sind. Beim Bearbeiten einer Nachricht ist das Menü ausgeblendet (`docs/chat.md`).
 
 ## Datei senden
 
@@ -12,13 +12,13 @@ Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste, mit 
 | Sendebildschirm | Titel „Datei senden“ bzw. „3 Dateien senden“. Je Datei eine Zeile mit Symbol, Name (in der Mitte gekürzt), Größe und ✕ „Entfernen“. Darunter das Feld „Beschreibung hinzufügen“ und der Senden-Knopf. Ohne Datei schließt sich der Bildschirm. |
 | Senden | Die Dateien werden in den Zwischenordner kopiert (der Knopf zeigt solange einen Kreisel) und der Reihe nach eingestellt. Wie am Desktop hängt das Antwort-Zitat an der ersten Datei und die Beschreibung an der letzten. Danach schließt der Bildschirm, die Antwortleiste auch, und der Chat steht am Ende. |
 | Inhalt | Die Datei geht unverändert raus. Ein Bild über „Datei“ wird nicht verkleinert und behält seine Metadaten, auch den Aufnahmeort. Über „Galerie“ und Kamera bleibt es beim Verkleinern ohne Metadaten. |
-| Name und Typ | Name und MIME-Typ kommen vom System, ohne Angabe `application/octet-stream`. Bei `image/*` liest die App Breite und Höhe aus dem Dateikopf, sonst sind beide 0. |
+| Name und Typ | Name und MIME-Typ kommen vom System, ohne Angabe `application/octet-stream`. Bei `image/*` liest die App Breite und Höhe aus dem Dateikopf, sonst sind beide 0. Ein gedreht gespeichertes Foto zählt so, wie es angezeigt wird. |
 | Nicht lesbar | „Datei konnte nicht gelesen werden“, die übrigen Dateien bleiben in der Liste. |
 | Grenzen | Größe und Speicherplatz entscheidet der Server. Der Kern meldet „Datei zu groß“ oder „Speicher voll“ an der Blase. |
 
 ### Dateikachel
 - Symbol, Name (höchstens zwei Zeilen) und Größe. Beschreibung und Uhrzeit stehen darunter wie bei Text.
-- **Ausstehend:** Statt des Symbols steht der Fortschrittsring (`PendingMessage.progress`, bei −1 ein Kreisel). Die Statuszeile ist die der anderen Nachrichten: „Wird gesendet …“, „Wartet auf Netz …“, „Nicht gesendet · Datei zu groß“. Antippen einer fehlgeschlagenen sendet erneut, das Menü hat „Erneut senden“ und „Löschen“.
+- **Ausstehend:** Statt des Symbols steht der Fortschrittsring (`PendingMessage.progress`, bei −1 ein Kreisel), auch bei „Wartet auf Netz …“. Eine fehlgeschlagene zeigt wieder das Symbol. Die Statuszeile ist die der anderen Nachrichten: „Wird gesendet …“, „Wartet auf Netz …“, „Nicht gesendet · Datei zu groß“. Antippen einer fehlgeschlagenen sendet erneut, das Menü hat „Erneut senden“ und „Löschen“.
 - Bilder, die als Datei gesendet wurden, erscheinen wie jedes Bild (der Typ entscheidet, nicht der Weg).
 
 ### Empfangene Datei öffnen
@@ -36,16 +36,16 @@ Gesendet wird der eigene Standort im Moment des Sendens, einmal. Es gibt keinen 
 | Punkt | Regel |
 |---|---|
 | Einstieg | „Standort“ im Anhang-Menü. Beim ersten Mal fragt das System nach der Berechtigung, nur „beim Verwenden der App“. |
-| Abgelehnt | Das Blatt zeigt „Wolkenfunk darf den Standort nicht verwenden“ und „Einstellungen öffnen“. Bei ausgeschalteter Ortung: „Die Ortung ist ausgeschaltet“. |
+| Abgelehnt | Das Blatt zeigt „Wolkenfunk darf den Standort nicht verwenden“ und „Einstellungen öffnen“. Bei ausgeschalteter Ortung: „Die Ortung ist ausgeschaltet“, auf Android mit „Einstellungen öffnen“ (Standort-Einstellungen des Systems). |
 | Blatt | Titel „Standort senden“. Oben das Kartenbild mit Pin, darunter die Bezeichnung und in `muted` „Auf etwa 20 m genau“ (ab 1000 m in km). Unten der Knopf „Diesen Standort senden“. |
 | Suche | Bis eine Position da ist: Kreisel und „Standort wird bestimmt …“, der Knopf ist aus. Wird die Position genauer, zieht das Blatt nach. Nach 30 s ohne Position: „Standort nicht gefunden“ und „Erneut versuchen“. |
-| Bezeichnung | Die Adresse vom System: „{Straße} {Hausnummer}, {Ort}“, ohne Straße „{Ort}“. Ohne Adressdienst, ohne Netz oder nach 5 s ohne Antwort: „Standort“. Das Senden wartet nicht auf die Adresse. |
+| Bezeichnung | Die Adresse vom System: „{Straße} {Hausnummer}, {Ort}“, ohne Straße „{Ort}“. Ohne Adressdienst, ohne Netz oder nach 5 s ohne Antwort: „Standort“. Das Senden wartet nicht auf die Adresse. Gesendet wird, was das Blatt zeigt, also auch „Standort“ und nie eine leere Bezeichnung. |
 | Senden | `enqueueLocation(token, latitude, longitude, name, referenceId)`. Das Blatt und das Anhang-Menü schließen, der Chat steht am Ende. |
 | Antwort | Talk kennt bei Standorten kein Zitat. Der Standort geht ohne Zitat raus, eine offene Antwortleiste bleibt für die nächste Nachricht stehen. |
 | Schließen | Das Blatt zu schließen bricht ab und beendet die Ortung. Die App ortet nie im Hintergrund. |
 
 ### Blase (Android, iOS)
-- Kartenbild 240 × 150 dp/pt mit den Ecken eines Bildes in der Blase, der Pin in `accent` mit der Spitze auf dem Ort, Kartenausschnitt etwa 1 km breit.
+- Kartenbild 240 × 150 dp/pt mit den Ecken eines Bildes in der Blase, der Pin in `accent` mit der Spitze auf dem Ort, Kartenausschnitt etwa 1 km breit (auf Android je nach Zoomstufe 0,7 bis 1,4 km). Die Karte ist auch im dunklen Design hell.
 - Darunter die Bezeichnung in der Textfarbe der Blase, höchstens zwei Zeilen, bei leerer Bezeichnung „Standort“. Die Uhrzeit steht darunter wie bei Text.
 - Antippen öffnet die Karten-App mit Pin und Bezeichnung. Gibt es auf Android keine, öffnet sich die Stelle auf openstreetmap.org im Browser.
 - Das Menü beim langen Druck ist das der anderen Nachrichten, ohne „Bearbeiten“. „Kopieren“ legt die Bezeichnung und in der zweiten Zeile den Link `https://www.openstreetmap.org/?mlat={Breite}&mlon={Länge}#map=16/{Breite}/{Länge}` ab. Breite und Länge stehen im Link immer mit sechs Nachkommastellen und Punkt (`52.528300`), wie im Kern und in Talk-Web. Reagieren und Löschen wie sonst.
@@ -61,6 +61,8 @@ Pin, Bezeichnung (leer: „Standort“) und darunter in `muted` die Koordinaten 
 
 ### Vorschau
 Chatliste, Zitat und Benachrichtigung zeigen „📍 {Bezeichnung}“, bei leerer Bezeichnung „📍 Standort“. Das gilt auf allen Plattformen und reiht sich in die Bezeichnungen aus `docs/notifications.md` ein.
+
+Ausnahme ist die Benachrichtigung aus einem Push: Ihr Text kommt aus dem Push selbst, und der trägt nur die Bezeichnung, ohne „📍“ (bei Dateien ebenso nur den Dateinamen).
 
 ## Kern-Vertrag
 
