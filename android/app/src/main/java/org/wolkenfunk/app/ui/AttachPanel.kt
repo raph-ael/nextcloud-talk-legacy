@@ -88,9 +88,10 @@ fun AttachPanel(onImage: (Uri) -> Unit, onGallery: () -> Unit, onFile: () -> Uni
         ) {
             AttachButton(TalkIcons.Gallery, "Galerie", onGallery)
             AttachButton(TalkIcons.File, "Datei", onFile)
+            AttachButton(TalkIcons.Location, "Standort", onLocation)
+            // The placeholders come last: what works is visible without swiping (docs/attachments.md).
             AttachButton(TalkIcons.Poll, "Umfrage") { soon("Umfragen") }
             AttachButton(TalkIcons.Contact, "Kontakt") { soon("Kontakte senden") }
-            AttachButton(TalkIcons.Location, "Standort", onLocation)
         }
     }
 }
