@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { FileAttachment } from '@shared/core'
+import { locationName, type FileAttachment, type GeoLocation } from '@shared/core'
 import { accountId, type UiMessage } from '../store'
-import { fileSize } from '../format'
+import { coordinates, fileSize, locationLink } from '../format'
 
 /** Width of photos in chat bubbles (CSS px). */
 export const IMAGE_WIDTH = 300
@@ -134,5 +134,29 @@ export function FileRow({ msg }: { msg: UiMessage }) {
     </a>
   ) : (
     <div className="file-row">{body}</div>
+  )
+}
+
+/**
+ * A received location: pin, name and coordinates; a click opens the place in the browser.
+ * No map picture, so no map service hears of it (docs/attachments.md „Kachel (Desktop)“).
+ */
+export function LocationRow({ location }: { location: GeoLocation }) {
+  return (
+    <a className="file-row location-row" href={locationLink(location)} target="_blank" rel="noreferrer" title="Im Browser öffnen">
+      <span className="file-icon location-icon" aria-hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path
+            fill="currentColor"
+            fillRule="evenodd"
+            d="M12 2.5a6.5 6.5 0 0 0-6.5 6.5c0 4.6 5.2 11 6 12a.65.65 0 0 0 1 0c.8-1 6-7.4 6-12A6.5 6.5 0 0 0 12 2.5Zm0 4a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"
+          />
+        </svg>
+      </span>
+      <span className="file-text">
+        <span className="file-name location-name">{locationName(location)}</span>
+        <span className="file-size">{coordinates(location)}</span>
+      </span>
+    </a>
   )
 }

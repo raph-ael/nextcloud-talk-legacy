@@ -15,8 +15,28 @@ export interface FileAttachment {
   voiceMessage: boolean
 }
 
-/** Short label for a file message ("📷 Foto", "📎 name.pdf"), followed by its caption. */
-export function withAttachment(text: string, a: FileAttachment | null | undefined): string {
+/** A place shared into a chat (WGS 84, degrees); `name` may be empty. */
+export interface GeoLocation {
+  latitude: number
+  longitude: number
+  name: string
+}
+
+/** What a location is called where it has no name (docs/attachments.md). */
+export function locationName(l: GeoLocation): string {
+  return l.name.trim() || 'Standort'
+}
+
+/**
+ * Short label for a file message ("📷 Foto", "📎 name.pdf"), followed by its caption, or
+ * for a location ("📍 name"), whose `text` is its name again.
+ */
+export function withAttachment(
+  text: string,
+  a: FileAttachment | null | undefined,
+  location?: GeoLocation | null,
+): string {
+  if (location) return `📍 ${locationName(location)}`
   if (!a) return text
   const label = a.voiceMessage
     ? '🎤 Sprachnachricht'
@@ -35,6 +55,8 @@ export interface MessagePreview {
   isOwn: boolean
   isSystem: boolean
   attachment: FileAttachment | null
+  /** For a location; `text` is then its name. */
+  location?: GeoLocation | null
 }
 
 export interface RoomView {
@@ -81,6 +103,7 @@ export interface ReplyPreview {
   text: string
   isOwn: boolean
   attachment?: FileAttachment | null
+  location?: GeoLocation | null
 }
 
 export interface MessageView {
@@ -103,6 +126,8 @@ export interface MessageView {
   reactionsSelf: string[]
   /** For file messages; `text` is then the caption. */
   attachment?: FileAttachment | null
+  /** For a location: drawn as a tile, `text` (its name) is not shown again. */
+  location?: GeoLocation | null
   /** Can be deleted: by its author with `RoomView.canChat`, by others with `RoomView.canDeleteOthers`. */
   deletable: boolean
   /** Its author can edit the text (or caption) with `RoomView.canChat`, until `editUntil`. */

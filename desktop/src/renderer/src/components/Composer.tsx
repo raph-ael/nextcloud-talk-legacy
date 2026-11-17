@@ -309,7 +309,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
         <div className="reply-bar">
           <div className={`quote${replyTo.isOwn ? ' own' : ''}`}>
             <div className="quote-author">{replyTo.isOwn ? 'Du' : replyTo.author}</div>
-            <div className="quote-text">{withAttachment(replyTo.text, replyTo.attachment)}</div>
+            <div className="quote-text">{withAttachment(replyTo.text, replyTo.attachment, replyTo.location)}</div>
           </div>
           <button className="icon-button" aria-label="Antwort abbrechen" title="Antwort abbrechen" onClick={onCancelReply}>
             <CloseIcon />

@@ -235,7 +235,7 @@ const RoomItem = memo(function RoomItem({
   let prefix = ''
   let preview = ''
   if (last) {
-    preview = withAttachment(last.text, last.attachment)
+    preview = withAttachment(last.text, last.attachment, last.location)
     if (!preview) preview = 'Nachricht gelöscht'
     else if (!last.isSystem && room.roomType !== 1 && room.roomType !== 6)
       prefix = `${last.isOwn ? 'Du' : last.author.split(' ')[0]}: `

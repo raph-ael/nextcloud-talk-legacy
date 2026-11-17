@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
-import { withAttachment, type RoomView, type SendError } from '@shared/core'
+import { locationName, withAttachment, type RoomView, type SendError } from '@shared/core'
 import {
   discard,
   loadOlder,
@@ -13,10 +13,10 @@ import {
   type UiMessage,
 } from '../store'
 import { isGroupRoom } from './GroupInfo'
-import { colorFor, dayLabel, fullTime, isJumboEmoji, messageTime, sameDay, splitLinks } from '../format'
+import { colorFor, dayLabel, fullTime, isJumboEmoji, locationLink, messageTime, sameDay, splitLinks } from '../format'
 import { Markdown, plain } from './Markdown'
 import { Avatar } from './Avatar'
-import { ChatImage, FileRow, isImageAttachment } from './ChatMedia'
+import { ChatImage, FileRow, isImageAttachment, LocationRow } from './ChatMedia'
 import { Composer } from './Composer'
 import { VoiceMessage } from './Voice'
 import { isAudioAttachment } from '../voice'
@@ -388,7 +388,15 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     if (m.kind === 'deleted') return items
     if (!room.readOnly) items.push({ label: 'Antworten', onSelect: () => reply(m) })
     if (canEdit(room, m)) items.push({ label: 'Bearbeiten', onSelect: () => void startEdit(m) })
-    if (m.text) items.push({ label: 'Text kopieren', onSelect: () => void navigator.clipboard.writeText(m.text) })
+    const place = m.location
+    if (place) {
+      // Name and, in the second line, the link (docs/attachments.md).
+      items.push({
+        label: 'Kopieren',
+        onSelect: () => void navigator.clipboard.writeText(`${locationName(place)}\n${locationLink(place)}`),
+      })
+      items.push({ label: 'Im Browser öffnen', onSelect: () => window.open(locationLink(place), '_blank') })
+    } else if (m.text) items.push({ label: 'Text kopieren', onSelect: () => void navigator.clipboard.writeText(m.text) })
     if (m.attachment?.link) {
       if (isImageAttachment(m.attachment)) items.push({ label: 'Bild öffnen', onSelect: () => setViewer(m) })
       items.push({ label: 'Im Browser öffnen', onSelect: () => window.open(m.attachment!.link, '_blank') })
@@ -611,10 +619,12 @@ const MessageRow = memo(function MessageRow({
   const deleted = msg.kind === 'deleted'
   const attachment = deleted ? null : msg.attachment
   const image = isImageAttachment(attachment) ? attachment : null
-  const jumbo = msg.kind === 'text' && !msg.replyTo && !attachment && isJumboEmoji(msg.text)
+  // A location is drawn as a tile, its text is the name once more.
+  const location = deleted ? null : msg.location
+  const jumbo = msg.kind === 'text' && !msg.replyTo && !attachment && !location && isJumboEmoji(msg.text)
   const reactions = Object.entries(msg.reactions)
   const showAuthor = isGroup && !own && first
-  const hasText = !deleted && msg.text.trim() !== ''
+  const hasText = !deleted && !location && msg.text.trim() !== ''
   const showMeta = last || !!msg.status
   // Time on the photo when nothing follows it inside the bubble.
   const metaOnImage = !!image && !hasText
@@ -676,7 +686,7 @@ const MessageRow = memo(function MessageRow({
               <div className={`quote${msg.replyTo.isOwn ? ' own' : ''}`}>
                 <div className="quote-author">{msg.replyTo.isOwn ? 'Du' : msg.replyTo.author}</div>
                 <div className="quote-text">
-                  {withAttachment(msg.replyTo.text, msg.replyTo.attachment) || 'Nachricht gelöscht'}
+                  {withAttachment(msg.replyTo.text, msg.replyTo.attachment, msg.replyTo.location) || 'Nachricht gelöscht'}
                 </div>
               </div>
             )}
@@ -694,9 +704,10 @@ const MessageRow = memo(function MessageRow({
                   ) : (
                     <FileRow msg={msg} />
                   ))}
+                {location && <LocationRow location={location} />}
                 {deleted ? (
                   <em>Diese Nachricht wurde gelöscht.</em>
-                ) : msg.markdown ? (
+                ) : location ? null : msg.markdown ? (
                   <Markdown text={msg.text} />
                 ) : (
                   splitLinks(msg.text).map((part, i) =>

@@ -1,3 +1,5 @@
+import type { GeoLocation } from '@shared/core'
+
 const time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' })
 const weekday = new Intl.DateTimeFormat('de-DE', { weekday: 'short' })
 const shortDate = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })
@@ -33,6 +35,21 @@ export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.floor(bytes / 1024)} KB`
   return `${(bytes / (1024 * 1024)).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`
+}
+
+/** „52,5283° N, 13,4356° O“ */
+export function coordinates(l: GeoLocation): string {
+  const part = (v: number, positive: string, negative: string) =>
+    `${Math.abs(v).toLocaleString('de-DE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}° ${v < 0 ? negative : positive}`
+  return `${part(l.latitude, 'N', 'S')}, ${part(l.longitude, 'O', 'W')}`
+}
+
+/** The place on openstreetmap.org, with a marker (docs/attachments.md). */
+export function locationLink(l: GeoLocation): string {
+  // At most six decimals as in the core's `geo:`, without zeros at the end.
+  const lat = String(Number(l.latitude.toFixed(6)))
+  const lon = String(Number(l.longitude.toFixed(6)))
+  return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}`
 }
 
 export function messageTime(unix: number): string {

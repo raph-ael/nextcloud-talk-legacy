@@ -525,7 +525,9 @@ export async function loadOlder(token: string): Promise<void> {
 }
 
 export function toReply(m: UiMessage | null): ReplyPreview | null {
-  return m ? { id: m.id, author: m.author, text: m.text, isOwn: m.isOwn, attachment: m.attachment ?? null } : null
+  return m
+    ? { id: m.id, author: m.author, text: m.text, isOwn: m.isOwn, attachment: m.attachment ?? null, location: m.location ?? null }
+    : null
 }
 
 /** Shows a queued message at once (the outbox event may arrive a moment later). */

@@ -824,7 +824,7 @@ function openFromNotification(rt: Runtime, token: string | null): void {
 /** The text below the chat name: as in the chat list, in groups with the author. */
 function noticeText(item: MessageNotice): string {
   const m = item.message
-  const text = m ? withAttachment(m.text, m.attachment) : ''
+  const text = m ? withAttachment(m.text, m.attachment, m.location) : ''
   if (!m || !text) return 'Neue Nachricht'
   return item.isGroup && !m.isSystem && m.author ? `${m.author}: ${text}` : text
 }
