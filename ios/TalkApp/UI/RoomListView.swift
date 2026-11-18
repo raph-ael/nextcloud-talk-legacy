@@ -13,10 +13,13 @@ struct RoomListView: View {
     /// Account menu (two accounts and more) and what follows once it is closed.
     @State private var accountMenu = false
     @State private var afterMenu: AccountMenuAction?
+    /// Hits in the messages under the chats (docs/search.md "Suche über alle Chats").
+    @State private var search = MessageSearch(limit: 50)
 
     var body: some View {
         // Sections from the core (docs/categories.md): filtered, collapsed ones reduced.
         let sections = store.sections(query.trimmingCharacters(in: .whitespaces))
+        let hits = search.query == query ? search.results : nil
         // Relative times ("5 Min.") need a clock.
         TimelineView(.periodic(from: .now, by: 30)) { context in
             List {
@@ -29,6 +32,13 @@ struct RoomListView: View {
                 ForEach(sections, id: \.id) { section in
                     if section.title.isEmpty {
                         rows(section, now: context.date)
+                    } else if section.kind == "archived" {
+                        // No category behind it: it does not collapse (docs/categories.md).
+                        Section {
+                            rows(section, now: context.date)
+                        } header: {
+                            PlainSectionTitle(title: section.title)
+                        }
                     } else {
                         Section {
                             rows(section, now: context.date)
@@ -37,7 +47,10 @@ struct RoomListView: View {
                         }
                     }
                 }
-                if sections.isEmpty {
+                if let hits, !hits.hits.isEmpty || hits.chatsDone < hits.chatsTotal {
+                    messageHits(hits, now: context.date)
+                }
+                if sections.isEmpty && (hits?.hits.isEmpty ?? true) {
                     emptyList
                         .frame(maxWidth: .infinity, minHeight: 24)
                         .padding(32)
@@ -52,6 +65,16 @@ struct RoomListView: View {
         }
         .refreshable { await store.refresh() }
         .searchable(text: $query, prompt: "Suchen")
+        .onChange(of: query, initial: true) { _, q in search.set(q, session: store.session) }
+        // New messages are found with the next look at the list (docs/search.md).
+        .onChange(of: store.roomsEvents) { search.refresh(session: store.session) }
+        .task(id: hits?.chatsDone ?? 0 < hits?.chatsTotal ?? 0) {
+            // While the history loads, the progress line follows it.
+            while !Task.isCancelled, let r = search.results, r.chatsDone < r.chatsTotal {
+                try? await Task.sleep(for: .seconds(1))
+                search.refresh(session: store.session)
+            }
+        }
         .navigationTitle("Chats")
         .toolbar {
             // docs/connection.md: the state as a line under the large title, always there so
@@ -88,6 +111,38 @@ struct RoomListView: View {
                 if let token = newCategoryFor, !name.isEmpty { store.createCategory(name, with: token) }
             }
             .disabled(categoryName.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+
+    /// "Nachrichten" with the hits under the chats; the next 50 once the end shows.
+    @ViewBuilder private func messageHits(_ r: SearchResults, now: Date) -> some View {
+        Section {
+            ForEach(r.hits, id: \.messageId) { hit in
+                Button { store.openRoom(hit.token, at: hit.messageId) } label: {
+                    MessageHitRow(hit: hit, avatarVersion: store.room(hit.token)?.avatarVersion ?? "", now: now)
+                }
+                .buttonStyle(RowPressStyle())
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .listRowBackground(Talk.background)
+                .listRowSeparator(.hidden)
+                .accessibilityIdentifier("hit:\(hit.messageId)")
+                .onAppear {
+                    if hit.messageId == r.hits.last?.messageId { search.more(session: store.session) }
+                }
+            }
+            if r.chatsDone < r.chatsTotal {
+                Text("Ältere Nachrichten werden noch geladen (\(r.chatsDone) von \(r.chatsTotal) Chats)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Talk.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 16))
+                    .listRowBackground(Talk.background)
+                    .listRowSeparator(.hidden)
+                    .accessibilityIdentifier("search-loading")
+            }
+        } header: {
+            PlainSectionTitle(title: "Nachrichten")
         }
     }
 
@@ -225,6 +280,23 @@ private struct SectionTitle: View {
         let hidden = Int(section.total) - section.rooms.count
         if section.collapsed && hidden > 0 { l += ", \(hidden) \(hidden == 1 ? "Chat" : "Chats") ausgeblendet" }
         return l
+    }
+}
+
+/// A section head that does nothing ("Archiviert", "Nachrichten"): the title alone.
+private struct PlainSectionTitle: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(Talk.onSurface)
+            .lineLimit(1)
+            .padding(.leading, 8)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .textCase(nil)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("section:\(title)")
     }
 }
 

@@ -28,6 +28,27 @@ struct ChatState: Equatable {
     var lastCommonRead: Int64 = 0
     var loading = true
     var loadingOlder = false
+    /// A window into the history (docs/search.md "Chat an einer Nachricht öffnen"): newer
+    /// messages exist below the list, `loadNewer(newestId)` fetches them.
+    var hasNewer = false
+    var newestId: Int64?
+    var loadingNewer = false
+    /// Live messages that came while the list is a window: shown once it reaches the end.
+    var held: [MessageView] = []
+    /// Opened at this message (search hit): the list positions there, not at the end.
+    var openAt: Int64?
+    /// The window to open with is on its way; the chat's own page stays hidden.
+    var opening = false
+
+    /// New messages from others that came while the list is a window ("Zum Ende springen").
+    var heldUnread: Int { held.filter { !$0.isOwn && $0.kind != .system }.count }
+}
+
+/// Scroll the open chat to a message and light it up (search hit, quote).
+struct ChatFocus: Equatable {
+    let token: String
+    let key: String
+    let serial: Int
 }
 
 /// "N ungelesene Nachrichten" of the open chat (docs/chat.md, "Ungelesen-Linie"): taken when
@@ -126,6 +147,9 @@ final class SessionStore {
     private(set) var unreadLine: UnreadLine?
     /// Bumped whenever the open chat is opened anew in place: its list starts over (position).
     private(set) var openSerial = 0
+    /// The last jump to a message in the open chat (docs/search.md).
+    private(set) var focus: ChatFocus?
+    @ObservationIgnored private var focusSerial = 0
     /// The open chat's list shows its newest message; until then nothing is marked read
     /// (opening at the unread line must not read what is below it).
     @ObservationIgnored private var chatAtBottom = true
@@ -845,7 +869,8 @@ final class SessionStore {
         case .callMissed(let token, let roomName, let callerName, let isGroup):
             Notifications.missedCall(origin(id), token: token, name: isGroup || callerName.isEmpty ? roomName : callerName)
         case .outboxChanged(let token, let items):
-            if active { updateChat(token) { $0.messages = Self.withPending($0.messages, items) } }
+            // A window shows no unsent messages: they belong at the end (docs/search.md).
+            if active { updateChat(token) { $0.messages = Self.withPending($0.messages, $0.hasNewer ? [] : items) } }
             announceFailures(rt, token, items)
         case .recordingsChanged(let items):
             if active { recordings = items }
@@ -857,6 +882,15 @@ final class SessionStore {
         case .messagesAdded(let token, let messages):
             guard active else { return }
             media.adoptLocalPreviews(messages)
+            if chats[token]?.hasNewer == true {
+                // A window: appended they would leave a gap. Kept for the end, counted in the button.
+                if token == activeToken { countUnreadInWindow(token, messages) }
+                updateChat(token) { c in
+                    let ids = Set(messages.map(\.id))
+                    c.held = (c.held.filter { !ids.contains($0.id) } + messages).sorted { $0.id < $1.id }
+                }
+                return
+            }
             if token == activeToken { countUnread(token, messages) }
             updateChat(token) { $0.messages = Self.merge($0.messages, messages) }
         case .messagesUpdated(let token, let messages):
@@ -864,6 +898,7 @@ final class SessionStore {
             let byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
             updateChat(token) { c in
                 c.messages = c.messages.map { m in byId[m.msg.id].map { UiMessage(msg: $0) } ?? m }
+                c.held = c.held.map { byId[$0.id] ?? $0 }
             }
         case .readStatus(let token, let lastCommonRead):
             guard active else { return }
@@ -978,7 +1013,10 @@ final class SessionStore {
 
     // MARK: - Chat actions
 
-    func openRoom(_ token: String) {
+    /// Opens a chat, at the end (or the unread line) or, from a search hit, at `messageId`
+    /// (docs/search.md "Aus der Suche über alle Chats"): the window comes instead of the
+    /// chat's own page, so the end does not flash up.
+    func openRoom(_ token: String, at messageId: Int64? = nil) {
         guard let s = session, activeToken != token else { return }
         if let previous = activeToken {
             voice.interrupt()
@@ -995,10 +1033,14 @@ final class SessionStore {
         chatAtBottom = false
         // Cached messages and unsent ones (both survive restarts): shown in the first frame.
         let cached = s.cachedChat(token: token)
-        var chat = chats[token] ?? ChatState()
+        // A window left open last time is no base for the cached end.
+        var chat = chats[token].flatMap { $0.hasNewer ? nil : $0 } ?? ChatState()
+        chat.held = []
+        chat.openAt = messageId
+        chat.opening = messageId != nil
         let messages = Self.merge(chat.messages, cached.messages)
         let older = cached.oldestId != nil && (chat.oldestId == nil || cached.oldestId! < chat.oldestId!)
-        chat.loading = !messages.contains { $0.status == nil }
+        chat.loading = messageId != nil || !messages.contains { $0.status == nil }
         chat.messages = Self.withPending(messages, s.pending(token: token))
         if older {
             chat.hasMore = cached.hasMore
@@ -1013,26 +1055,162 @@ final class SessionStore {
         if let id = activeId {
             Notifications.removeChats(account: id, legacy: runtimes[id]?.account.dir == Self.legacyDir, tokens: [token])
         }
+        if let messageId {
+            // The line shows if it falls into the window; nothing is loaded towards it.
+            settleUnreadLine(token)
+            Task { await showAround(token, messageId, opening: true) }
+        }
         Task {
             do {
                 let page = try await s.openChat(token: token)
                 let room = self.room(token)
                 updateChat(token) { c in
+                    c.lastCommonRead = max(c.lastCommonRead, page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
+                    // A window is shown (or on its way): the end comes back with "Zum Ende springen".
+                    guard !c.hasNewer else { return }
                     // Outdated cache: drop what was shown (unsent messages stay).
                     let base = page.reset ? c.messages.filter { $0.status != nil } : c.messages
                     c.messages = Self.merge(base, page.messages)
                     c.hasMore = page.hasMore
                     c.oldestId = page.oldestId
-                    c.lastCommonRead = max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
-                    c.loading = false
+                    if !c.opening { c.loading = false }
                 }
-                await loadToUnreadLine(token)
+                if messageId == nil { await loadToUnreadLine(token) }
                 markVisibleRead(token)
             } catch {
-                updateChat(token) { $0.loading = false }
+                updateChat(token) { if !$0.opening { $0.loading = false } }
                 settleUnreadLine(token)
             }
         }
+    }
+
+    // MARK: - Window into the history (docs/search.md "Chat an einer Nachricht öffnen")
+
+    @ObservationIgnored private var aroundSerial = 0
+
+    /// Scrolls the open chat to a message: at once when it is in the list, else the list
+    /// becomes a window around it.
+    func jump(_ token: String, to messageId: Int64) {
+        guard activeToken == token, let chat = chats[token] else { return }
+        if chat.messages.contains(where: { $0.status == nil && $0.msg.id == messageId }) {
+            aroundSerial += 1
+            setFocus(token, messageId)
+        } else {
+            Task { await showAround(token, messageId, opening: false) }
+        }
+    }
+
+    private func setFocus(_ token: String, _ messageId: Int64) {
+        focusSerial += 1
+        focus = ChatFocus(token: token, key: "id:\(messageId)", serial: focusSerial)
+    }
+
+    /// `messagesAround` replaces the list. On an error the chat stays as it is; while opening
+    /// it then shows its own page.
+    private func showAround(_ token: String, _ messageId: Int64, opening: Bool) async {
+        guard let s = session else { return }
+        aroundSerial += 1
+        let serial = aroundSerial
+        do {
+            let page = try await s.messagesAround(token: token, messageId: messageId)
+            guard serial == aroundSerial, activeToken == token else { return }
+            let pending = s.pending(token: token)
+            updateChat(token) { c in
+                if page.hasNewer {
+                    c.messages = Self.merge([], page.messages)
+                } else {
+                    // The window reaches the end: an ordinary list again. Joined with a list
+                    // that ends there too (never with an older window: that leaves a gap).
+                    let base = c.hasNewer || c.opening ? [] : c.messages.filter { $0.status == nil }
+                    c.messages = Self.withPending(Self.merge(base, page.messages), pending)
+                }
+                c.hasMore = page.hasMore
+                c.oldestId = page.oldestId
+                c.hasNewer = page.hasNewer
+                c.newestId = page.newestId
+                c.loadingNewer = false
+                if !page.hasNewer { Self.reachEnd(&c, pending) }
+                c.lastCommonRead = max(c.lastCommonRead, page.lastCommonRead ?? 0)
+                c.loading = false
+                c.opening = false
+            }
+            setFocus(token, messageId)
+        } catch {
+            guard serial == aroundSerial, activeToken == token else { return }
+            if let e = error as? CoreError, case .Network = e {
+                Toast.show("Keine Verbindung")
+            } else {
+                Toast.show("Nachricht nicht gefunden")
+            }
+            if opening {
+                // The chat's own page (or the cache) is in the list already.
+                updateChat(token) { c in
+                    c.opening = false
+                    c.openAt = nil
+                    c.loading = false
+                }
+            }
+        }
+    }
+
+    /// The window reached the end: messages held meanwhile follow (only those after the
+    /// last of the list), then the unsent ones; from here on the chat runs as usual.
+    private static func reachEnd(_ c: inout ChatState, _ pending: [PendingMessage]) {
+        let last = c.messages.last(where: { $0.status == nil })?.msg.id ?? 0
+        c.messages = withPending(merge(c.messages, c.held.filter { $0.id > last }), pending)
+        c.held = []
+        c.hasNewer = false
+    }
+
+    /// Next page below a window, from `newestId` of the last page fetched that way.
+    func loadNewer(_ token: String) {
+        Task { await fetchNewer(token) }
+    }
+
+    private func fetchNewer(_ token: String) async {
+        guard let s = session, let chat = chats[token], chat.hasNewer, let after = chat.newestId,
+              !chat.loadingNewer, !chat.loading else { return }
+        let serial = aroundSerial
+        updateChat(token) { $0.loadingNewer = true }
+        do {
+            let page = try await s.loadNewer(token: token, afterId: after)
+            let pending = s.pending(token: token)
+            updateChat(token) { c in
+                c.loadingNewer = false
+                // Replaced meanwhile (another jump, "Zum Ende springen").
+                guard serial == aroundSerial, c.hasNewer, c.newestId == after else { return }
+                c.messages = Self.merge(c.messages, page.messages)
+                c.newestId = page.newestId ?? after
+                if !page.hasNewer { Self.reachEnd(&c, pending) }
+            }
+            markVisibleRead(token)
+        } catch {
+            updateChat(token) { $0.loadingNewer = false }
+        }
+    }
+
+    /// "Zum Ende springen" in a window, and sending from one: the cached end of the chat
+    /// with the messages held meanwhile and the unsent ones.
+    func showEnd(_ token: String) {
+        guard let s = session, var chat = chats[token], chat.hasNewer else { return }
+        aroundSerial += 1
+        let cached = s.cachedChat(token: token)
+        chat.messages = Self.withPending(Self.merge([], cached.messages + chat.held), s.pending(token: token))
+        chat.hasMore = cached.hasMore
+        chat.oldestId = cached.oldestId
+        chat.hasNewer = false
+        chat.newestId = nil
+        chat.loadingNewer = false
+        chat.held = []
+        chats[token] = chat
+    }
+
+    /// New messages while the list is a window. Without a line one goes above the first of
+    /// them; a line from the opening counts them by itself once they show.
+    private func countUnreadInWindow(_ token: String, _ messages: [MessageView]) {
+        guard unreadLine?.token != token,
+              let first = messages.filter({ !$0.isOwn && $0.kind != .system }).map(\.id).min() else { return }
+        unreadLine = UnreadLine(token: token, from: first - 1, base: 0, settled: true)
     }
 
     /// A notification of the chat that is open already was tapped (docs/notifications.md,
@@ -1053,6 +1231,8 @@ final class SessionStore {
         unreadLine = nil
         chatAtBottom = true
         groupInfoOpen = false
+        focus = nil
+        aroundSerial += 1
     }
 
     // MARK: - Unread line (docs/chat.md)
@@ -1084,6 +1264,8 @@ final class SessionStore {
 
     /// Gone once we send anything (text, file, voice) into the open chat.
     func clearUnreadLine(_ token: String) {
+        // Sending from a window leads to the end, where the message shows (docs/search.md).
+        showEnd(token)
         guard unreadLine?.token == token else { return }
         unreadLine = nil
     }
@@ -1433,7 +1615,9 @@ final class SessionStore {
 
     /// Marks the newest message read while the chat is visible and the app is in front.
     func markVisibleRead(_ token: String) {
-        guard let s = session, foreground, chatAtBottom, activeToken == token, let room = room(token),
+        // In a window the read marker stays (docs/search.md).
+        guard let s = session, foreground, chatAtBottom, activeToken == token, chats[token]?.hasNewer != true,
+              let room = room(token),
               let newest = chats[token]?.messages.last(where: { $0.status == nil })?.msg else { return }
         if room.unreadMessages > 0 || newest.id > room.lastReadMessage {
             Task { try? await s.markRead(token: token, messageId: newest.id) }

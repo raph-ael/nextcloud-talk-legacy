@@ -26,6 +26,10 @@ struct MessageRow: View {
     let onRetry: (MessageView) -> Void
     let onOpenImage: (String, UIImage?) -> Void
     var onShowReactions: (MessageView) -> Void = { _ in }
+    /// Search words to lay on `searchMark`, and whether the bubble lights up (docs/search.md).
+    var marks: [[Unicode.Scalar]] = []
+    var flash = false
+    var onQuote: (Int64) -> Void = { _ in }
 
     var body: some View {
         let msg = m.msg
@@ -52,7 +56,7 @@ struct MessageRow: View {
                 Bubble(
                     m: m, first: !continues(prev, m), last: !continues(m, next), isGroup: isGroup,
                     read: read, highlighted: highlighted, onRetry: onRetry, onOpenImage: onOpenImage,
-                    onShowReactions: onShowReactions
+                    onShowReactions: onShowReactions, marks: marks, flash: flash, onQuote: onQuote
                 )
             }
         }
@@ -97,6 +101,9 @@ struct Bubble: View {
     let onRetry: (MessageView) -> Void
     let onOpenImage: (String, UIImage?) -> Void
     var onShowReactions: (MessageView) -> Void = { _ in }
+    var marks: [[Unicode.Scalar]] = []
+    var flash = false
+    var onQuote: (Int64) -> Void = { _ in }
 
     var body: some View {
         let msg = m.msg
@@ -146,14 +153,20 @@ struct Bubble: View {
                             .padding(.vertical, media ? 4 : 0)
                     }
                     if let r = msg.replyTo {
+                        let quoted = Format.withAttachment(r.text, r.attachment, r.location)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(r.isOwn ? "Du" : r.author).font(.system(size: 13, weight: .semibold))
-                            let quoted = Format.withAttachment(r.text, r.attachment, r.location)
                             Text(quoted.isEmpty ? "Nachricht gelöscht" : quoted)
                                 .font(.system(size: 13))
                                 .opacity(0.85)
                                 .lineLimit(2)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        // docs/search.md "Zitat antippen": to the quoted message; a deleted one does nothing.
+                        .onTapGesture { if !quoted.isEmpty && msg.kind != .deleted { onQuote(r.id) } }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("quote")
                         .foregroundStyle(textColor)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -208,7 +221,7 @@ struct Bubble: View {
                     } else if jumbo {
                         Text(msg.text).font(.system(size: 44))
                     } else if !msg.text.isEmpty && place == nil {
-                        Text(Markdown.render(msg.text, markdown: msg.markdown))
+                        Text(SearchText.mark(Markdown.render(msg.text, markdown: msg.markdown), marks))
                             .font(.system(size: 15))
                             .lineSpacing(3)
                             .foregroundStyle(textColor)
@@ -229,6 +242,13 @@ struct Bubble: View {
                 .padding(.top, media ? 3 : audioOnTop ? 12 : 7)
                 .padding(.bottom, media ? 3 : 7)
                 .background(jumbo ? Color.clear : own ? Talk.bubbleOwn : Talk.bubbleOther, in: shape)
+                // The target of a jump lights up and fades (docs/search.md "Aufleuchten").
+                .overlay {
+                    shape.fill(Talk.searchMark)
+                        .opacity(flash ? 1 : 0)
+                        .animation(.easeOut(duration: flash ? 0.15 : 0.6), value: flash)
+                        .allowsHitTesting(false)
+                }
                 .opacity(m.status == .failed ? 0.6 : 1)
                 .scaleEffect(highlighted ? 0.97 : 1)
                 .animation(.easeOut(duration: 0.15), value: highlighted)

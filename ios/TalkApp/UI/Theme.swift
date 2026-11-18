@@ -32,6 +32,11 @@ enum Talk {
     /// Reaction pills under the bubble (docs/chat.md "Pillen unter der Blase"), the own one darker.
     static let reaction = dynamic(light: 0xE9E9E9, dark: 0x1B1B1B)
     static let reactionMine = dynamic(light: 0xB9B9B9, dark: 0x5E5E5E)
+    /// Search words in bubbles and the lit-up target of a jump (docs/search.md "Farbe"):
+    /// yellow behind the text, 45 % in light, 35 % in dark.
+    static let searchMark = Color(UIColor {
+        UIColor(hex: 0xFFD60A).withAlphaComponent($0.userInterfaceStyle == .dark ? 0.35 : 0.45)
+    })
 
     static let uiBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x121212) : .white }
 

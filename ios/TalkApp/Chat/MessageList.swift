@@ -22,6 +22,10 @@ struct MessageListActions {
     var onRetry: (MessageView) -> Void
     var onOpenImage: (String, UIImage?) -> Void
     var onNearTop: () -> Void
+    /// A window into the history (docs/search.md) nears its newest message: load newer ones.
+    var onNearBottom: () -> Void = {}
+    /// A quote was tapped: jump to the quoted message.
+    var onQuote: (Int64) -> Void = { _ in }
     /// The newest message became visible (true) or was scrolled away from (false).
     var onBottomChanged: (Bool) -> Void
     /// The list moved more than half its height away from the newest message (true) or came
@@ -44,6 +48,8 @@ enum OpenAt: Equatable {
     case row(String)
     /// The first unread message is beyond the pages loaded: the oldest loaded one at the top.
     case oldest
+    /// Opened at a message (search hit): it goes to the upper third.
+    case message(String)
 }
 
 /// The message list: a vertically flipped `UICollectionView` (newest message at the bottom,
@@ -59,6 +65,14 @@ struct MessageList: UIViewRepresentable {
     var unreadKey: String? = nil
     var unreadCount = 0
     var openAt: OpenAt = .bottom
+    /// A window into the history: newer messages are not in the list yet. Pages added below
+    /// keep what is on screen in place, and nothing scrolls to the newest by itself.
+    var window = false
+    /// The last jump to a message (scrolls there once per serial) and the row that lights up.
+    var focus: ChatFocus?
+    var flashKey: String?
+    /// Search words laid on the bubbles.
+    var marks: [[Unicode.Scalar]] = []
     /// Changes whenever the chat wants to jump to the newest message (own send).
     let scrollToBottom: Int
     let actions: MessageListActions
@@ -106,6 +120,10 @@ struct MessageList: UIViewRepresentable {
         private var rows: [UiMessage] = []
         private var index: [String: Int] = [:]
         private var lastScrollRequest = 0
+        private var lastFocus = 0
+        /// A scroll to the newest message is under way: rows measured on the way may stop
+        /// the animation short of it, so it is finished when the animation ends.
+        private var toNewest = false
         private var atBottom = true
         private var farFromBottom = false
         private var opened = false
@@ -166,7 +184,8 @@ struct MessageList: UIViewRepresentable {
                         highlighted: parent.highlighted == m.key,
                         unread: parent.unreadKey == m.key ? parent.unreadCount : nil,
                         onRetry: actions.onRetry, onOpenImage: actions.onOpenImage,
-                        onShowReactions: actions.onShowReactions
+                        onShowReactions: actions.onShowReactions,
+                        marks: parent.marks, flash: parent.flashKey == m.key, onQuote: actions.onQuote
                     )
                     .scaleEffect(x: 1, y: -1)
                 }
@@ -183,7 +202,12 @@ struct MessageList: UIViewRepresentable {
                 || old!.lastCommonRead != new.lastCommonRead || old!.highlighted != new.highlighted
                 || old!.isGroup != new.isGroup
                 || old!.unreadKey != new.unreadKey || old!.unreadCount != new.unreadCount
+                || old!.flashKey != new.flashKey || old!.marks != new.marks
             let newestBefore = rows.first?.key
+            // A window: rows added below the screen must not push it up (flipped, they sit at
+            // the start of the content). The lowest visible row keeps its place on screen.
+            let windowed = (old?.window ?? false) || new.window
+            let anchor = changed && windowed && opened ? visibleAnchor() : nil
             rows = newRows
             index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.key, $0) })
             if changed {
@@ -194,16 +218,28 @@ struct MessageList: UIViewRepresentable {
                 let existing = Set(source.snapshot().itemIdentifiers)
                 // Neighbours decide grouping and day chips: refresh every surviving row.
                 snap.reconfigureItems(snap.itemIdentifiers.filter { existing.contains($0) })
-                let animate = old != nil && abs(old!.messages.count - new.messages.count) <= 3
+                let animate = anchor == nil && old != nil && abs(old!.messages.count - new.messages.count) <= 3
                 source.apply(snap, animatingDifferences: animate)
+                if let anchor { restore(anchor) }
             }
             // Keep the newest message visible when sending / receiving while at the bottom.
             let newestNow = rows.first?.key
             if new.scrollToBottom != lastScrollRequest {
                 lastScrollRequest = new.scrollToBottom
                 scrollToNewest(animated: true)
-            } else if newestNow != newestBefore, newestBefore != nil, atBottom {
+            } else if newestNow != newestBefore, newestBefore != nil, atBottom, !windowed {
                 scrollToNewest(animated: true)
+            }
+            if let focus = new.focus, focus.serial != lastFocus {
+                lastFocus = focus.serial
+                // Before the first positioning `open()` places it (`OpenAt.message`).
+                if opened {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.view != nil else { return }
+                        self.place(focus.key, top: Self.focusTop)
+                        self.report()
+                    }
+                }
             }
             if !opened, !openQueued, new.openAt != .wait {
                 // After this view update: scrolling reports to SwiftUI state ("Zum Ende springen").
@@ -227,25 +263,66 @@ struct MessageList: UIViewRepresentable {
             case .wait, .bottom:
                 break
             case .row(let key):
-                guard let i = index[key] else { break }
-                let path = IndexPath(item: i, section: 0)
-                view.layoutIfNeeded()
-                view.scrollToItem(at: path, at: .centeredVertically, animated: false)
-                for _ in 0..<3 {
-                    view.layoutIfNeeded()
-                    guard let frame = view.layoutAttributesForItem(at: path)?.frame else { break }
-                    // Flipped: the row's top on screen is its maxY in content coordinates.
-                    let h = view.bounds.height
-                    view.setContentOffset(CGPoint(x: 0, y: clamp(frame.maxY - h * 0.75, view)), animated: false)
-                }
+                place(key, top: 0.25)
+            case .message(let key):
+                place(key, top: Self.focusTop)
             case .oldest:
                 view.layoutIfNeeded()
                 view.setContentOffset(CGPoint(x: 0, y: clamp(.greatestFiniteMagnitude, view)), animated: false)
             }
             // Report even when nothing moved (at the bottom, or all new messages fit): the store
             // marks read only now.
+            report()
+        }
+
+        /// Where a jump puts the row's top: in the upper third (docs/search.md "Position").
+        private static let focusTop: CGFloat = 0.2
+
+        private func report() {
+            guard let view else { return }
             atBottom = view.contentOffset.y <= 40
             parent?.actions.onBottomChanged(atBottom)
+            let far = view.contentOffset.y > view.bounds.height / 2
+            if far != farFromBottom { parent?.actions.onFarChanged(far) }
+            farFromBottom = far
+        }
+
+        /// The row's top at `top` × the height from the top of the screen, never past the
+        /// newest message. Rows have estimated heights, so the offset is refined a few times.
+        private func place(_ key: String, top: CGFloat) {
+            guard let view, let i = index[key] else { return }
+            let path = IndexPath(item: i, section: 0)
+            view.layoutIfNeeded()
+            view.scrollToItem(at: path, at: .centeredVertically, animated: false)
+            for _ in 0..<3 {
+                view.layoutIfNeeded()
+                guard let frame = view.layoutAttributesForItem(at: path)?.frame else { break }
+                // Flipped: the row's top on screen is its maxY in content coordinates.
+                let h = view.bounds.height
+                view.setContentOffset(CGPoint(x: 0, y: clamp(frame.maxY - h * (1 - top), view)), animated: false)
+            }
+        }
+
+        /// The newest visible message and how far its start lies from the offset.
+        private func visibleAnchor() -> (key: String, delta: CGFloat)? {
+            guard let view else { return nil }
+            let visible = view.indexPathsForVisibleItems.filter { $0.item < rows.count }.sorted { $0.item < $1.item }
+            for path in visible {
+                guard let frame = view.layoutAttributesForItem(at: path)?.frame,
+                      frame.maxY > view.contentOffset.y else { continue }
+                return (rows[path.item].key, frame.minY - view.contentOffset.y)
+            }
+            return nil
+        }
+
+        private func restore(_ anchor: (key: String, delta: CGFloat)) {
+            guard let view, let i = index[anchor.key] else { return }
+            view.layoutIfNeeded()
+            guard let frame = view.layoutAttributesForItem(at: IndexPath(item: i, section: 0))?.frame else { return }
+            let y = frame.minY - anchor.delta
+            if abs(y - view.contentOffset.y) > 0.5 {
+                view.setContentOffset(CGPoint(x: 0, y: clamp(y, view)), animated: false)
+            }
         }
 
         private func clamp(_ y: CGFloat, _ view: UICollectionView) -> CGFloat {
@@ -261,7 +338,18 @@ struct MessageList: UIViewRepresentable {
                 view.setContentOffset(CGPoint(x: 0, y: view.bounds.height), animated: false)
                 view.layoutIfNeeded()
             }
+            toNewest = animated
             view.setContentOffset(.zero, animated: animated)
+        }
+
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            guard toNewest else { return }
+            toNewest = false
+            if scrollView.contentOffset.y > 0.5 { scrollView.setContentOffset(.zero, animated: false) }
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            toNewest = false
         }
 
         // Rows are not selectable: a highlight would re-render the hosted cell on every touch.
@@ -281,6 +369,7 @@ struct MessageList: UIViewRepresentable {
             let remaining = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.height
             // Roughly 40 messages before the top (~60 pt each).
             if remaining < 2400 { parent?.actions.onNearTop() }
+            if parent?.window == true, opened, scrollView.contentOffset.y < 2400 { parent?.actions.onNearBottom() }
             // The date pill follows the user's own scrolling only, never while at the bottom.
             if bottom {
                 if pillUp { parent?.actions.onScrollDate(nil) }
@@ -317,6 +406,7 @@ struct MessageList: UIViewRepresentable {
 
         func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
             if indexPath.item >= rows.count - 40 { parent?.actions.onNearTop() }
+            if parent?.window == true, opened, indexPath.item < 40 { parent?.actions.onNearBottom() }
         }
 
         // MARK: Long press → actions

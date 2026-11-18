@@ -34,6 +34,17 @@ struct ChatView: View {
     @State private var filePicker = false
     @State private var placeSheet = false
     @State private var contact: PickedContact?
+    /// docs/search.md "Suche im Chat": the field in the header, its hits and the chosen one
+    /// (0 = newest).
+    @State private var chatSearch: MessageSearch?
+    @State private var searchText = ""
+    @State private var hitIndex = 0
+    @State private var hitsFor = ""
+    @State private var lastHit: Int64?
+    @FocusState private var searchFocused: Bool
+    /// The row lit up after a jump (docs/search.md "Aufleuchten").
+    @State private var flashKey: String?
+    @State private var flashOff: Task<Void, Never>?
     @AppStorage("keyboard_height") private var keyboardHeight: Double = 300
 
     var body: some View {
@@ -48,6 +59,7 @@ struct ChatView: View {
         let unread = line?.place(in: messages)
         let openAt: OpenAt = {
             guard store.activeToken == token, let chat, !chat.loading else { return .wait }
+            if let target = chat.openAt { return .message("id:\(target)") }
             guard let line else { return .bottom }
             // Only once the server page is in: the cache may not hold the new messages yet.
             guard line.settled else { return .wait }
@@ -55,6 +67,8 @@ struct ChatView: View {
             return line.base > 0 ? .oldest : .bottom
         }()
         // Editing ends once the message was deleted meanwhile.
+        let window = chat?.hasNewer == true
+        let searching = chatSearch != nil
         let editedGone = editing.map { e in
             messages.contains { $0.status == nil && $0.msg.id == e.msg.id && $0.msg.kind == .deleted }
         } ?? false
@@ -62,7 +76,8 @@ struct ChatView: View {
         VStack(spacing: 0) {
             RecordingBanners(notices: store.recordingNotices(for: token))
             MessageList(
-                messages: messages,
+                // Opening at a message: the chat's own page stays hidden until the window is in.
+                messages: chat?.opening == true ? [] : messages,
                 isGroup: room?.isGroup ?? true,
                 lastCommonRead: lastCommonRead,
                 footer: footer,
@@ -70,6 +85,10 @@ struct ChatView: View {
                 unreadKey: unread?.row.key,
                 unreadCount: unread?.count ?? 0,
                 openAt: openAt,
+                window: window,
+                focus: store.focus?.token == token ? store.focus : nil,
+                flashKey: flashKey,
+                marks: searching ? SearchText.words(searchText) : [],
                 scrollToBottom: scrollTick,
                 actions: MessageListActions(
                     onReply: { replyTo = $0 },
@@ -78,6 +97,8 @@ struct ChatView: View {
                     onRetry: { store.retry($0) },
                     onOpenImage: { id, img in viewer = ViewerItem(fileId: id, initial: img) },
                     onNearTop: { store.loadOlder(token) },
+                    onNearBottom: { store.loadNewer(token) },
+                    onQuote: { store.jump(token, to: $0) },
                     onBottomChanged: { bottom in
                         atBottom = bottom
                         store.setChatAtBottom(token, bottom)
@@ -109,74 +130,44 @@ struct ChatView: View {
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: pillShown)
             .overlay(alignment: .bottomTrailing) {
-                if showJump {
-                    JumpToBottomButton(unread: Int(room?.unreadMessages ?? 0)) { scrollTick += 1 }
+                // In a window it is always there and leads back to the end (docs/search.md).
+                if showJump || window {
+                    let unread = Int(room?.unreadMessages ?? 0)
+                    JumpToBottomButton(unread: window ? max(unread, chat?.heldUnread ?? 0) : unread) {
+                        store.showEnd(token)
+                        scrollTick += 1
+                    }
                         .padding(.trailing, 14)
                         .padding(.bottom, 14)
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
             }
-            .animation(.easeOut(duration: 0.15), value: showJump)
-            if room?.readOnly == true {
-                Text("Diese Unterhaltung ist schreibgeschützt.")
-                    .foregroundStyle(Talk.muted)
-                    .frame(maxWidth: .infinity)
-                    .padding(16)
-            } else {
-                Composer(
-                    token: token,
-                    replyTo: $replyTo,
-                    editing: $editing,
-                    panelOpen: $panelOpen,
-                    onSend: { text in
-                        store.send(token, text: text, replyTo: replyTo)
-                        replyTo = nil
-                        scrollTick += 1
-                    },
-                    onSaveEdit: saveEdit,
-                    onOpenCamera: { camera = true },
-                    onVoiceSent: {
-                        store.clearUnreadLine(token)
-                        scrollTick += 1
-                    }
-                )
-                if panelOpen {
-                    AttachPanel(
-                        height: CGFloat(keyboardHeight),
-                        onImage: { img in
-                            sendingFromCamera = false
-                            sending = img
-                        },
-                        onCamera: { camera = true },
-                        onFile: { filePicker = true },
-                        onPlace: { placeSheet = true },
-                        onContact: {
-                            ContactPicker.present { picked in
-                                if let picked { contact = picked } else { Toast.show("Kontakt konnte nicht gelesen werden") }
-                            }
-                        }
-                    )
-                    .transition(.move(edge: .bottom))
-                }
-            }
+            .animation(.easeOut(duration: 0.15), value: showJump || window)
+            bottomBar(room: room, searching: searching)
         }
         .background(Talk.background)
         .ignoresSafeArea(.container, edges: panelOpen ? .bottom : [])
         .navigationBarTitleDisplayMode(.inline)
         // The back gesture first ends editing (docs/chat.md "Pro Plattform"): the system back
         // button is swapped for one that cancels, and a swipe from the edge does the same.
-        .navigationBarBackButtonHidden(editing != nil)
+        // The search closes the same way (docs/search.md "Kopf"): back first shows the header again.
+        .navigationBarBackButtonHidden(editing != nil || searching)
         .simultaneousGesture(
             DragGesture(minimumDistance: 20).onEnded { g in
-                if editing != nil, g.startLocation.x < Self.edgeWidth, g.translation.width > 60,
+                if editing != nil || searching, g.startLocation.x < Self.edgeWidth, g.translation.width > 60,
                    abs(g.translation.height) < g.translation.width {
-                    editing = nil
+                    if editing != nil { editing = nil } else { closeSearch() }
                 }
             },
-            including: editing != nil ? .all : .subviews
+            including: editing != nil || searching ? .all : .subviews
         )
         .onChange(of: editedGone) { _, gone in if gone { editing = nil } }
-        .onChange(of: store.activeToken) { _, t in if t != token { editing = nil } }
+        .onChange(of: store.activeToken) { _, t in
+            if t != token {
+                editing = nil
+                closeSearch()
+            }
+        }
         .onChange(of: store.openSerial) {
             // The new list reports where it stands; what the old one showed goes.
             showJump = false
@@ -193,66 +184,7 @@ struct ChatView: View {
         } message: { m in
             Text(Self.deleteQuestion(m))
         }
-        .toolbar {
-            if editing != nil {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { editing = nil } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(Talk.onSurface)
-                    }
-                    .accessibilityLabel("Zurück")
-                    .accessibilityIdentifier("edit-back")
-                }
-            }
-            ToolbarItem(placement: .principal) {
-                // docs/connection.md "Chat": spinner beside the name (its place is kept, nothing
-                // moves), "Keine Verbindung" under it once offline.
-                let shown = store.connectionShown
-                let title = HStack(spacing: 10) {
-                    Avatar(name: room?.name ?? "", size: 32, token: token, version: room?.avatarVersion ?? "")
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 6) {
-                            Text(room?.name ?? "").font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                            ConnectingSpinner()
-                                .opacity(shown == .connecting ? 1 : 0)
-                                .accessibilityHidden(shown != .connecting)
-                        }
-                        if shown == .offline {
-                            Text("Keine Verbindung")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Talk.muted)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                if let room, GroupInfoView.applies(room) {
-                    // Groups: the header opens the group settings (docs/groups.md).
-                    Button { store.showGroupInfo(true) } label: { title.foregroundStyle(Talk.onSurface) }
-                        .buttonStyle(.plain)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Gruppeneinstellungen")
-                        .accessibilityValue(room.name)
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityIdentifier("chat-title")
-                } else {
-                    title
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("chat-title")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                let inCall = CallController.shared.call?.token == token
-                Button {
-                    CallController.shared.start(token: token, name: room?.name ?? "")
-                } label: {
-                    Image(systemName: room?.hasCall == true || inCall ? "phone.fill" : "phone")
-                        .foregroundStyle(room?.hasCall == true || inCall ? Talk.callDot : Talk.accent)
-                }
-                .accessibilityLabel(room?.hasCall == true ? "Anruf beitreten" : "Anrufen")
-                .accessibilityIdentifier("call-button")
-            }
-        }
+        .toolbar { chatToolbar(room: room, searching: searching) }
         .toolbarBackground(Talk.background, for: .navigationBar)
         .onChange(of: messages.count) { _, _ in
             if atBottom { store.markVisibleRead(token) }
@@ -331,6 +263,216 @@ struct ChatView: View {
             contact: $contact
         ))
         .onAppear { store.markVisibleRead(token) }
+    }
+
+    /// The input row, or while searching the bar with the count and the arrows.
+    private func bottomBar(room: RoomView?, searching: Bool) -> some View {
+        VStack(spacing: 0) {
+            if searching {
+                ChatSearchBar(
+                    results: chatSearch?.results,
+                    selected: hitIndex,
+                    onOlder: { selectHit(hitIndex + 1) },
+                    onNewer: { selectHit(hitIndex - 1) }
+                )
+            } else if room?.readOnly == true {
+                Text("Diese Unterhaltung ist schreibgeschützt.")
+                    .foregroundStyle(Talk.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(16)
+            } else {
+                Composer(
+                    token: token,
+                    replyTo: $replyTo,
+                    editing: $editing,
+                    panelOpen: $panelOpen,
+                    onSend: { text in
+                        store.send(token, text: text, replyTo: replyTo)
+                        replyTo = nil
+                        scrollTick += 1
+                    },
+                    onSaveEdit: saveEdit,
+                    onOpenCamera: { camera = true },
+                    onVoiceSent: {
+                        store.clearUnreadLine(token)
+                        scrollTick += 1
+                    }
+                )
+                if panelOpen {
+                    AttachPanel(
+                        height: CGFloat(keyboardHeight),
+                        onImage: { img in
+                            sendingFromCamera = false
+                            sending = img
+                        },
+                        onCamera: { camera = true },
+                        onFile: { filePicker = true },
+                        onPlace: { placeSheet = true },
+                        onContact: {
+                            ContactPicker.present { picked in
+                                if let picked { contact = picked } else { Toast.show("Kontakt konnte nicht gelesen werden") }
+                            }
+                        }
+                    )
+                    .transition(.move(edge: .bottom))
+                }
+            }
+        }
+        .onChange(of: searchText) { _, text in chatSearch?.set(text, session: store.session) }
+        .onChange(of: chatSearch?.version) { _, _ in hitsChanged() }
+        .onChange(of: store.focus) { _, f in
+            guard let f, f.token == token else { return }
+            flashKey = f.key
+            flashOff?.cancel()
+            flashOff = Task {
+                try? await Task.sleep(for: .milliseconds(1500))
+                if !Task.isCancelled { flashKey = nil }
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func chatToolbar(room: RoomView?, searching: Bool) -> some ToolbarContent {
+        if searching {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { closeSearch() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Talk.onSurface)
+                }
+                .accessibilityLabel("Zurück")
+                .accessibilityIdentifier("search-close")
+            }
+            ToolbarItem(placement: .principal) {
+                TextField("Suchen", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 17))
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    .focused($searchFocused)
+                    .padding(.horizontal, 12)
+                    // A principal item gets its ideal width only: the field takes the bar.
+                    .frame(width: max(200, UIScreen.main.bounds.width - 110), height: 36)
+                    .background(Talk.chip, in: Capsule())
+                    .task {
+                        // Once the field is in the bar, the keyboard opens (docs/search.md "Kopf").
+                        try? await Task.sleep(for: .milliseconds(150))
+                        searchFocused = true
+                    }
+                    .accessibilityIdentifier("chat-search-field")
+            }
+        } else if editing != nil {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { editing = nil } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Talk.onSurface)
+                }
+                .accessibilityLabel("Zurück")
+                .accessibilityIdentifier("edit-back")
+            }
+        }
+        if !searching { ToolbarItem(placement: .principal) {
+            // docs/connection.md "Chat": spinner beside the name (its place is kept, nothing
+            // moves), "Keine Verbindung" under it once offline.
+            let shown = store.connectionShown
+            let title = HStack(spacing: 10) {
+                Avatar(name: room?.name ?? "", size: 32, token: token, version: room?.avatarVersion ?? "")
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 6) {
+                        Text(room?.name ?? "").font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                        ConnectingSpinner()
+                            .opacity(shown == .connecting ? 1 : 0)
+                            .accessibilityHidden(shown != .connecting)
+                    }
+                    if shown == .offline {
+                        Text("Keine Verbindung")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Talk.muted)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            if let room, GroupInfoView.applies(room) {
+                // Groups: the header opens the group settings (docs/groups.md).
+                Button { store.showGroupInfo(true) } label: { title.foregroundStyle(Talk.onSurface) }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Gruppeneinstellungen")
+                    .accessibilityValue(room.name)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier("chat-title")
+            } else {
+                title
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("chat-title")
+            }
+        } }
+        if !searching { ToolbarItem(placement: .topBarTrailing) {
+            // docs/search.md "Einstieg": left of the call button.
+            Button { openSearch() } label: { Image(systemName: "magnifyingglass") }
+                // The edited text lives in the input row, which the search bar replaces.
+                .disabled(editing != nil)
+                .accessibilityLabel("Im Chat suchen")
+                .accessibilityIdentifier("chat-search")
+        } }
+        if !searching { ToolbarItem(placement: .topBarTrailing) {
+            let inCall = CallController.shared.call?.token == token
+            Button {
+                CallController.shared.start(token: token, name: room?.name ?? "")
+            } label: {
+                Image(systemName: room?.hasCall == true || inCall ? "phone.fill" : "phone")
+                    .foregroundStyle(room?.hasCall == true || inCall ? Talk.callDot : Talk.accent)
+            }
+            .accessibilityLabel(room?.hasCall == true ? "Anruf beitreten" : "Anrufen")
+            .accessibilityIdentifier("call-button")
+        } }
+    }
+
+    // MARK: Search in the chat (docs/search.md)
+
+    private func openSearch() {
+        panelOpen = false
+        replyTo = nil
+        searchText = ""
+        hitIndex = 0
+        hitsFor = ""
+        lastHit = nil
+        chatSearch = MessageSearch(token: token, limit: 500)
+    }
+
+    /// The chat stays where it is; away from the end it shows "Zum Ende springen".
+    private func closeSearch() {
+        guard chatSearch != nil else { return }
+        chatSearch?.stop()
+        chatSearch = nil
+        searchText = ""
+        searchFocused = false
+    }
+
+    /// New hits: for a new text the newest is chosen and the chat jumps to it; the server's
+    /// additions to the same text keep the chosen one.
+    private func hitsChanged() {
+        guard let search = chatSearch else { return }
+        guard let r = search.results, !r.hits.isEmpty else {
+            hitIndex = 0
+            lastHit = nil
+            hitsFor = search.query
+            return
+        }
+        if hitsFor == search.query, let id = lastHit, let i = r.hits.firstIndex(where: { $0.messageId == id }) {
+            hitIndex = i
+            return
+        }
+        hitsFor = search.query
+        selectHit(0)
+    }
+
+    private func selectHit(_ i: Int) {
+        guard let hits = chatSearch?.results?.hits, hits.indices.contains(i) else { return }
+        hitIndex = i
+        lastHit = hits[i].messageId
+        store.jump(token, to: hits[i].messageId)
     }
 
     /// Long press: reaction bar (when allowed) above the message, the actions below.
