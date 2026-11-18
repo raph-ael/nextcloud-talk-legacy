@@ -11,6 +11,11 @@ pub fn is_vcard(mimetype: &str) -> bool {
     matches!(mimetype.trim().to_ascii_lowercase().as_str(), "text/vcard" | "text/x-vcard" | "text/directory")
 }
 
+/// A file name with the vCard ending, which is what the server goes by.
+pub fn is_vcf(file_name: &str) -> bool {
+    file_name.trim().to_ascii_lowercase().ends_with(".vcf")
+}
+
 /// What the chat shows for a contact file: the name the server read from the card, else
 /// the file name without `.vcf`. Never empty.
 pub fn display_name(contact_name: &str, file_name: &str) -> String {
@@ -212,6 +217,7 @@ mod tests {
         assert_eq!(display_name("", ".vcf"), "Kontakt");
         assert_eq!(display_name("", "vcf"), "vcf");
         assert!(is_vcard("text/vcard") && is_vcard("Text/X-VCard") && !is_vcard("text/plain"));
+        assert!(is_vcf("Hanna.VCF") && !is_vcf("vcf") && !is_vcf("Hanna.vcf.txt"));
     }
 
     #[test]

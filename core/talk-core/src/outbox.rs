@@ -1022,7 +1022,9 @@ impl Engine {
                     preview_available: f.mime.starts_with("image/"),
                     link: String::new(),
                     voice_message: f.voice,
-                    contact_name: match crate::contact::is_vcard(&f.mime) {
+                    // The server calls every `.vcf` a vCard, whatever type the system gave:
+                    // so the bubble is a contact from the start and does not change later.
+                    contact_name: match crate::contact::is_vcard(&f.mime) || crate::contact::is_vcf(&f.name) {
                         true => crate::contact::display_name("", &f.name),
                         false => String::new(),
                     },
