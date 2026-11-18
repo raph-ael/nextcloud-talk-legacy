@@ -26,7 +26,7 @@ Einstieg ist das vorhandene Suchfeld der Chatliste.
 | Archiv | Passt der Name eines archivierten Chats, liefert `roomSections` ihn in einem eigenen Abschnitt „Archiviert“ (`kind: "archived"`) am Ende. Der Abschnitt lässt sich nicht einklappen und hat kein Kategorie-Menü. Nachrichten archivierter Chats werden wie alle anderen gefunden. |
 | Trefferzeile | Avatar und Name des Chats, rechts das Datum wie in der Chatliste. Darunter der Ausschnitt, höchstens zwei Zeilen. Suchwörter sind fett und in der Textfarbe, der Rest in `muted`. |
 | Absender | Mit `showActor` steht der Absender vor dem Ausschnitt: „Du: “ bei eigenen Nachrichten, sonst „{Name}: “. Das gilt für eigene Nachrichten und für Gruppen. |
-| Ausschnitt | `snippet` kommt fertig vom Kern: eine Zeile um den ersten Treffer, mit „…“, wo Text fehlt. Die Plattform setzt nur die Teile mit `hit` fett. |
+| Ausschnitt | `snippet` kommt fertig vom Kern: eine Zeile um den ersten Treffer, mit „…“, wo Text fehlt. Steht der Treffer in den ersten 40 Zeichen, beginnt der Ausschnitt am Anfang der Nachricht. Die Plattform setzt nur die Teile mit `hit` fett. |
 | Antippen | Öffnet den Chat an der Nachricht (siehe „Chat an einer Nachricht öffnen“). Zurück führt in die Suche, Suchtext und Position der Liste bleiben. Am Desktop bleibt die Trefferliste stehen, der gewählte Treffer ist hinterlegt. |
 | Mehr | Die Liste beginnt mit 50 Treffern. Ist `more` gesetzt und das Ende der Liste erreicht, fragt die Plattform mit 50 mehr. |
 | Leer | Weder Chats noch Nachrichten: „Keine Treffer“. |
@@ -58,8 +58,8 @@ Wie Signal Desktop läuft die Suche im Chat über die Seitenleiste.
 |---|---|
 | Einstieg | Lupe im Chat-Kopf (Titel „Im Chat suchen“) und Strg+Umschalt+F (macOS: ⌘⇧F). Strg+F (⌘F) setzt den Fokus in das Suchfeld ohne Marke, also für alle Chats. |
 | Marke | Im Suchfeld der Seitenleiste steht vor dem Text die Marke „in {Chatname}“. Die Rücktaste im leeren Feld oder das ✕ der Marke entfernt sie, dann gilt der Suchtext für alle Chats. Esc leert Feld und Marke. |
-| Liste | Mit Marke zeigt die Seitenleiste nur die Nachrichtentreffer dieses Chats, keine Chatnamen. Die Zeile nennt statt des Chats den Absender (eigene: „Du“) und das Datum, darunter den Ausschnitt. Über der Liste steht die Zahl: „17 Treffer“, „1 Treffer“ oder „Keine Treffer“. |
-| Klick | Der Chat springt zur Nachricht, sie leuchtet auf. Pfeil hoch und runter im Suchfeld gehen durch die Treffer, Enter springt zum gewählten. |
+| Liste | Mit Marke zeigt die Seitenleiste nur die Nachrichtentreffer dieses Chats, keine Chatnamen. Die Zeile zeigt statt des Chats das Bild und den Namen des Absenders (eigene: „Du“) und das Datum, darunter den Ausschnitt. Die Zeile „Ältere Nachrichten werden noch geladen …“ entfällt hier. Über der Liste steht die Zahl: „17 Treffer“, „1 Treffer“ oder „Keine Treffer“. |
+| Klick | Der Chat springt zur Nachricht, sie leuchtet auf. Pfeil hoch und runter im Suchfeld gehen durch die Treffer, Enter springt zum gewählten (ohne Wahl zum neuesten). Ohne Marke gilt Enter dem gewählten Treffer, sonst wie bisher dem ersten Chat. |
 | Hervorhebung | Wie mobil: Solange die Marke dieses Chats gesetzt ist, sind die Suchwörter in den Blasen hinterlegt. |
 | Chatwechsel | Wer mit gesetzter Marke einen anderen Chat öffnet, behält die Trefferliste. Die Marke bleibt beim alten Chat. |
 
@@ -74,8 +74,8 @@ Ein Treffer liegt oft weit zurück. Der Chat lädt dann nicht alles dazwischen, 
 |---|---|
 | Schon geladen | Ist die Nachricht in der Liste, scrollt der Chat zu ihr. |
 | Fenster | Sonst ersetzt `messagesAround(token, id)` die Liste: bis zu 50 Nachrichten davor, die Nachricht, bis zu 50 danach. |
-| Aus der Suche über alle Chats | Der Chat öffnet wie immer mit `openChat` (das startet die Live-Nachrichten), zeigt aber nicht dessen Seite, sondern gleich das Fenster. Das Ende des Chats blitzt dabei nicht auf. |
-| Position | Die Nachricht steht im oberen Drittel des Sichtbereichs. |
+| Aus der Suche über alle Chats | Der Chat öffnet wie immer mit `openChat` (das startet die Live-Nachrichten), zeigt aber nicht dessen Seite, sondern gleich das Fenster. Das Ende des Chats blitzt dabei nicht auf. Die Plattform darf das Fenster zuerst holen und dann den Chat wechseln: Bei einem Fehler bleibt so stehen, was zu sehen war. |
+| Position | Die Nachricht steht im oberen Drittel des Sichtbereichs (Oberkante bei etwa 20 % der Höhe). Der Sprung ist hart, ohne weiches Scrollen über fremde Nachrichten. |
 | Aufleuchten | Ihre Blase ist etwa 1,5 s lang hinterlegt (`searchMark`) und blendet dann aus. |
 | Nachladen | Nach oben wie immer mit `loadOlder(oldestId)`, solange `hasMore`. Nach unten mit `loadNewer(newestId)`, solange `hasNewer`. |
 | Neue Nachrichten | Solange `hasNewer` gilt, hängt die Plattform `messagesAdded` nicht an die Liste (es entstünde eine Lücke). Sie merkt sich die Nachrichten und zählt sie im Knopf „Zum Ende springen“. `messagesUpdated` wirkt auf alles, was in der Liste steht. |
@@ -124,7 +124,7 @@ Ein Antippen des Zitats in einer Blase springt zur zitierten Nachricht, nach den
 - `complete`: Alles Durchsuchbare liegt auf dem Gerät.
 - `chatsDone`, `chatsTotal`: Chats mit geladenem Verlauf und alle Chats (im Chat: 0 oder 1 von 1).
 
-`SearchHit`: `token`, `messageId`, `timestamp`, `roomName`, `actorName`, `isOwn`, `showActor`, `snippet` (Teile mit `text` und `hit`).
+`SearchHit`: `token`, `messageId`, `timestamp`, `roomName`, `actorType`, `actorId`, `actorName`, `isOwn`, `showActor`, `snippet` (Teile mit `text` und `hit`).
 
 `ChatPage` hat neu `hasNewer` und `newestId`. Bei allen bisherigen Aufrufen ist `hasNewer` falsch.
 
@@ -141,7 +141,7 @@ Gegen `talk-demo`, je in Hell und Dunkel.
 5. Suchtext „buro HUPF“: derselbe eine Treffer wie bei „Hüpfburg Büro“.
 6. Suchtext „notiz“: 50 Treffer, beim Scrollen kommen weitere.
 7. Suchtext „karla brandt“: der Kontakt im „Sommerfest“. „volkspark“: der Standort.
-8. Suche im Chat „Hofladen-Archiv“ mit „schlüssel“: Zähler und Pfeile stimmen, die Wörter sind in den Blasen hinterlegt, jeder Sprung landet auf dem Treffer.
+8. Suche im Chat „Hofladen-Archiv“ mit „anhänger“ (rund 130 Treffer): Zähler und Pfeile stimmen, die Wörter sind in den Blasen hinterlegt, jeder Sprung landet auf dem Treffer.
 9. Direkt nach der ersten Anmeldung (Verlauf lädt noch): Die Zeile „Ältere Nachrichten werden noch geladen …“ erscheint und verschwindet, die Treffer des Servers kommen dazu.
 10. Ohne Netz nach dem Laden: Die Suche geht weiter, der Sprung in einen nie geöffneten Teil meldet „Keine Verbindung“.
 11. Neue Nachricht über `POST /demo/incoming`: Sie wird gefunden. Im offenen Chat bearbeitet (`/demo/edit`) und gelöscht (`/demo/delete`): Die Suche zeigt den neuen Text, dann nichts mehr.

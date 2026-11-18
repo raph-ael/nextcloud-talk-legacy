@@ -752,6 +752,8 @@ pub struct SearchHit {
     pub message_id: i64,
     pub timestamp: i64,
     pub room_name: String,
+    pub actor_type: String,
+    pub actor_id: String,
     pub actor_name: String,
     pub is_own: bool,
     /// Show the sender before the snippet ("Du: …", "Jonas: …").
@@ -786,6 +788,8 @@ impl From<core::SearchResults> for SearchResults {
                     message_id: h.message_id,
                     timestamp: h.timestamp,
                     room_name: h.room_name,
+                    actor_type: h.actor_type,
+                    actor_id: h.actor_id,
                     actor_name: h.actor_name,
                     is_own: h.is_own,
                     show_actor: h.show_actor,

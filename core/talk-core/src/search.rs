@@ -40,7 +40,9 @@ const MAX_WORDS: usize = 8;
 const INDEXED_CHARS: usize = 3;
 /// Trigrams of a search handed to the index; more do not narrow it down further.
 const MAX_TRIGRAMS: usize = 24;
-/// Characters of a snippet before its first hit, and its length.
+/// Characters of a snippet before its first hit, and its length. A hit this near the
+/// beginning is in sight anyway (two lines of a list): then nothing is cut off.
+const SNIPPET_NEAR: usize = 40;
 const SNIPPET_LEAD: usize = 24;
 const SNIPPET_CHARS: usize = 160;
 /// Hits asked from the server per request (its limit) and requests per search.
@@ -63,6 +65,9 @@ pub struct SearchHit {
     pub message_id: i64,
     pub timestamp: i64,
     pub room_name: String,
+    /// The sender, as in `MessageView` (for the picture).
+    pub actor_type: String,
+    pub actor_id: String,
     pub actor_name: String,
     pub is_own: bool,
     /// Show the sender before the snippet: own messages ("Du") and messages in groups.
@@ -189,7 +194,7 @@ impl Query {
             }
         }
         let first = marked.iter().position(|m| *m).unwrap_or(0);
-        let mut start = first.saturating_sub(SNIPPET_LEAD);
+        let mut start = if first <= SNIPPET_NEAR { 0 } else { first - SNIPPET_LEAD };
         if start > 0 {
             // Not in the middle of a word, if a space is near.
             if let Some(space) = chars[start..first].iter().position(|c| *c == ' ') {
@@ -801,6 +806,8 @@ impl Engine {
                 extra.push(SearchHit {
                     snippet: q.snippet(&e.text),
                     actor_name: remote_actor(&e.title, room_name, &e.actor_id),
+                    actor_type: e.actor_type,
+                    actor_id: e.actor_id,
                     room_name: room_name.clone(),
                     show_actor: is_own || *is_group,
                     is_own,
@@ -866,6 +873,8 @@ impl Engine {
         Some(SearchHit {
             snippet: q.snippet(&f.text),
             room_name: room_name.clone(),
+            actor_type: f.actor_type,
+            actor_id: f.actor_id,
             actor_name: f.actor,
             show_actor: is_own || *is_group,
             is_own,
