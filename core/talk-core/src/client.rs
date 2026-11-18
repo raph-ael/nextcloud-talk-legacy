@@ -84,6 +84,20 @@ struct OcsBody<T> {
     data: T,
 }
 
+/// A hit of the server's message search.
+#[derive(Debug, Clone)]
+pub struct RemoteHit {
+    pub token: String,
+    pub message_id: i64,
+    pub timestamp: i64,
+    pub actor_type: String,
+    pub actor_id: String,
+    /// "{user}" in a one-to-one chat, else "{user} in {conversation}" (translated).
+    pub title: String,
+    /// The message, cut at the front with "…" when the term comes late in it.
+    pub text: String,
+}
+
 /// Result of a chat poll.
 #[derive(Debug, Clone, Default)]
 pub struct ChatBatch {
@@ -277,6 +291,54 @@ impl TalkClient {
             rb = rb.query(&[("lastKnownMessageId", id)]);
         }
         self.chat_request(rb).await
+    }
+
+    /// The messages around one message: up to `limit` before it, the message itself and
+    /// up to `limit` after it (capability `chat-get-context`). Does not move the read marker.
+    pub async fn message_context(&self, token: &str, message_id: i64, limit: u32) -> Result<ChatBatch> {
+        let rb = self
+            .request(Method::GET, &format!("{SPREED}/v1/chat/{token}/{message_id}/context"))
+            .query(&[("limit", limit.min(100))]);
+        self.chat_request(rb).await
+    }
+
+    /// The server's message search (unified search, provider `talk-message`): messages
+    /// that contain `term` as one sequence of characters, newest first, in all
+    /// conversations or in one. `cursor` is the offset of the page. The server also looks
+    /// into the stored data of shared files, so not every hit contains the term as text.
+    pub async fn search_messages(&self, term: &str, conversation: Option<&str>, cursor: u32, limit: u32) -> Result<Vec<RemoteHit>> {
+        let mut rb = self
+            .request(Method::GET, "/ocs/v2.php/search/providers/talk-message/search")
+            .query(&[("term", term)])
+            .query(&[("limit", limit)]);
+        if cursor > 0 {
+            rb = rb.query(&[("cursor", cursor)]);
+        }
+        if let Some(token) = conversation {
+            rb = rb.query(&[("conversation", token)]);
+        }
+        let (data, _) = self.ocs::<serde_json::Value>(rb).await?;
+        let entries = data.get("entries").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+        Ok(entries
+            .iter()
+            .filter_map(|e| {
+                let text = |v: Option<&serde_json::Value>| match v {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(serde_json::Value::Number(n)) => n.to_string(),
+                    _ => String::new(),
+                };
+                let attr = |k: &str| text(e.get("attributes").and_then(|a| a.get(k)));
+                Some(RemoteHit {
+                    token: Some(attr("conversation")).filter(|t| !t.is_empty())?,
+                    message_id: attr("messageId").parse().ok()?,
+                    timestamp: attr("timestamp").parse().unwrap_or(0),
+                    actor_type: attr("actorType"),
+                    actor_id: attr("actorId"),
+                    title: text(e.get("title")),
+                    text: text(e.get("subline")),
+                })
+            })
+            .collect())
     }
 
     async fn chat_request(&self, rb: RequestBuilder) -> Result<ChatBatch> {

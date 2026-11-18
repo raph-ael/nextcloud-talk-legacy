@@ -1373,3 +1373,158 @@ async fn a_file_of_the_same_name_and_size_is_not_taken_for_ours() {
     engine.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn snippet_text(hit: &talk_core::SearchHit) -> String {
+    hit.snippet.iter().map(|p| if p.hit { format!("[{}]", p.text) } else { p.text.clone() }).collect()
+}
+
+/// docs/search.md: the history of all chats is fetched in the background and searched on
+/// the device; a hit opens the chat at its message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_whole_history_is_searchable() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account.clone(), Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let post = |path: &'static str, form: Vec<(&'static str, String)>| {
+        let url = format!("{server}{path}");
+        async move { assert!(reqwest::Client::new().post(url).form(&form).send().await.unwrap().status().is_success()) }
+    };
+    let total = |query: &str, token: Option<&str>| engine.search_messages(query, token, 50).total;
+    let loaded = || {
+        let s = engine.search_status();
+        s.chats_total > 0 && s.chats_done == s.chats_total
+    };
+
+    // Before the history is there, the server helps out: the old message is found, with
+    // its sender from the title and the word marked.
+    let early = engine.search_messages("Quittenmarmelade", None, 50);
+    assert!(!early.complete && early.hits.is_empty() && early.chats_done < early.chats_total);
+    let early = engine.search_messages_everywhere("Quittenmarmelade", None, 50).await.unwrap();
+    assert_eq!(early.total, 1);
+    assert_eq!(early.hits[0].token, "hofladen");
+    assert!(snippet_text(&early.hits[0]).contains("Die [Quittenmarmelade] ist fertig"));
+    assert!(!early.hits[0].actor_name.is_empty() && !early.hits[0].actor_name.contains("Hofladen"));
+    // The last message of every chat is searchable from the first look at the list.
+    assert_eq!(total("neuen Ort", Some("hofladen")), 1);
+
+    for _ in 0..300 {
+        if loaded() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let status = engine.search_status();
+    assert!(loaded(), "the history of all chats: {status:?}");
+    assert!(status.messages > 1200 && status.chats_capped == 0);
+
+    // One hit far back in the archived chat, found without the server.
+    let found = engine.search_messages("quittenmarmelade", None, 50);
+    assert!(found.complete && found.total == 1 && found.chats_done == found.chats_total);
+    let hit = found.hits[0].clone();
+    assert_eq!((hit.token.as_str(), hit.room_name.as_str()), ("hofladen", "Hofladen-Archiv"));
+    assert!(hit.show_actor && !hit.is_own && !hit.actor_name.is_empty());
+    assert!(snippet_text(&hit).starts_with("Die [Quittenmarmelade] ist fertig"));
+    assert_eq!(engine.search_messages_everywhere("quittenmarmelade", None, 50).await.unwrap().total, 1);
+    // Parts of words in any order, without accents and capitals; in one chat or in all.
+    assert_eq!(total("buro HUPFBURG", None), 1);
+    assert_eq!(total("hüpfburg", Some("hofladen")), 1);
+    assert_eq!(total("hüpfburg", Some("garten")), 0);
+    // A chat counts all its matches; all chats give the newest and say that there are more.
+    assert!(total("notiz", Some("hofladen")) >= 1200);
+    let many = engine.search_messages("notiz", None, 50);
+    assert!(many.hits.len() == 50 && many.total == 50 && many.more);
+    assert!(many.hits.windows(2).all(|w| w[0].timestamp >= w[1].timestamp), "newest first");
+    assert!(!engine.search_messages("quittenmarmelade", None, 50).more);
+    assert!(total("ie", Some("sommerfest")) >= 2, "two characters");
+    assert_eq!(total("x", None), 0);
+    // A contact by its name, a place by its name, a picture by its file name.
+    assert_eq!(total("karla brandt", Some("sommerfest")), 1);
+    assert_eq!(total("volkspark", Some("sommerfest")), 1);
+    let garden = engine.open_chat("garten").await.unwrap();
+    let picture = garden.messages.iter().find_map(|m| m.attachment.clone()).unwrap();
+    assert!(total(&picture.name, Some("garten")) >= 1);
+    engine.close_chat("garten");
+    // A chat's name finds the archived chat too, in its own section.
+    let sections = engine.room_sections("hofladen", None);
+    assert_eq!(sections.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["archived"]);
+    assert!(engine.room_sections("", None).iter().all(|s| s.rooms.iter().all(|r| r.token != "hofladen")));
+
+    // Opening the chat at the hit: a window from the server (the chat was never open),
+    // 36 messages before it, the message, 50 after it.
+    let page = engine.messages_around("hofladen", hit.message_id).await.unwrap();
+    assert_eq!(page.messages.iter().position(|m| m.id == hit.message_id), Some(36));
+    assert_eq!(page.messages.len(), 87);
+    assert!(page.has_newer && !page.has_more);
+    // Paging on to the end of the chat.
+    let (mut newest, mut seen, mut last) = (page.newest_id.unwrap(), page.messages.len(), String::new());
+    for _ in 0..40 {
+        let next = engine.load_newer("hofladen", newest).await.unwrap();
+        assert!(next.messages.iter().all(|m| m.id > newest));
+        seen += next.messages.len();
+        if let Some(m) = next.messages.last() {
+            last = m.text.clone();
+        }
+        newest = next.newest_id.unwrap();
+        if !next.has_newer {
+            break;
+        }
+    }
+    assert_eq!(seen, 1202);
+    assert!(last.starts_with("Danke für die Jahre"));
+    // In the middle both directions go on.
+    let middle = engine.search_messages("hüpfburg", Some("hofladen"), 1).hits[0].message_id;
+    let page = engine.messages_around("hofladen", middle).await.unwrap();
+    assert!(page.has_more && page.has_newer && page.messages.len() == 101);
+    let older = engine.load_older("hofladen", page.oldest_id.unwrap()).await.unwrap();
+    assert!(older.messages.len() == 50 && older.messages.iter().all(|m| m.id < page.oldest_id.unwrap()));
+    // An open chat has its end in the cache: the window comes from there.
+    let end = engine.open_chat("hofladen").await.unwrap();
+    let near = end.messages[end.messages.len() - 10].id;
+    let page = engine.messages_around("hofladen", near).await.unwrap();
+    assert!(!page.has_newer && page.has_more);
+    assert_eq!(page.messages.last().unwrap().id, end.messages.last().unwrap().id);
+    assert_eq!(page.messages.iter().filter(|m| m.id > near).count(), 9);
+    let after = engine.load_newer("hofladen", near).await.unwrap();
+    assert!(!after.has_newer && after.messages.len() == 9);
+    assert!(matches!(engine.messages_around("hofladen", 9_999_999).await, Err(talk_core::Error::NotFound)));
+    engine.close_chat("hofladen");
+
+    // A new message in an open chat is found at once; an edit and a deletion reach the
+    // index with the live update.
+    engine.open_chat("sommerfest").await.unwrap();
+    assert_eq!(total("bierbänke", None), 1);
+    post("/demo/incoming", vec![("token", "sommerfest".into()), ("text", "Wer bringt die Lampions mit?".into())]).await;
+    until("the new message is searchable", || total("lampions", Some("sommerfest")) == 1).await;
+    let lanterns = engine.search_messages("lampions", None, 1).hits[0].message_id;
+    post("/demo/edit", vec![("token", "sommerfest".into()), ("id", lanterns.to_string()), ("text", "Wer bringt die Girlanden mit?".into())]).await;
+    until("the edit is searchable", || total("girlanden", None) == 1 && total("lampions", None) == 0).await;
+    post("/demo/delete", vec![("token", "sommerfest".into()), ("id", lanterns.to_string())]).await;
+    until("the deleted message is gone", || total("girlanden", None) == 0).await;
+    engine.close_chat("sommerfest");
+
+    // A chat that is not open: its new message comes with the chat list, an edit with
+    // the message after it.
+    post("/demo/incoming", vec![("token", "hofladen".into()), ("text", "Erste Fassung zum Umzug".into())]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    until("the message of the closed chat", || total("erste fassung umzug", None) == 1).await;
+    let moving = engine.search_messages("erste fassung umzug", None, 1).hits[0].message_id;
+    post("/demo/edit", vec![("token", "hofladen".into()), ("id", moving.to_string()), ("text", "Zweite Fassung zum Umzug".into())]).await;
+    post("/demo/incoming", vec![("token", "hofladen".into()), ("text", "Und noch ein Nachtrag".into())]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    until("the edit in the closed chat", || total("zweite fassung", None) == 1 && total("erste fassung", None) == 0).await;
+    assert_eq!(total("nachtrag", Some("hofladen")), 1);
+
+    // After a restart everything is there at once, without a request.
+    engine.shutdown();
+    drop(engine);
+    let again = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    let found = again.search_messages("quittenmarmelade", None, 50);
+    assert!(found.total == 1 && found.complete);
+    // Signing out forgets it.
+    again.logout().await.unwrap();
+    until("the index is empty", || again.search_status().messages == 0).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}

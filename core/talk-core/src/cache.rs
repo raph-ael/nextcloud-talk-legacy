@@ -166,6 +166,19 @@ impl Cache {
         })
     }
 
+    /// Up to `limit` cached messages above `after`, ascending, and whether more cached
+    /// ones follow them.
+    pub fn messages_after(&self, token: &str, after: i64, limit: u32) -> (Vec<ChatMessage>, bool) {
+        self.read(|c| {
+            let mut st = c.prepare_cached("SELECT json FROM messages WHERE token = ?1 AND id > ?2 ORDER BY id LIMIT ?3")?;
+            let rows = st.query_map(params![token, after, limit as i64 + 1], |r| r.get::<_, String>(0))?;
+            let mut out: Vec<ChatMessage> = rows.filter_map(|j| serde_json::from_str(&j.ok()?).ok()).collect();
+            let more = out.len() > limit as usize;
+            out.truncate(limit as usize);
+            Ok((out, more))
+        })
+    }
+
     /// One cached message (`None` when it is not cached).
     pub fn message(&self, token: &str, id: i64) -> Option<ChatMessage> {
         self.read(|c| {

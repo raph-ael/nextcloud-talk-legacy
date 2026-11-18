@@ -20,6 +20,8 @@ sha2 = "0.11"
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = { version = "0.3", default-features = false }
 rusqlite = { version = "0.41", features = ["bundled"] }
+# Search: folding accents away ("Hüpfburg" is found by "hupf").
+unicode-normalization = "0.1"
 # Push: per-device RSA key (Nextcloud push v2), decrypting notification subjects.
 rsa = "0.9"
 sha1 = "0.10"

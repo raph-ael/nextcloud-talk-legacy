@@ -18,6 +18,8 @@ pub const LOCAL_OTHER: &str = "other";
 const KIND_FAVORITES: &str = "favorites";
 const KIND_OTHER: &str = "other";
 const KIND_CUSTOM: &str = "custom";
+/// The section of archived chats in a search; no category, it cannot be collapsed.
+const KIND_ARCHIVED: &str = "archived";
 
 /// What the engine knows about categories.
 #[derive(Debug, Default)]
@@ -58,7 +60,8 @@ impl Categories {
 pub struct SectionView {
     /// Pass to `toggle_section`; also part of the row keys (a chat may be in several).
     pub id: String,
-    /// `favorites`, `custom` or `other`.
+    /// `favorites`, `custom` or `other`; in a search also `archived` (archived chats
+    /// whose name matches; it has no category and is never collapsed).
     pub kind: String,
     /// "Favoriten", the category name or "Chats". Empty when it is the only section:
     /// then show no header (and it is never collapsed).
@@ -341,12 +344,13 @@ pub(crate) fn build_sections(
     query: &str,
     active_token: Option<&str>,
 ) -> Vec<SectionView> {
-    let q = query.trim().to_lowercase();
+    // Like the message search: case and accents do not count (docs/search.md).
+    let q = crate::search::fold(query.trim());
     let searching = !q.is_empty();
-    let rooms: Vec<RoomView> = rooms
+    let (archived, rooms): (Vec<RoomView>, Vec<RoomView>) = rooms
         .into_iter()
-        .filter(|r| !r.is_archived && (!searching || r.name.to_lowercase().contains(&q)))
-        .collect();
+        .filter(|r| if searching { crate::search::fold(&r.name).contains(&q) } else { !r.is_archived })
+        .partition(|r| r.is_archived);
 
     let local;
     let tags = if sorted_tags.iter().any(|t| t.kind == KIND_FAVORITES) && sorted_tags.iter().any(|t| t.kind == KIND_OTHER) {
@@ -390,6 +394,17 @@ pub(crate) fn build_sections(
     if let [only] = sections.as_mut_slice() {
         only.title.clear();
         only.collapsed = false;
+    }
+    // Archived chats are only in the list while their name is searched for.
+    if !archived.is_empty() {
+        sections.push(SectionView {
+            id: KIND_ARCHIVED.into(),
+            kind: KIND_ARCHIVED.into(),
+            title: "Archiviert".into(),
+            collapsed: false,
+            total: archived.len() as u32,
+            rooms: archived,
+        });
     }
     for s in &mut sections {
         if s.collapsed {
@@ -546,6 +561,10 @@ mod tests {
         let mut archived = room("z", false, &[]);
         archived.is_archived = true;
         let rooms = vec![room("a", true, &[]), room("b", false, &["3"]), archived];
+        // A search finds the archived chat too, under its own heading, and ignores case.
+        let found = build_sections(rooms.clone(), &[], &collapsed, "Z", None);
+        assert_eq!(found.iter().map(|s| (s.kind.as_str(), s.title.as_str())).collect::<Vec<_>>(), [("archived", "Archiviert")]);
+        assert_eq!(found[0].rooms[0].token, "z");
         let s = build_sections(rooms, &[], &collapsed, "", None);
         assert_eq!(s.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [LOCAL_FAVORITES, LOCAL_OTHER]);
         assert_eq!(s[1].title, "Chats");

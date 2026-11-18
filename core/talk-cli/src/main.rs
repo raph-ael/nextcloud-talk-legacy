@@ -332,6 +332,22 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 10)]
         lines: usize,
     },
+    /// Message search on the device (docs/search.md), timed; without a text only the
+    /// state of the index
+    Search {
+        text: Option<String>,
+        /// Search in this conversation only
+        #[arg(short, long)]
+        token: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: u32,
+        /// Fetch the history of all conversations first (the first run takes a while)
+        #[arg(long)]
+        sync: bool,
+        /// Add the hits of the server's search
+        #[arg(long)]
+        remote: bool,
+    },
 }
 
 /// Descriptors we inherited (e.g. the bot-lock `flock`) stay ours: children such as the
@@ -525,9 +541,12 @@ async fn main() -> Result<()> {
     if let Cmd::Cache { token, lines } = &cli.cmd {
         return run_cache(&cli, client, token.as_deref(), *lines).await;
     }
+    if let Cmd::Search { text, token, limit, sync, remote } = &cli.cmd {
+        return run_search(&cli, client, text.as_deref(), token.as_deref(), *limit, *sync, *remote).await;
+    }
 
     match cli.cmd {
-        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } | Cmd::Call { .. } | Cmd::PushTest { .. }
+        Cmd::Login { .. } | Cmd::Enqueue { .. } | Cmd::OutboxRun | Cmd::Cache { .. } | Cmd::Search { .. } | Cmd::Call { .. } | Cmd::PushTest { .. }
         | Cmd::Voice { .. }
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
@@ -1015,6 +1034,63 @@ async fn run_cache(cli: &Cli, client: TalkClient, token: Option<&str>, lines: us
     let page = engine.open_chat(token).await?;
     eprintln!("open_chat (Delta-Sync) in {:?}", t.elapsed());
     show("Server", &page);
+    engine.shutdown();
+    Ok(())
+}
+
+async fn run_search(
+    cli: &Cli,
+    client: TalkClient,
+    text: Option<&str>,
+    token: Option<&str>,
+    limit: u32,
+    sync: bool,
+    remote: bool,
+) -> Result<()> {
+    let engine = Engine::new(client, Arc::new(talk_core_null_sink()), Some(data_dir(cli)?));
+    if sync || remote {
+        engine.start().await?;
+    }
+    if sync {
+        let t = Instant::now();
+        loop {
+            let s = engine.search_status();
+            if s.chats_total > 0 && s.chats_done == s.chats_total {
+                break;
+            }
+            if t.elapsed() > Duration::from_secs(900) {
+                bail!("Verlauf nach 15 Minuten nicht geladen ({} von {} Chats)", s.chats_done, s.chats_total);
+            }
+            eprintln!("Verlauf: {} von {} Chats, {} Nachrichten …", s.chats_done, s.chats_total, s.messages);
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        eprintln!("Verlauf geladen in {:?}", t.elapsed());
+    }
+    let s = engine.search_status();
+    eprintln!(
+        "Index: {} Nachrichten, {} von {} Chats geladen, {} über der Grenze",
+        s.messages, s.chats_done, s.chats_total, s.chats_capped
+    );
+    let Some(text) = text else {
+        engine.shutdown();
+        return Ok(());
+    };
+    let t = Instant::now();
+    let local = engine.search_messages(text, token, limit);
+    eprintln!("{} Treffer auf dem Gerät in {:?} (vollständig: {})", local.total, t.elapsed(), local.complete);
+    let found = if remote {
+        let t = Instant::now();
+        let all = engine.search_messages_everywhere(text, token, limit).await?;
+        eprintln!("{} Treffer mit dem Server in {:?}", all.total, t.elapsed());
+        all
+    } else {
+        local
+    };
+    for h in &found.hits {
+        let snippet: String = h.snippet.iter().map(|p| if p.hit { format!("»{}«", p.text) } else { p.text.clone() }).collect();
+        let sender = if h.is_own { "Du" } else { h.actor_name.as_str() };
+        println!("  [{} {}] {} · {}: {}", h.token, h.message_id, h.room_name, sender, snippet);
+    }
     engine.shutdown();
     Ok(())
 }

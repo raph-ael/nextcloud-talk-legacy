@@ -21,6 +21,7 @@ sha2.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
 rusqlite.workspace = true
+unicode-normalization.workspace = true
 tokio-tungstenite.workspace = true
 rsa.workspace = true
 sha1.workspace = true

@@ -42,7 +42,9 @@ Die Liste zeigt **Favoriten | eigene Kategorien | Chats** in der Reihenfolge vom
   - Chats mit laufendem Anruf.
 - So geht nichts unter.
 
-**Suche:** `query` filtert nach Namen. Während der Suche ist nichts eingeklappt.
+**Suche:** `query` filtert nach Namen, ohne Rücksicht auf Groß- und Kleinschreibung und Akzente. Während der Suche ist nichts eingeklappt.
+- Passt der Name eines archivierten Chats, steht er in einem eigenen Abschnitt „Archiviert“ (`kind: "archived"`) am Ende. Er hat keine Kategorie dahinter: kein Einklappen, kein Menü.
+- Unter den Chats stehen die Treffer in den Nachrichten (docs/search.md).
 
 **Nur ein Abschnitt:**
 - Gibt es nur einen Abschnitt (zum Beispiel nur „Chats“), ist `title` leer.

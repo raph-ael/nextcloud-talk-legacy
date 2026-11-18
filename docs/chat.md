@@ -30,6 +30,8 @@ Ein runder, schwebender Knopf unten rechts in der Nachrichtenliste. Er erscheint
 - Bezeichnung: „Zum Ende springen“, mit Zähler „Zum Ende springen, 3 neue Nachrichten“ (bei einer: „1 neue Nachricht“).
 - Am Desktop gibt es zusätzlich `title` als Tooltip.
 
+**Fenster in den Verlauf:** Öffnet der Chat an einer alten Nachricht (Suchtreffer, Zitat), ist der Knopf immer da und führt zu den neuesten Nachrichten zurück (docs/search.md „Chat an einer Nachricht öffnen“).
+
 **Nicht im Umfang:** ein eigener Knopf für @-Erwähnungen. Zur ersten ungelesenen Nachricht springt der Chat schon beim Öffnen (siehe „Ungelesen-Linie“).
 
 ## Datum und Ungelesen-Linie (wie Signal)

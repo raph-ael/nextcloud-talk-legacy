@@ -173,6 +173,20 @@
         { "at": "-12 18:31", "from": "jonas", "file": { "asset": "media/kontakt.vcf", "name": "Karla Brandt.vcf" } },
         { "at": "-10 12:00", "from": "lena", "text": "Danke euch allen, das war ein toller Tag!", "reactions": { "❤️": ["mira", "jonas", "paul", "tobias", "sophie"] } }
       ]
+    },
+    {
+      "token": "hofladen",
+      "type": "group",
+      "name": "Hofladen-Archiv",
+      "description": "Lange Vorgeschichte, archiviert: für die Suche und den Sprung zu alten Nachrichten.",
+      "owner": "jonas",
+      "members": ["jonas", "mira", "clara", "emil"],
+      "archived": true,
+      "fill": { "count": 1200, "days": 420, "until": 40 },
+      "messages": [
+        { "at": "-35 09:12", "from": "jonas", "text": "Der Hofladen zieht um, die neue Adresse folgt." },
+        { "at": "-35 09:20", "from": "clara", "text": "Danke für die Jahre, wir sehen uns am neuen Ort!" }
+      ]
     }
   ]
 }

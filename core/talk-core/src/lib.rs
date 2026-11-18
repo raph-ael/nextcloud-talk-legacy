@@ -7,6 +7,7 @@
 //! - [`engine`]: sync engine emitting UI-ready events (shared by all platforms)
 //!
 //! - `cache`: SQLite cache of rooms and messages, avatar/preview files
+//! - [`search`]: full-text index of the whole history, filled in the background
 //! - [`voice`]: voice messages (MP3 recording, drafts, downloads, waveforms)
 //! - [`call`]: audio calls over the HPB (signaling, call state machine; media via [`MediaEngine`])
 //!
@@ -30,6 +31,7 @@ pub mod notices;
 pub mod outbox;
 pub mod push;
 mod push_l10n;
+pub mod search;
 pub mod voice;
 
 pub use accounts::{AccountIdentity, BadgeView, account_key, resolve_account, revoke_app_password, server_key};
@@ -53,6 +55,7 @@ pub use groups::{GroupOp, MemberView, UserView, group_error_text, square_photo};
 pub use notices::MessageNotice;
 pub use push::{ChatPushParts, PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};
+pub use search::{SearchHit, SearchResults, SearchStatus, SnippetPart};
 pub use voice::{AudioInfo, RecordingStatus, VoiceDraft, VoiceRecorder};
 pub use login::{LoginFlow, normalize_server};
 pub use models::{ChatMessage, ConversationTag, FileAttachment, GeoLocation, IceServer, LoginCredentials, Participant, Reaction, Reactions, Room, RoomType, SignalingSettings};

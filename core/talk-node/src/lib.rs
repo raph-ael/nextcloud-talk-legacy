@@ -312,6 +312,37 @@ impl TalkSession {
         json(&self.engine.load_older(&token, before_id).await.map_err(to_napi)?)
     }
 
+    /// `ChatPage`: a window into the history around a message (search hit, quoted
+    /// message). Page on with `loadOlder` and `loadNewer`; `cachedChat` leads back to the end.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn messages_around(&self, token: String, message_id: i64) -> Result<Value> {
+        json(&self.engine.messages_around(&token, message_id).await.map_err(to_napi)?)
+    }
+
+    /// `ChatPage`: messages after `afterId` (`ChatPage.newestId`) of such a window.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn load_newer(&self, token: String, after_id: i64) -> Result<Value> {
+        json(&self.engine.load_newer(&token, after_id).await.map_err(to_napi)?)
+    }
+
+    /// `SearchResults`: the messages on the device that match, in one chat or (`token`
+    /// null) in all (docs/search.md). Answers within milliseconds.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn search_messages(&self, query: String, token: Option<String>, limit: u32) -> Result<Value> {
+        let engine = self.engine.clone();
+        let found = tokio::task::spawn_blocking(move || engine.search_messages(&query, token.as_deref(), limit))
+            .await
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        json(&found)
+    }
+
+    /// `SearchResults` with the server's hits added. Only needed while `complete` is
+    /// false; call it when the user paused typing (300 ms).
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn search_messages_everywhere(&self, query: String, token: Option<String>, limit: u32) -> Result<Value> {
+        json(&self.engine.search_messages_everywhere(&query, token.as_deref(), limit).await.map_err(to_napi)?)
+    }
+
     #[napi(ts_return_type = "Promise<any>")]
     pub async fn send(
         &self,

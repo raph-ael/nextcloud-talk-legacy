@@ -60,7 +60,8 @@ pub async fn capabilities() -> Response {
                     "chat-unread", "chat-read-last", "voice-message-sharing", "markdown-messages",
                     "rich-object-sharing", "silent-send", "read-only-rooms", "notification-levels",
                     "mention-flag", "last-room-activity", "avatar", "conversation-creation-all",
-                    "delete-messages", "delete-messages-unlimited", "edit-messages", "edit-messages-note-to-self"
+                    "delete-messages", "delete-messages-unlimited", "edit-messages", "edit-messages-note-to-self",
+                    "chat-get-context", "unified-search"
                 ],
                 "config": {
                     "attachments": { "allowed": true, "folder": "/Talk" },
@@ -535,6 +536,82 @@ pub async fn chat_get(AxState(app): S, Path(token): Path<String>, p: Params) -> 
         let wait = left.min(until.saturating_duration_since(Instant::now()) + Duration::from_millis(10));
         let _ = tokio::time::timeout(wait, rx.changed()).await;
     }
+}
+
+/// The messages around one message (`chat-get-context`): `limit` before it, the message,
+/// `limit` after it. Leaves the read marker alone.
+pub async fn chat_context(AxState(app): S, Path((token, id)): Path<(String, i64)>, p: Params) -> Response {
+    let st = app.st.lock().unwrap();
+    let limit = p.i64("limit").unwrap_or(50).clamp(0, 100) as usize;
+    let Some(room) = st.room(&token) else { return not_found() };
+    if room.msg(id).is_none() {
+        return not_found();
+    }
+    let mut picked: Vec<&crate::state::Msg> = room.messages.iter().filter(|m| m.id <= id).rev().take(limit + 1).collect();
+    picked.extend(room.messages.iter().filter(|m| m.id > id).take(limit));
+    let data: Vec<Value> = picked.iter().map(|m| st.msg_json(room, m, true)).collect();
+    ocs_with_headers(StatusCode::OK, Value::Array(data), &chat_headers(picked.last().map(|m| m.id), room.common_read()))
+}
+
+/// Unified search, provider `talk-message`: messages that contain `term`, newest first,
+/// in all conversations or in the one of the filter `conversation`. Like Talk it looks
+/// at the stored message (not at file names), takes the term as one sequence of
+/// characters and pages by offset (`cursor`).
+pub async fn search_messages(AxState(app): S, p: Params) -> Response {
+    let st = app.st.lock().unwrap();
+    let term = p.str("term").unwrap_or_default().to_lowercase();
+    if term.is_empty() {
+        return bad_request("No valid filters provided");
+    }
+    let limit = p.i64("limit").unwrap_or(5).clamp(1, 25) as usize;
+    let offset = p.i64("cursor").unwrap_or(0).max(0) as usize;
+    let conversation = p.str("conversation");
+    let mut found: Vec<(&Room, &crate::state::Msg, String)> = Vec::new();
+    for room in st.rooms.iter().filter(|r| r.is_member(&st.me) && conversation.as_ref().is_none_or(|c| *c == r.token)) {
+        for m in room.messages.iter().filter(|m| m.system.is_empty() && m.deleted_by.is_none()) {
+            let mut text = m.text.clone();
+            for (key, param) in &m.params {
+                let name = param.get("name").and_then(Value::as_str).unwrap_or_default();
+                let shown = if param.get("type").and_then(Value::as_str) == Some("user") { format!("@{name}") } else { name.to_string() };
+                text = text.replace(&format!("{{{key}}}"), &shown);
+            }
+            if m.text.to_lowercase().contains(&term) || text.to_lowercase().contains(&term) {
+                found.push((room, m, text));
+            }
+        }
+    }
+    found.sort_by(|a, b| b.1.ts.cmp(&a.1.ts).then(b.1.id.cmp(&a.1.id)));
+    let entries: Vec<Value> = found
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(room, m, text)| {
+            let chars: Vec<char> = text.chars().collect();
+            let lower = text.to_lowercase();
+            let at = lower.find(&term).map_or(0, |b| lower[..b].chars().count()).min(chars.len());
+            let subline = if at > 30 && chars.len() > 40 { format!("…{}", chars[at - 10..].iter().collect::<String>()) } else { text };
+            let title = match room.kind {
+                1 => st.name_of(&m.actor),
+                _ => format!("{} in {}", st.name_of(&m.actor), st.room_json(room)["displayName"].as_str().unwrap_or_default()),
+            };
+            json!({
+                "thumbnailUrl": "",
+                "title": title,
+                "subline": subline,
+                "resourceUrl": format!("/call/{}#message_{}", room.token, m.id),
+                "icon": "icon-talk",
+                "rounded": true,
+                "attributes": {
+                    "conversation": room.token,
+                    "messageId": m.id,
+                    "actorType": "users",
+                    "actorId": m.actor,
+                    "timestamp": m.ts.to_string(),
+                },
+            })
+        })
+        .collect();
+    ocs(json!({ "name": "Messages", "isPaginated": true, "entries": entries, "cursor": offset + limit }))
 }
 
 pub async fn chat_post(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {

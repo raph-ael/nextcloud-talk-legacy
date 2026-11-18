@@ -731,6 +731,74 @@ pub struct ChatPage {
     pub last_common_read: Option<i64>,
     /// Replace the shown messages instead of merging (the cached copy was outdated).
     pub reset: bool,
+    /// Newer messages exist above this page: a window into the history
+    /// (`messages_around`, `load_newer`; docs/search.md).
+    pub has_newer: bool,
+    /// Pass to `load_newer`.
+    pub newest_id: Option<i64>,
+}
+
+/// A piece of a search snippet; `hit` marks a search word.
+#[derive(uniffi::Record)]
+pub struct SnippetPart {
+    pub text: String,
+    pub hit: bool,
+}
+
+/// A message that matches the search (docs/search.md).
+#[derive(uniffi::Record)]
+pub struct SearchHit {
+    pub token: String,
+    pub message_id: i64,
+    pub timestamp: i64,
+    pub room_name: String,
+    pub actor_name: String,
+    pub is_own: bool,
+    /// Show the sender before the snippet ("Du: …", "Jonas: …").
+    pub show_actor: bool,
+    pub snippet: Vec<SnippetPart>,
+}
+
+#[derive(uniffi::Record)]
+pub struct SearchResults {
+    /// Newest first.
+    pub hits: Vec<SearchHit>,
+    /// In one chat: all matches, also beyond `hits` ("3 von 17"). In all chats: as many
+    /// as `hits`.
+    pub total: u32,
+    /// There are more matches than `hits`: ask again with a higher limit.
+    pub more: bool,
+    /// Everything is on the device: no need for `search_messages_everywhere`.
+    pub complete: bool,
+    /// While they differ, the history is still being fetched.
+    pub chats_done: u32,
+    pub chats_total: u32,
+}
+
+impl From<core::SearchResults> for SearchResults {
+    fn from(r: core::SearchResults) -> Self {
+        Self {
+            hits: r
+                .hits
+                .into_iter()
+                .map(|h| SearchHit {
+                    token: h.token,
+                    message_id: h.message_id,
+                    timestamp: h.timestamp,
+                    room_name: h.room_name,
+                    actor_name: h.actor_name,
+                    is_own: h.is_own,
+                    show_actor: h.show_actor,
+                    snippet: h.snippet.into_iter().map(|p| SnippetPart { text: p.text, hit: p.hit }).collect(),
+                })
+                .collect(),
+            total: r.total,
+            more: r.more,
+            complete: r.complete,
+            chats_done: r.chats_done,
+            chats_total: r.chats_total,
+        }
+    }
 }
 
 impl From<core::ChatPage> for ChatPage {
@@ -741,6 +809,8 @@ impl From<core::ChatPage> for ChatPage {
             oldest_id: p.oldest_id,
             last_common_read: p.last_common_read,
             reset: p.reset,
+            has_newer: p.has_newer,
+            newest_id: p.newest_id,
         }
     }
 }
@@ -1032,6 +1102,34 @@ impl TalkSession {
 
     pub async fn load_older(&self, token: String, before_id: i64) -> Result<ChatPage, CoreError> {
         Ok(self.engine.load_older(&token, before_id).await?.into())
+    }
+
+    /// A window into the history around a message (search hit, quoted message). Page on
+    /// with `load_older` and `load_newer`; `cached_chat` leads back to the end.
+    pub async fn messages_around(&self, token: String, message_id: i64) -> Result<ChatPage, CoreError> {
+        Ok(self.engine.messages_around(&token, message_id).await?.into())
+    }
+
+    /// Messages after `after_id` (`ChatPage.newest_id`) of a window into the history.
+    pub async fn load_newer(&self, token: String, after_id: i64) -> Result<ChatPage, CoreError> {
+        Ok(self.engine.load_newer(&token, after_id).await?.into())
+    }
+
+    /// Searches the messages on the device, in one chat or (`token` null) in all. Answers
+    /// within milliseconds, but reads a database: not on the main thread.
+    pub fn search_messages(&self, query: String, token: Option<String>, limit: u32) -> SearchResults {
+        self.engine.search_messages(&query, token.as_deref(), limit).into()
+    }
+
+    /// The same with the server's hits added. Only needed while `complete` is false; call
+    /// it when the user paused typing (300 ms).
+    pub async fn search_messages_everywhere(
+        &self,
+        query: String,
+        token: Option<String>,
+        limit: u32,
+    ) -> Result<SearchResults, CoreError> {
+        Ok(self.engine.search_messages_everywhere(&query, token.as_deref(), limit).await?.into())
     }
 
     pub async fn send(

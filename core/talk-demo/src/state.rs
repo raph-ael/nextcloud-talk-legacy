@@ -253,7 +253,47 @@ struct RoomFx {
     notify: u8,
     #[serde(default)]
     unread: usize,
+    /// Out of the chat list; a search still finds it (docs/search.md).
+    #[serde(default)]
+    archived: bool,
+    /// A long invented history before `messages`, for search and jumping far back.
+    #[serde(default)]
+    fill: Option<FillFx>,
     messages: Vec<MsgFx>,
+}
+
+#[derive(Deserialize)]
+struct FillFx {
+    /// How many messages.
+    count: usize,
+    /// They begin this many days ago and end `until` days ago.
+    days: i64,
+    until: i64,
+}
+
+/// Invented small talk of a farm shop. Every message has its number ("Notiz 37"), and a
+/// few stand out so that a search finds exactly one.
+fn filler(n: usize) -> String {
+    const WHO: [&str; 8] = ["Der Hofladen", "Karla", "Die Lieferung", "Der Kühlwagen", "Das Gemüse", "Die Kasse", "Herr Albers", "Die Bäckerei"];
+    const DOES: [&str; 8] = ["kommt", "braucht Hilfe", "meldet sich", "ist fertig", "fehlt noch", "wartet", "öffnet", "schließt"];
+    const WHEN: [&str; 7] = ["am Montag", "am Dienstag", "am Mittwoch", "am Donnerstag", "am Freitag", "am Samstag", "am Sonntag"];
+    const WHAT: [&str; 9] = [
+        "mit den Äpfeln",
+        "wegen der Kisten",
+        "für den Markt",
+        "nach der Ernte",
+        "vor acht Uhr",
+        "mit frischem Brot",
+        "wegen der Abrechnung",
+        "für die Bestellung",
+        "mit dem Anhänger",
+    ];
+    match n + 1 {
+        37 => "Die Quittenmarmelade ist fertig, 24 Gläser stehen im Regal. (Notiz 37)".into(),
+        412 => "Der Schlüssel für die Hüpfburg liegt bei Karla im Büro. (Notiz 412)".into(),
+        905 => "Bitte die Rhabarberschorle nachbestellen, sie ist fast alle. (Notiz 905)".into(),
+        number => format!("{} {} {} {}. (Notiz {number})", WHO[n % 8], DOES[(n / 8) % 8], WHEN[(n / 3) % 7], WHAT[(n / 5) % 9]),
+    }
 }
 
 #[derive(Deserialize)]
@@ -484,7 +524,7 @@ impl State {
             description: fx.description.clone(),
             members,
             favorite: fx.favorite,
-            archived: false,
+            archived: fx.archived,
             notification_level: fx.notify,
             tag_ids: categories
                 .iter()
@@ -504,6 +544,18 @@ impl State {
 
         let mut keys: HashMap<String, i64> = HashMap::new();
         let mut prev_ts = 0;
+        if let Some(fill) = &fx.fill {
+            let (from, to) = (start - fill.days * 86_400, start - fill.until * 86_400);
+            let step = ((to - from) / fill.count.max(1) as i64).max(1);
+            for n in 0..fill.count {
+                let mut msg = self.new_msg(&room.members[n % room.members.len()].person.clone(), filler(n));
+                msg.id = self.next_msg;
+                msg.ts = from + n as i64 * step;
+                self.next_msg += 1;
+                prev_ts = msg.ts;
+                room.messages.push(msg);
+            }
+        }
         for m in fx.messages {
             let actor = self.person(&m.from).ok_or_else(|| format!("unbekannter Absender {}", m.from))?.id.clone();
             if !room.is_member(&actor) {

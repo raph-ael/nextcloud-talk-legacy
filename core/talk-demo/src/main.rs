@@ -93,6 +93,8 @@ pub fn router(app: App) -> Router {
         .route(&sp("/v1/chat/{token}/read"), post(api::read_marker).delete(api::unread_marker))
         .route(&sp("/v1/chat/{token}/share"), post(api::chat_share))
         .route(&sp("/v1/chat/{token}/{id}"), put(api::chat_edit).delete(api::chat_delete))
+        .route(&sp("/v1/chat/{token}/{id}/context"), get(api::chat_context))
+        .route("/ocs/v2.php/search/providers/talk-message/search", get(api::search_messages))
         .route(
             &sp("/v1/reaction/{token}/{id}"),
             get(api::reactions_get).post(api::reaction_add).delete(api::reaction_remove),

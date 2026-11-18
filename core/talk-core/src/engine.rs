@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use crate::cache::Cache;
 use crate::call::{CallManager, CallView, MediaEngine, MediaReport, RecordingNotice, Recordings, RoomInfo};
 use crate::outbox::{Outbox, PendingMessage};
+use crate::search::Index;
 use crate::voice::VoiceStore;
 
 use crate::client::TalkClient;
@@ -312,6 +313,11 @@ pub struct ChatPage {
     /// The chat changed too much since the cached copy: replace what is shown instead of
     /// merging (only from `open_chat`).
     pub reset: bool,
+    /// Newer messages exist above this page: it is a window into the history
+    /// (`messages_around`, `load_newer`; docs/search.md „Chat an einer Nachricht öffnen“).
+    pub has_newer: bool,
+    /// Pass to `load_newer`; like `oldest_id` it counts hidden messages too.
+    pub newest_id: Option<i64>,
 }
 
 #[derive(Default)]
@@ -367,6 +373,11 @@ pub struct Engine {
     pub(crate) categories: Mutex<crate::categories::Categories>,
     pub(crate) outbox: Outbox,
     pub(crate) cache: Cache,
+    /// The words of the whole history, for the search (docs/search.md).
+    pub(crate) search: Index,
+    /// Something changed that the index may be missing.
+    pub(crate) search_wake: Arc<tokio::sync::Notify>,
+    pub(crate) search_task: Mutex<Option<JoinHandle<()>>>,
     pub(crate) voice: Arc<VoiceStore>,
     pub(crate) calls: CallManager,
     pub(crate) recordings: Recordings,
@@ -424,6 +435,9 @@ impl Engine {
             categories: Mutex::new(crate::categories::Categories::load(&cache)),
             outbox: Outbox::open(data_dir.as_deref()),
             voice: Arc::new(VoiceStore::open(data_dir.as_deref())),
+            search: Index::open(data_dir.as_deref()),
+            search_wake: Arc::default(),
+            search_task: Mutex::default(),
             cache,
             calls: CallManager::default(),
             recordings: Recordings::default(),
@@ -518,6 +532,7 @@ impl Engine {
         if let Some(old) = self.state.lock().unwrap().notify_task.replace(notify) {
             old.abort();
         }
+        self.spawn_search_sync();
         user.and(first)
     }
 
@@ -650,6 +665,10 @@ impl Engine {
         self.state.lock().unwrap().rooms.get(token).cloned()
     }
 
+    pub(crate) fn rooms_snapshot(&self) -> Vec<Room> {
+        self.state.lock().unwrap().rooms.values().cloned().collect()
+    }
+
     /// Fresh room data for a call (`hasCall` must be current); falls back to the cache.
     async fn room_info(&self, token: &str) -> Result<RoomInfo> {
         let room = match self.client.room(token).await {
@@ -740,6 +759,9 @@ impl Engine {
         self.calls.hang_up();
         self.outbox.abort_all();
         self.stop_retries();
+        if let Some(t) = self.search_task.lock().unwrap().take() {
+            t.abort();
+        }
         let mut st = self.state.lock().unwrap();
         if let Some(t) = st.rooms_task.take() {
             t.abort();
@@ -807,6 +829,7 @@ impl Engine {
     fn apply_rooms(&self, batch: crate::client::RoomsBatch, full: bool) {
         if full || !batch.rooms.is_empty() {
             self.cache.put_rooms(batch.rooms.clone(), full);
+            self.index_rooms(&batch.rooms, full);
         }
         let fresh = batch.rooms.clone();
         let (views, call_started) = {
@@ -1149,12 +1172,17 @@ impl Engine {
         let fresh = match delta {
             Some((messages, last_common_read)) => {
                 let updates = parent_updates(&messages);
+                // Everything after the cached range, without a gap.
+                let cover = cached.zip(messages.iter().map(|m| m.id).max()).map(|(r, newest)| (r.newest_id + 1, newest));
+                self.index_messages(token, &messages, &updates, cover);
                 self.cache.append(token, messages, updates, last_common_read);
                 None
             }
             None => {
                 let batch = self.guard(self.client.history(token, None, PAGE_SIZE).await)?;
                 let has_more = batch.messages.len() as u32 >= PAGE_SIZE;
+                let ids = batch.messages.iter().map(|m| m.id);
+                self.index_messages(token, &batch.messages, &parent_updates(&batch.messages), ids.clone().min().zip(ids.max()));
                 self.cache
                     .replace_chat(token, batch.messages.clone(), has_more, batch.last_common_read);
                 Some(batch)
@@ -1211,8 +1239,61 @@ impl Engine {
         }
         let batch = self.guard(self.client.history(token, Some(before_id), PAGE_SIZE).await)?;
         let has_more = batch.messages.len() as u32 >= PAGE_SIZE;
+        let cover = batch.messages.iter().map(|m| m.id).min().map(|oldest| (oldest, before_id - 1));
+        self.index_messages(token, &batch.messages, &parent_updates(&batch.messages), cover);
         self.cache.prepend(token, before_id, batch.messages.clone(), has_more);
         Ok(self.page(batch.messages, batch.last_common_read))
+    }
+
+    /// A window into the history around a message (a search hit, a quoted message): up to
+    /// [`PAGE_SIZE`] messages before it, the message, and as many after it. From the cache
+    /// when it has the message, else from the server. `load_older` and `load_newer`
+    /// continue from `oldest_id` and `newest_id`; live updates belong to the end of the
+    /// chat, which `cached_chat` shows again (docs/search.md).
+    pub async fn messages_around(&self, token: &str, message_id: i64) -> Result<ChatPage> {
+        self.cache.flush().await;
+        if let Some(r) = self.cache.range(token).filter(|r| (r.oldest_id..=r.newest_id).contains(&message_id)) {
+            let (mut messages, more) = self.cache.messages(token, Some(message_id + 1), PAGE_SIZE + 1);
+            if messages.last().is_some_and(|m| m.id == message_id) {
+                let (after, newer) = self.cache.messages_after(token, message_id, PAGE_SIZE);
+                messages.extend(after);
+                let mut page = self.cached_page(messages, more || r.has_more, r.last_common_read);
+                page.has_newer = newer;
+                return Ok(page);
+            }
+        }
+        let batch = self.guard(self.client.message_context(token, message_id, PAGE_SIZE).await)?;
+        let ids = batch.messages.iter().map(|m| m.id);
+        let (older, newer) = (ids.clone().filter(|id| *id < message_id).count(), ids.clone().filter(|id| *id > message_id).count());
+        self.index_messages(token, &batch.messages, &parent_updates(&batch.messages), ids.clone().min().zip(ids.max()));
+        let mut page = self.page(batch.messages, batch.last_common_read);
+        page.has_more = older as u32 >= PAGE_SIZE;
+        page.has_newer = newer as u32 >= PAGE_SIZE;
+        Ok(page)
+    }
+
+    /// Messages newer than `after_id`, for a window into the history: from the cache when
+    /// it reaches that far back, else from the server. `has_newer` turns false at the end
+    /// of the chat; from there on the live updates continue it.
+    pub async fn load_newer(&self, token: &str, after_id: i64) -> Result<ChatPage> {
+        self.cache.flush().await;
+        if let Some(r) = self.cache.range(token).filter(|r| after_id >= r.oldest_id) {
+            let (messages, newer) = self.cache.messages_after(token, after_id, PAGE_SIZE);
+            let mut page = self.cached_page(messages, true, r.last_common_read);
+            page.has_newer = newer;
+            return Ok(page);
+        }
+        let batch = self.guard(self.client.newer_messages(token, after_id, PAGE_SIZE as usize).await)?;
+        let newest = batch.messages.iter().map(|m| m.id).max().into_iter().chain(batch.last_given).max();
+        self.index_messages(token, &batch.messages, &parent_updates(&batch.messages), newest.map(|n| (after_id + 1, n)));
+        let full = batch.messages.len() as u32 >= PAGE_SIZE;
+        // What the cache holds follows at some point: the window is not at the end before that.
+        let below_cache = self.cache.range(token).is_some_and(|r| newest.is_none_or(|n| n < r.newest_id));
+        let mut page = self.page(batch.messages, batch.last_common_read);
+        page.has_more = true;
+        page.has_newer = full || below_cache;
+        page.newest_id = newest.or(Some(after_id));
+        Ok(page)
     }
 
     /// Sends a text message. The live poll delivers the same message again; match it
@@ -1423,6 +1504,7 @@ impl Engine {
         let changed = [m.id];
         let mut updates = vec![m];
         let messages = self.update_views(token, &mut updates, &changed);
+        self.index_messages(token, &[], &updates, None);
         self.cache.append(token, Vec::new(), updates.clone(), None);
         self.sink.emit(Event::MessagesUpdated { token: token.to_string(), messages });
         let rooms = {
@@ -1485,6 +1567,7 @@ impl Engine {
     /// Stores a changed message and shows it.
     fn publish_message(&self, token: &str, m: ChatMessage) {
         let view = self.view(&m);
+        self.index_messages(token, &[], std::slice::from_ref(&m), None);
         self.cache.append(token, Vec::new(), vec![m], None);
         self.sink.emit(Event::MessagesUpdated {
             token: token.to_string(),
@@ -1541,6 +1624,7 @@ impl Engine {
         self.shutdown();
         self.outbox.clear();
         self.cache.clear();
+        self.search.clear();
         self.client.revoke_app_password().await
     }
 
@@ -1667,6 +1751,8 @@ impl Engine {
             has_more,
             last_common_read,
             reset: false,
+            has_newer: false,
+            newest_id: messages.iter().map(|m| m.id).max(),
         }
     }
 
@@ -1686,6 +1772,8 @@ impl Engine {
             has_more,
             last_common_read,
             reset: false,
+            has_newer: false,
+            newest_id: messages.iter().map(|m| m.id).max(),
         }
     }
 
@@ -1816,7 +1904,8 @@ impl Engine {
     /// Applies a poll result: emits new and updated messages, refreshes the room preview.
     /// Returns whether the conversation itself changed (name, members …): then the
     /// caller refreshes the room list.
-    fn apply_live(&self, token: &str, messages: Vec<ChatMessage>) -> bool {
+    /// `after`: the id the poll asked from, so the batch is everything that follows it.
+    fn apply_live(&self, token: &str, after: i64, messages: Vec<ChatMessage>) -> bool {
         let members = messages.iter().any(|m| MEMBER_SYSTEM.contains(&m.system_message.as_str()));
         let room = members || messages.iter().any(|m| ROOM_SYSTEM.contains(&m.system_message.as_str()));
         if members {
@@ -1833,6 +1922,8 @@ impl Engine {
             .filter_map(|m| m.parent.as_ref().map(|p| p.id))
             .collect();
         let updated = self.update_views(token, &mut updates, &rewritten);
+        let cover = messages.iter().map(|m| m.id).max().map(|newest| (after + 1, newest));
+        self.index_messages(token, &messages, &updates, cover);
         if messages.iter().any(|m| m.system_message == "history_cleared") {
             // Forget the cached copy; the next open loads the remaining history.
             self.cache.replace_chat(token, Vec::new(), false, None);
@@ -1967,7 +2058,7 @@ pub fn message_error_text(op: MessageOp, e: &Error) -> String {
 }
 
 /// New versions of earlier messages carried by edit/deletion/reaction system messages.
-fn parent_updates(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+pub(crate) fn parent_updates(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     messages
         .iter()
         .filter(|m| UPDATING_SYSTEM.contains(&m.system_message.as_str()))
@@ -2013,6 +2104,7 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, seen: Arc<Ato
         match e.guard(result) {
             Ok(batch) => {
                 backoff = Duration::from_secs(1);
+                let after = last;
                 if let Some(id) = batch.last_given.or(batch.messages.last().map(|m| m.id)) {
                     last = last.max(id);
                 }
@@ -2030,7 +2122,7 @@ async fn poll_loop(engine: std::sync::Weak<Engine>, token: String, seen: Arc<Ato
                         });
                     }
                 }
-                let refresh = e.apply_live(&token, batch.messages);
+                let refresh = e.apply_live(&token, after, batch.messages);
                 shown.store(last, Ordering::SeqCst);
                 if refresh {
                     let _ = e.refresh_rooms(true).await;
