@@ -135,6 +135,8 @@ fun Composer(
     onFilesPicked: (List<Uri>) -> Unit,
     /** „Standort“ in the attachment menu; the caller runs `sent` after sending, which closes the menu. */
     onLocation: (sent: () -> Unit) -> Unit,
+    /** „Kontakt“ in the attachment menu; `sent` as for the place. */
+    onContact: (sent: () -> Unit) -> Unit,
     voice: VoiceManager,
     onVoiceSent: () -> Unit,
 ) {
@@ -457,6 +459,10 @@ fun Composer(
                             // Without the focus the keyboard stays away when the sheet closes.
                             focusManager.clearFocus()
                             onLocation { panel = InputPanel.NONE }
+                        },
+                        onContact = {
+                            focusManager.clearFocus()
+                            onContact { panel = InputPanel.NONE }
                         },
                     )
                     InputPanel.NONE -> Box(Modifier.fillMaxSize())

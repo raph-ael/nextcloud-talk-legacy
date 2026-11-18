@@ -154,6 +154,9 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     ) { uri -> if (uri != null) overlay = Overlay.Send(uri, fromCamera = false) }
     // Runs after a place was sent: closes the attachment menu (handed over by the composer).
     var locationSheet by remember(room.token) { mutableStateOf<(() -> Unit)?>(null) }
+    // „Kontakt“: permission, the system's chooser and the sheet; `afterContact` closes the attachment menu.
+    val contactSend = rememberContactSend(room.token)
+    var afterContact by remember(room.token) { mutableStateOf({}) }
     // The file send screen is in the app's colours; the other layers are black.
     DarkSystemBars(overlay != null && overlay !is Overlay.Files)
     val listState = rememberLazyListState()
@@ -350,6 +353,10 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     onImagePicked = { uri -> overlay = Overlay.Send(uri, fromCamera = false) },
                     onFilesPicked = { uris -> overlay = Overlay.Files(uris) },
                     onLocation = { sent -> locationSheet = sent },
+                    onContact = { sent ->
+                        afterContact = sent
+                        contactSend.open()
+                    },
                     voice = sessions.voice,
                     onVoiceSent = {
                         sessions.clearUnreadLine()
@@ -417,6 +424,13 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
             },
             onDismiss = { locationSheet = null },
         )
+    }
+    ContactSendSheet(contactSend) { card ->
+        askNotifications()
+        sessions.sendContact(room.token, card, replyTo)
+        replyTo = null
+        afterContact()
+        scope.launch { listState.animateScrollToItem(0) }
     }
     deleting?.let { d ->
         val text = buildString {

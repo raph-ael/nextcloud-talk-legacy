@@ -11,7 +11,6 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.LruCache
 import android.util.Size
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -72,12 +71,17 @@ private const val RECENT_LIMIT = 60
 
 /**
  * Signal's attachment keyboard: the latest photos on top (tap → send screen), the
- * attachment types below. „Umfrage“ and „Kontakt“ are placeholders yet.
+ * attachment types below. Every button does something (docs/attachments.md); polls are
+ * hidden until there are polls.
  */
 @Composable
-fun AttachPanel(onImage: (Uri) -> Unit, onGallery: () -> Unit, onFile: () -> Unit, onLocation: () -> Unit) {
-    val context = LocalContext.current
-    val soon = { what: String -> Toast.makeText(context, "$what kommt bald", Toast.LENGTH_SHORT).show() }
+fun AttachPanel(
+    onImage: (Uri) -> Unit,
+    onGallery: () -> Unit,
+    onFile: () -> Unit,
+    onLocation: () -> Unit,
+    onContact: () -> Unit,
+) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         RecentPhotos(onImage, Modifier.weight(1f).fillMaxWidth())
         Row(
@@ -89,9 +93,7 @@ fun AttachPanel(onImage: (Uri) -> Unit, onGallery: () -> Unit, onFile: () -> Uni
             AttachButton(TalkIcons.Gallery, "Galerie", onGallery)
             AttachButton(TalkIcons.File, "Datei", onFile)
             AttachButton(TalkIcons.Location, "Standort", onLocation)
-            // The placeholders come last: what works is visible without swiping (docs/attachments.md).
-            AttachButton(TalkIcons.Poll, "Umfrage") { soon("Umfragen") }
-            AttachButton(TalkIcons.Contact, "Kontakt") { soon("Kontakte senden") }
+            AttachButton(TalkIcons.Contact, "Kontakt", onContact)
         }
     }
 }

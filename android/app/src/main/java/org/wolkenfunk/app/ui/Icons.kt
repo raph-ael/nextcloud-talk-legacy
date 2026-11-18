@@ -83,11 +83,6 @@ object TalkIcons {
         "File",
         "M14 2H6c-1.1 0-1.99 0.9-1.99 2L4 20c0 1.1 0.89 2 1.99 2H18c1.1 0 2-0.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z",
     )
-    val Poll = icon(
-        "Poll",
-        "M19 3H5c-1.1 0-2 0.9-2 2v14c0 1.1 0.9 2 2 2h14c1.1 0 2-0.9 2-2V5c0-1.1-0.9-2-2-2z" +
-            "m0 16H5V5h14v14zM7 10h2v7H7zm4-3h2v10h-2zm4 6h2v4h-2z",
-    )
     val Contact = icon(
         "Contact",
         "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" +

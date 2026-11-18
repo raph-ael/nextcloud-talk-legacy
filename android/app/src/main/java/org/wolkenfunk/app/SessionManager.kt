@@ -62,6 +62,7 @@ import org.wolkenfunk.app.media.stagingDir
 import uniffi.talk_ffi.generatePushKey
 import uniffi.talk_ffi.ClientPlatform
 import uniffi.talk_ffi.ConnectionState
+import uniffi.talk_ffi.ContactCard
 import uniffi.talk_ffi.CoreEvent
 import uniffi.talk_ffi.CoreException
 import uniffi.talk_ffi.CoreListener
@@ -1593,7 +1594,8 @@ class SessionManager(private val context: Context) {
             if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", shared)
             val view = Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, a.mimetype.ifBlank { "application/octet-stream" })
+                // A contact goes to the contacts app, which knows the card by this type.
+                .setDataAndType(uri, if (a.contactName.isNotEmpty()) "text/x-vcard" else a.mimetype.ifBlank { "application/octet-stream" })
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 context.startActivity(view)
@@ -1630,6 +1632,25 @@ class SessionManager(private val context: Context) {
         clearUnreadLine()
         s.enqueueLocation(token, latitude, longitude, name, newReferenceId())
         OutboxWorker.schedule(context)
+    }
+
+    /**
+     * Queues a contact (docs/attachments.md „Kontakt“): the core makes the vCard from [card],
+     * which holds what was left ticked, and sends it like a file, with the quote.
+     */
+    fun sendContact(token: String, card: ContactCard, replyTo: MessageView?) {
+        val rt = active ?: return
+        clearUnreadLine()
+        scope.launch {
+            val queued = withContext(Dispatchers.IO) {
+                runCatching { rt.session.enqueueContact(token, card, replyTo?.toReply(), newReferenceId()) }
+            }
+            if (queued.isFailure) {
+                Toast.makeText(context, "Kontakt konnte nicht gespeichert werden", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            OutboxWorker.schedule(context)
+        }
     }
 
     /** Sends a failed message again (or a waiting one right now). */

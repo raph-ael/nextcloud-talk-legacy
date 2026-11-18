@@ -34,6 +34,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!-- Sending a contact (docs/attachments.md): only the entry picked in the system's chooser, only at that moment. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
     <uses-feature
         android:name="android.hardware.camera.any"
         android:required="false" />

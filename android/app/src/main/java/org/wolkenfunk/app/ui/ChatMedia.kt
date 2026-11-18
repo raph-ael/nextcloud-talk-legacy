@@ -115,6 +115,7 @@ fun ChatImage(
  * A file tile (docs/attachments.md „Dateikachel“): symbol, name and size. While the file is on
  * its way out the symbol is the upload ring; tapping a failed or waiting one sends it again.
  * A received file is fetched on a tap (a spinner meanwhile) and opens in the app made for it.
+ * A contact (`contactName`) shows the person instead: initials, name and „Kontakt“.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -130,6 +131,7 @@ fun FileRow(
     val context = LocalContext.current
     val onWay = m.status == SendStatus.SENDING || m.status == SendStatus.WAITING
     val opening = m.status == null && sessions.isOpening(a.id)
+    val contact = a.contactName.isNotEmpty()
     Row(
         modifier
             .clip(RoundedCornerShape(10.dp))
@@ -165,20 +167,25 @@ fun FileRow(
                     strokeWidth = 3.dp,
                 )
                 onWay || opening -> CircularProgressIndicator(Modifier.size(26.dp), color = textColor, strokeWidth = 3.dp)
+                contact -> Avatar(a.contactName, 40.dp)
                 else -> Icon(if (a.voiceMessage) TalkIcons.Mic else TalkIcons.File, null, tint = textColor, modifier = Modifier.size(22.dp))
             }
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f, fill = false)) {
             Text(
-                if (a.voiceMessage) "Sprachnachricht" else a.name,
+                when {
+                    a.voiceMessage -> "Sprachnachricht"
+                    contact -> a.contactName
+                    else -> a.name
+                },
                 color = textColor,
                 fontWeight = FontWeight.Medium,
                 fontSize = 15.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(fileSize(a.size), color = textColor.copy(alpha = 0.75f), fontSize = 12.sp)
+            Text(if (contact) "Kontakt" else fileSize(a.size), color = textColor.copy(alpha = 0.75f), fontSize = 12.sp)
         }
     }
 }

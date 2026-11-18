@@ -97,9 +97,10 @@ fun isJumboEmoji(text: String): Boolean {
     return count in 1..3
 }
 
-/** Short label for a file message: "📷 Foto", "🎤 Sprachnachricht", "📎 name.pdf". */
+/** Short label for a file message: "📷 Foto", "🎤 Sprachnachricht", "👤 Karla Brandt", "📎 name.pdf". */
 fun attachmentLabel(a: FileAttachment): String = when {
     a.voiceMessage -> "🎤 Sprachnachricht"
+    a.contactName.isNotEmpty() -> "👤 ${a.contactName}"
     a.mimetype.startsWith("image/") -> "📷 Foto"
     a.mimetype.startsWith("video/") -> "🎬 Video"
     else -> "📎 ${a.name}"
