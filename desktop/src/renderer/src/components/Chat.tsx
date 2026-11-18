@@ -1,20 +1,25 @@
-import { forwardRef, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
+import { forwardRef, Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { locationName, withAttachment, type RoomView, type SendError } from '@shared/core'
 import {
   discard,
+  focusSearch,
+  loadNewer,
   loadOlder,
   markVisibleRead,
+  onBeforeAppend,
   openGroupInfo,
   retry,
   countsAsUnread,
   setChatAtBottom,
+  showEnd,
+  showMessage,
   shownConnection,
   useStore,
   type UiMessage,
 } from '../store'
 import { isGroupRoom } from './GroupInfo'
-import { colorFor, dayLabel, fullTime, isJumboEmoji, locationLink, messageTime, sameDay, splitLinks } from '../format'
-import { Markdown, plain } from './Markdown'
+import { colorFor, dayLabel, fullTime, isJumboEmoji, locationLink, messageTime, sameDay, searchWords, splitLinks } from '../format'
+import { Markdown, marked, plain, type Marks } from './Markdown'
 import { Avatar } from './Avatar'
 import { ChatImage, FileRow, isImageAttachment, LocationRow } from './ChatMedia'
 import { Composer } from './Composer'
@@ -55,6 +60,22 @@ function JumpButton({ shown, unread, onJump }: { shown: boolean; unread: number;
 /** „N ungelesene Nachrichten“ above the first unread message (docs/chat.md). */
 function unreadText(count: number): string {
   return count === 1 ? '1 ungelesene Nachricht' : `${count} ungelesene Nachrichten`
+}
+
+/** A window into the history loads on when its end is this close (px). */
+const NEWER_AHEAD = 400
+/** Where a message stands that the chat jumps to: in the upper third (docs/search.md). */
+const JUMP_AT = 0.2
+
+/** The bubble lights up for about 1.5 s and fades (docs/search.md „Aufleuchten“). */
+function flash(bubble: HTMLElement): void {
+  const color = getComputedStyle(bubble).getPropertyValue('--search-mark').trim() || 'rgb(255 214 10 / 0.45)'
+  const on = `inset 0 0 0 999px ${color}`
+  for (const a of bubble.getAnimations()) if (a.id === 'flash') a.cancel()
+  bubble.animate([{ boxShadow: on }, { boxShadow: on, offset: 0.75 }, { boxShadow: 'inset 0 0 0 999px transparent' }], {
+    duration: 2000,
+    id: 'flash',
+  })
 }
 
 /** At most this many pages are loaded to reach the first unread message when opening. */
@@ -160,7 +181,20 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const viewHeight = useRef(0)
 
   const isGroup = room.roomType !== 1 && room.roomType !== 6
-  const messages = chat?.messages ?? []
+  // A window into the history (docs/search.md): newer messages follow below the list.
+  const inWindow = !!chat?.hasNewer
+  const windowRef = useRef(inWindow)
+  windowRef.current = inWindow
+  const loaded = chat?.messages
+  // Unsent messages stand at the end of the chat: a window does not show them.
+  const messages = useMemo(() => (inWindow ? (loaded ?? []).filter((m) => !m.status) : (loaded ?? [])), [loaded, inWindow])
+  const jump = useStore((s) => (s.jump?.token === room.token ? s.jump : null))
+  const jumped = useRef(0)
+  // The search words of the search in this chat, marked in the bubbles.
+  const scopedQuery = useStore((s) => (s.scope?.token === room.token ? s.query : ''))
+  const marks = useMemo(() => searchWords(scopedQuery), [scopedQuery])
+  // New messages a window keeps for its end: the button counts them.
+  const heldCount = useMemo(() => (chat?.held ?? []).filter((m) => !m.isOwn && m.kind !== 'system').length, [chat?.held])
   const unreadLine = useStore((s) => (s.unreadLine?.token === room.token ? s.unreadLine : null))
   // A notification click on this chat while it was open: it is placed once more.
   const reopened = useStore((s) => s.reopened)
@@ -224,6 +258,84 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     setAtBottom(value)
   }
   useEffect(() => () => setChatAtBottom(true), [])
+  /** The tight threshold of the read marker; the end of a window is not the end of the chat. */
+  function atEnd(el: HTMLElement): boolean {
+    return !windowRef.current && el.scrollTop > -40
+  }
+  // A window opens or reaches the end of the chat.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (el) updateAtBottom(atEnd(el))
+  }, [inWindow])
+
+  // Jump to a message or to the end (docs/search.md „Chat an einer Nachricht öffnen“).
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (!el || !jump || jumped.current === jump.seq) return
+    const hidePill = () => {
+      // The floating date belongs to where the chat stood before.
+      window.clearTimeout(datePillTimer.current)
+      setDatePill((p) => (p.shown ? { ...p, shown: false } : p))
+    }
+    if (jump.id == null) {
+      hidePill()
+      jumped.current = jump.seq
+      placed.current = true
+      if (el.scrollTop !== 0) {
+        ownScroll.current = true
+        el.scrollTop = 0
+      }
+      updateAtBottom(true)
+      setShowJump(false)
+      markVisibleRead(room.token)
+      return
+    }
+    const bubble = el.querySelector<HTMLElement>(`.bubble[data-id="${jump.id}"]`)
+    // Not there yet: the list follows.
+    if (!bubble) return
+    hidePill()
+    jumped.current = jump.seq
+    placed.current = true
+    // Never further than the end (scrollTop 0); the browser stops at the beginning.
+    const target = Math.min(
+      0,
+      el.scrollTop + bubble.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight * JUMP_AT,
+    )
+    if (Math.abs(target - el.scrollTop) >= 1) {
+      ownScroll.current = true
+      el.scrollTop = target
+    }
+    updateAtBottom(atEnd(el))
+    setShowJump(el.scrollTop < -el.clientHeight / 2)
+    flash(bubble)
+    if (windowRef.current && el.scrollTop > -NEWER_AHEAD) void loadNewer(room.token)
+  }, [jump, chat, room.token])
+
+  // A window grows downwards: what is in sight stays where it is (the list is column-reverse,
+  // so the browser would keep the distance to the end instead).
+  const anchor = useRef<{ row: HTMLElement; top: number } | null>(null)
+  useEffect(
+    () =>
+      onBeforeAppend((token) => {
+        const el = scroller.current
+        if (!el || token !== room.token) return
+        const row = topRow(el) ?? el.querySelector<HTMLElement>('[data-ts]')
+        anchor.current = row ? { row, top: row.getBoundingClientRect().top } : null
+      }),
+    [room.token],
+  )
+  useLayoutEffect(() => {
+    const el = scroller.current
+    const kept = anchor.current
+    anchor.current = null
+    if (!el || !kept || !kept.row.isConnected) return
+    const moved = kept.row.getBoundingClientRect().top - kept.top
+    if (Math.abs(moved) >= 1) {
+      ownScroll.current = true
+      el.scrollTop += moved
+    }
+    if (windowRef.current && el.scrollTop > -NEWER_AHEAD) void loadNewer(room.token)
+  }, [chat, room.token])
 
   // Read marker: whenever new messages are visible in the focused window.
   useEffect(() => {
@@ -245,6 +357,11 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
       pagesLoaded.current = 0
     }
     if (placed.current || !el || !chat) return
+    // A window, or a jump on its way: the chat stands at that message, not at the line.
+    if (inWindow || (jump && jumped.current !== jump.seq)) {
+      placed.current = true
+      return
+    }
     if (!unreadLine) {
       placed.current = true
       // Only after a notification click: a chat that opens stands at the end by itself.
@@ -277,11 +394,11 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
       ownScroll.current = true
       el.scrollTop = target
     }
-    const bottom = el.scrollTop > -40
+    const bottom = atEnd(el)
     updateAtBottom(bottom)
     setShowJump(el.scrollTop < -el.clientHeight / 2)
     if (bottom) markVisibleRead(room.token)
-  }, [chat, unreadLine, lineCovered, room.token, reopened])
+  }, [chat, unreadLine, lineCovered, room.token, reopened, inWindow, jump])
 
   useEffect(() => () => window.clearTimeout(datePillTimer.current), [])
 
@@ -302,7 +419,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     const el = scroller.current
     if (!el || keepEnd(el)) return
     setReacting(null)
-    const bottom = el.scrollTop > -40
+    const bottom = atEnd(el)
     updateAtBottom(bottom)
     setShowJump(el.scrollTop < -el.clientHeight / 2)
     // Our own positioning when opening, and the shift by a new message while scrolled up,
@@ -312,6 +429,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     if (ownScroll.current) ownScroll.current = false
     else if (!grew || bottom) showDatePill(el, bottom)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
+    if (windowRef.current && el.scrollTop > -NEWER_AHEAD) void loadNewer(room.token)
   }
 
   // The end stays the end when the input area grows (reply or edit bar, a longer text): the
@@ -347,6 +465,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     el.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const jumpTo = useCallback((id: number) => void showMessage(room.token, id), [room.token])
   const openMenu = useCallback((msg: UiMessage, x: number, y: number) => setMenu({ msg, x, y }), [])
   const closeMenu = useCallback(() => setMenu(null), [])
   const closeViewer = useCallback(() => setViewer(null), [])
@@ -447,6 +566,12 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           </div>
         )}
         <div className="chat-header-actions">
+          <button className="header-icon-btn" onClick={() => focusSearch(true)} title="Im Chat suchen" aria-label="Im Chat suchen">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <circle cx="10.5" cy="10.5" r="6" />
+              <path d="M15 15l4.5 4.5" />
+            </svg>
+          </button>
           <CallButton room={room} />
         </div>
       </header>
@@ -474,6 +599,8 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 onWhoReacted={openWhoReacted}
                 onMenu={openMenu}
                 onOpenImage={setViewer}
+                onJump={jumpTo}
+                marks={marks}
               />
             ))}
             {chat?.loading && <div className="spinner" />}
@@ -482,7 +609,11 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
         <div className={`date-pill${datePill.shown ? ' shown' : ''}`} aria-hidden="true">
           {datePill.label}
         </div>
-        <JumpButton shown={showJump} unread={room.unreadMessages} onJump={scrollToBottom} />
+        <JumpButton
+          shown={showJump || inWindow}
+          unread={inWindow ? Math.max(room.unreadMessages, heldCount) : room.unreadMessages}
+          onJump={() => (inWindow ? void showEnd(room.token) : scrollToBottom())}
+        />
       </div>
 
       {room.readOnly ? (
@@ -499,7 +630,8 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           onCancelReply={() => setReplyTo(null)}
           onSent={() => {
             setReplyTo(null)
-            scroller.current?.scrollTo({ top: 0 })
+            // In a window the store leads to the end of the chat (`showQueued`).
+            if (!windowRef.current) scroller.current?.scrollTo({ top: 0 })
           }}
         />
       )}
@@ -562,6 +694,10 @@ interface RowProps {
   onWhoReacted: (m: UiMessage) => void
   onMenu: (m: UiMessage, x: number, y: number) => void
   onOpenImage: (m: UiMessage) => void
+  /** A click on the quote: to the quoted message. */
+  onJump: (id: number) => void
+  /** Search words to mark in text and caption. */
+  marks: Marks
 }
 
 function continues(a: UiMessage | undefined, b: UiMessage | undefined): boolean {
@@ -589,6 +725,8 @@ const MessageRow = memo(function MessageRow({
   onWhoReacted,
   onMenu,
   onOpenImage,
+  onJump,
+  marks,
 }: RowProps) {
   const showDay = !prev || !sameDay(prev.timestamp, msg.timestamp)
   const line = unread > 0 && (
@@ -654,6 +792,7 @@ const MessageRow = memo(function MessageRow({
   // Signal: a voice message shows its time in the player's footer row.
   const metaInVoice = !!attachment && !image && isAudioAttachment(msg) && !hasText && !deleted
 
+  const quoted = msg.replyTo ? withAttachment(msg.replyTo.text, msg.replyTo.attachment, msg.replyTo.location) : ''
   const replyable = canReply && msg.kind === 'text' && !msg.status
   const canReactHere = reactable(canReact, msg)
 
@@ -683,11 +822,21 @@ const MessageRow = memo(function MessageRow({
               </div>
             )}
             {msg.replyTo && (
-              <div className={`quote${msg.replyTo.isOwn ? ' own' : ''}`}>
+              <div
+                className={`quote${msg.replyTo.isOwn ? ' own' : ''}${quoted ? ' link' : ''}`}
+                // docs/search.md „Zitat antippen“; the quote of a deleted message does nothing.
+                onClick={
+                  quoted
+                    ? (e) => {
+                        e.stopPropagation()
+                        onJump(msg.replyTo!.id)
+                      }
+                    : undefined
+                }
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
                 <div className="quote-author">{msg.replyTo.isOwn ? 'Du' : msg.replyTo.author}</div>
-                <div className="quote-text">
-                  {withAttachment(msg.replyTo.text, msg.replyTo.attachment, msg.replyTo.location) || 'Nachricht gelöscht'}
-                </div>
+                <div className="quote-text">{quoted || 'Nachricht gelöscht'}</div>
               </div>
             )}
             {image && (
@@ -708,15 +857,15 @@ const MessageRow = memo(function MessageRow({
                 {deleted ? (
                   <em>Diese Nachricht wurde gelöscht.</em>
                 ) : location ? null : msg.markdown ? (
-                  <Markdown text={msg.text} />
+                  <Markdown text={msg.text} marks={marks} />
                 ) : (
                   splitLinks(msg.text).map((part, i) =>
                     part.href ? (
                       <a key={i} href={part.href} target="_blank" rel="noreferrer">
-                        {part.text}
+                        {marked(part.text, marks, i)}
                       </a>
                     ) : (
-                      part.text
+                      <Fragment key={i}>{marked(part.text, marks, i)}</Fragment>
                     ),
                   )
                 )}

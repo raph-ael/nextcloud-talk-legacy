@@ -72,6 +72,10 @@ interface NativeSession {
   openChat(token: string): Promise<unknown>
   closeChat(token: string): void
   loadOlder(token: string, beforeId: number): Promise<unknown>
+  messagesAround(token: string, messageId: number): Promise<unknown>
+  loadNewer(token: string, afterId: number): Promise<unknown>
+  searchMessages(query: string, token: string | null, limit: number): Promise<unknown>
+  searchMessagesEverywhere(query: string, token: string | null, limit: number): Promise<unknown>
   markRead(token: string, messageId: number): Promise<void>
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
   editSource(token: string, messageId: number): Promise<string | null>
@@ -1453,6 +1457,19 @@ function registerIpc(): void {
     r.session.closeChat(token)
   })
   handle('talk:loadOlder', (r, token: string, beforeId: number) => need(r).session.loadOlder(token, beforeId))
+  // docs/search.md „Nicht gefunden“: the two reasons as the texts the chat shows.
+  handle('talk:messagesAround', (r, token: string, messageId: number) =>
+    need(r)
+      .session.messagesAround(token, messageId)
+      .catch((e: unknown) => ({ error: String(e).includes('NETWORK') ? 'Keine Verbindung' : 'Nachricht nicht gefunden' })),
+  )
+  handle('talk:loadNewer', (r, token: string, afterId: number) => need(r).session.loadNewer(token, afterId))
+  handle('talk:searchMessages', (r, query: string, token: string | null, limit: number) =>
+    need(r).session.searchMessages(query, token, limit),
+  )
+  handle('talk:searchMessagesEverywhere', (r, query: string, token: string | null, limit: number) =>
+    need(r).session.searchMessagesEverywhere(query, token, limit),
+  )
   handle('talk:refreshRooms', (r) => r?.session.refreshRooms().catch(() => undefined))
   handle('talk:enqueueText', (r, token: string, text: string, replyTo: ReplyPreview | null) =>
     need(r).session.enqueueText(token, text, replyTo, core.newReferenceId()),

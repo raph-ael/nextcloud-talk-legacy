@@ -115,3 +115,59 @@ export function splitLinks(text: string): Array<{ text: string; href?: string }>
   if (last < text.length) out.push({ text: text.slice(last) })
   return out
 }
+
+// --- search words in a bubble (docs/search.md „Hervorhebung“) -------------------------------
+
+/** What the search compares, as in the core: lowercase and without accents; „ß“ stays „ß“. */
+export function fold(text: string): string {
+  return text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
+}
+
+/** The folded words of a search text, or null below two characters. */
+export function searchWords(query: string): string[] | null {
+  const words = [...new Set(query.split(/\s+/).map(fold).filter(Boolean))]
+  return words.reduce((n, w) => n + [...w].length, 0) >= 2 ? words : null
+}
+
+/**
+ * Splits `text` at the search words: without case and accents, also inside a word. Parts
+ * with `hit` get the mark; the text itself stays as it is.
+ */
+export function splitMarks(text: string, words: string[] | null | undefined): Array<{ text: string; hit: boolean }> {
+  if (!words?.length || !text) return [{ text, hit: false }]
+  // Folding may drop or add characters: `at[i]` is where folded character i starts in `text`.
+  let folded = ''
+  const at: number[] = []
+  for (let i = 0; i < text.length; ) {
+    const char = String.fromCodePoint(text.codePointAt(i)!)
+    const f = fold(char)
+    for (let k = 0; k < f.length; k++) at.push(i)
+    folded += f
+    i += char.length
+  }
+  at.push(text.length)
+  const ranges: Array<[number, number]> = []
+  for (const w of words)
+    for (let i = folded.indexOf(w); i >= 0; i = folded.indexOf(w, i + 1)) ranges.push([at[i], at[i + w.length]])
+  if (ranges.length === 0) return [{ text, hit: false }]
+  ranges.sort((a, b) => a[0] - b[0])
+  const out: Array<{ text: string; hit: boolean }> = []
+  let pos = 0
+  let [from, to] = ranges[0]
+  const flush = () => {
+    if (from > pos) out.push({ text: text.slice(pos, from), hit: false })
+    if (to > from) out.push({ text: text.slice(from, to), hit: true })
+    pos = Math.max(pos, to)
+  }
+  for (const [a, b] of ranges.slice(1)) {
+    if (a <= to) to = Math.max(to, b)
+    else {
+      flush()
+      from = a
+      to = b
+    }
+  }
+  flush()
+  if (pos < text.length) out.push({ text: text.slice(pos), hit: false })
+  return out
+}

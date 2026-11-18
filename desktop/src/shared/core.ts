@@ -178,7 +178,8 @@ export interface UserView {
 export interface SectionView {
   /** For `toggleSection`; row keys are section id + token (a chat may be in several). */
   id: string
-  kind: 'favorites' | 'custom' | 'other'
+  /** `archived` only in a search: archived chats whose name matches. No category behind it. */
+  kind: 'favorites' | 'custom' | 'other' | 'archived'
   /** Empty when it is the only section: then no header. */
   title: string
   collapsed: boolean
@@ -211,6 +212,47 @@ export interface ChatPage {
   lastCommonRead: number | null
   /** Replace the shown messages instead of merging (the cached copy was outdated). */
   reset: boolean
+  /** Newer messages follow this page: it is a window into the history (docs/search.md). */
+  hasNewer: boolean
+  /** For `loadNewer`; like `oldestId` it counts hidden messages too. */
+  newestId: number | null
+}
+
+/** A window into the history, or why there is none (German, for a toast). */
+export type AroundResult = ChatPage | { error: string }
+
+/** A piece of a search hit's excerpt; `hit` marks a search word. */
+export interface SnippetPart {
+  text: string
+  hit: boolean
+}
+
+/** A message found by the search (docs/search.md). */
+export interface SearchHit {
+  token: string
+  messageId: number
+  timestamp: number
+  roomName: string
+  actorName: string
+  isOwn: boolean
+  /** The sender goes before the excerpt („Du: “ or „{Name}: “). */
+  showActor: boolean
+  /** One line around the first match, ready to show. */
+  snippet: SnippetPart[]
+}
+
+export interface SearchResults {
+  /** Newest first. */
+  hits: SearchHit[]
+  /** In one chat: all matches, also beyond `hits`. In all chats: as many as `hits`. */
+  total: number
+  /** There are more matches than `hits`: ask again with a higher limit. */
+  more: boolean
+  /** Everything that can match is on the device: no need for `searchMessagesEverywhere`. */
+  complete: boolean
+  /** Chats whose history is loaded, and all of them. */
+  chatsDone: number
+  chatsTotal: number
 }
 
 /** Outbox state of a message that is not delivered yet. */
@@ -576,6 +618,14 @@ export interface TalkApi {
   openChat(token: string): Promise<ChatPage>
   closeChat(token: string): Promise<void>
   loadOlder(token: string, beforeId: number): Promise<ChatPage>
+  /** The window around a message (docs/search.md „Chat an einer Nachricht öffnen“). */
+  messagesAround(token: string, messageId: number): Promise<AroundResult>
+  /** The next messages of such a window, after `ChatPage.newestId`. */
+  loadNewer(token: string, afterId: number): Promise<ChatPage>
+  /** Searches on the device, in one chat or (`token` null) in all; answers within milliseconds. */
+  searchMessages(query: string, token: string | null, limit: number): Promise<SearchResults>
+  /** The same with the server's hits added; only while `complete` is false. */
+  searchMessagesEverywhere(query: string, token: string | null, limit: number): Promise<SearchResults>
   refreshRooms(): Promise<void>
   /** Queues a text message in the persistent outbox (delivered in the background). */
   enqueueText(token: string, text: string, replyTo: ReplyPreview | null): Promise<PendingMessage>

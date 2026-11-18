@@ -23,6 +23,8 @@
   --danger: #d6342c;
   /* Unread number of a chat on „Nur Erwähnungen“ or „Aus“ (docs/settings.md). */
   --badge-quiet: #6b6b6b;
+  /* Search words in a bubble and the flash of a message jumped to (docs/search.md). */
+  --search-mark: rgb(255 214 10 / 0.45);
   --radius: 18px;
   --radius-tight: 4px;
   color-scheme: light dark;
@@ -47,6 +49,7 @@
     --floating: #2e2e2e;
     --danger: #ff6b61;
     --badge-quiet: #5e5e5e;
+    --search-mark: rgb(255 214 10 / 0.35);
   }
 }
 
@@ -464,6 +467,20 @@ body.resizing {
 .search {
   padding: 0 16px 8px;
 }
+/* The field with, in front of the text, the mark „in {Chat}“ (docs/search.md). */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--fill);
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+}
 .search-input {
   height: 28px;
   padding: 0 10px;
@@ -472,6 +489,53 @@ body.resizing {
   font-size: 13px;
   line-height: 18px;
   letter-spacing: -0.03px;
+}
+.search-field {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.03px;
+  user-select: text;
+}
+.search-scope {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 60%;
+  height: 20px;
+  margin-left: -5px;
+  padding: 0 2px 0 7px;
+  border-radius: 6px;
+  background: var(--fill-pressed);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.search-scope-clear {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+}
+.search-scope-clear:hover {
+  background: var(--fill-pressed);
+  color: var(--text);
+}
+.search-scope-clear:focus-visible {
+  outline: 2px solid var(--accent);
 }
 .room-list {
   flex: 1;
@@ -612,6 +676,21 @@ body.resizing {
 }
 .room-preview.system {
   font-style: italic;
+}
+/* A message found by the search: the search words bold and in the text colour, the rest muted. */
+.room.hit strong {
+  font-weight: 700;
+  color: var(--text);
+}
+.list-section.hit-count {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.hits-loading {
+  margin: 0;
+  padding: 10px 14px 12px;
+  font-size: 12px;
+  line-height: 16px;
 }
 .room-indicators {
   display: flex;
@@ -1086,6 +1165,17 @@ a.file-row:hover .file-name {
 .msg.own .quote {
   border-left-color: #fff;
   background: rgb(255 255 255 / 0.16);
+}
+/* A click leads to the quoted message (docs/search.md „Zitat antippen“). */
+.quote.link {
+  cursor: pointer;
+}
+/* Search words of the search in this chat: behind the text, whose colour stays. */
+mark.search-mark {
+  background: var(--search-mark);
+  color: inherit;
+  border-radius: 2px;
+  box-decoration-break: clone;
 }
 .quote-author {
   font-size: 13px;

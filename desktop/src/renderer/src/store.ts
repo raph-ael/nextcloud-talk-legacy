@@ -6,6 +6,7 @@ import { toast } from './call/store'
 import type {
   AccountInfo,
   AccountRow,
+  AroundResult,
   ChatPage,
   ConnectionState,
   MessageView,
@@ -13,6 +14,8 @@ import type {
   PendingState,
   ReplyPreview,
   RoomView,
+  SearchHit,
+  SearchResults,
   SectionView,
   SendError,
   StagedFile,
@@ -39,6 +42,25 @@ export interface ChatState {
   loadingOlder: boolean
   /** The server page of this opening has arrived (not only the cache). */
   synced: boolean
+  /**
+   * The list is a window into the history (docs/search.md „Chat an einer Nachricht öffnen“):
+   * newer messages follow below it, and nothing new is appended.
+   */
+  hasNewer: boolean
+  /** For `loadNewer`: from the page loaded last in that direction, hidden messages count. */
+  newestId: number | null
+  loadingNewer: boolean
+  /** New messages that arrived while the list is a window; they go to its end. */
+  held: MessageView[]
+  /** Counts the times the list was replaced: an answer for the list before is dropped. */
+  view: number
+}
+
+/** Where the open chat should stand: at a message, or (`id` null) at its end. */
+export interface Jump {
+  token: string
+  id: number | null
+  seq: number
 }
 
 /**
@@ -82,6 +104,18 @@ export interface State {
   sections: SectionView[]
   /** Search text of the chat list. */
   query: string
+  /** The mark „in {Chat}“: the search is limited to this chat (docs/search.md). */
+  scope: { token: string; name: string } | null
+  /** Messages found for `query` and `scope`; null below two characters. */
+  hits: SearchResults | null
+  /** The search (`searchKey`) the hits belong to. */
+  hitsFor: string
+  /** The hit chosen in the list. */
+  hit: { token: string; messageId: number } | null
+  /** Counts the requests to put the focus into the search field. */
+  searchFocus: number
+  /** The newest request to place the open chat. */
+  jump: Jump | null
   /** The page „Kategorien“ replaces the chat area. */
   categories: boolean
   unreadLine: UnreadLine | null
@@ -107,6 +141,12 @@ let state: State = {
   groupInfo: null,
   sections: [],
   query: '',
+  scope: null,
+  hits: null,
+  hitsFor: '',
+  hit: null,
+  searchFocus: 0,
+  jump: null,
   categories: false,
   unreadLine: null,
   reopened: 0,
@@ -123,6 +163,11 @@ const EMPTY = {
   groupInfo: null,
   sections: [],
   query: '',
+  scope: null,
+  hits: null,
+  hitsFor: '',
+  hit: null,
+  jump: null,
   categories: false,
   unreadLine: null,
 } satisfies Partial<State>
@@ -168,7 +213,20 @@ function setChat(token: string, update: (c: ChatState) => ChatState): void {
 }
 
 function emptyChat(): ChatState {
-  return { messages: [], hasMore: true, oldestId: null, lastCommonRead: 0, loading: true, loadingOlder: false, synced: false }
+  return {
+    messages: [],
+    hasMore: true,
+    oldestId: null,
+    lastCommonRead: 0,
+    loading: true,
+    loadingOlder: false,
+    synced: false,
+    hasNewer: false,
+    newestId: null,
+    loadingNewer: false,
+    held: [],
+    view: 0,
+  }
 }
 
 export const getState = (): State => state
@@ -219,9 +277,23 @@ function withPending(messages: UiMessage[], pending: PendingMessage[]): UiMessag
   return [...messages.filter((m) => !m.status), ...pending.filter((p) => !delivered.has(p.message.referenceId)).map(toUi)]
 }
 
-function updateOnly(existing: UiMessage[], incoming: MessageView[]): UiMessage[] {
+function updateOnly<T extends MessageView>(existing: T[], incoming: MessageView[]): T[] {
   const updates = new Map(incoming.map((m) => [m.id, m]))
-  return existing.map((m) => updates.get(m.id) ?? m)
+  return existing.map((m) => (updates.get(m.id) as T | undefined) ?? m)
+}
+
+/** New messages of a window, kept for its end: each once, ascending. */
+function hold(held: MessageView[], incoming: MessageView[]): MessageView[] {
+  const byId = new Map(held.map((m) => [m.id, m]))
+  for (const m of incoming) byId.set(m.id, m)
+  return [...byId.values()].sort((a, b) => a.id - b.id)
+}
+
+/** The end of a window: the kept messages that are newer than the last one of the list. */
+function appendHeld(messages: UiMessage[], held: MessageView[]): UiMessage[] {
+  const last = messages.findLast((m) => !m.status)?.id ?? 0
+  const newer = held.filter((m) => m.id > last)
+  return newer.length > 0 ? merge(messages, newer) : messages
 }
 
 // --- event handling ---------------------------------------------------------------
@@ -233,11 +305,13 @@ export function handleEvent(e: TalkEvent): void {
         // The next sign-in starts as 'connecting' again, with its own 500 ms.
         window.clearTimeout(connectionTimer)
         connectionTimer = 0
+        resetSearch()
         set({ ...EMPTY, session: 'loggedOut', account: null, accounts: [], adding: false, settings: null, connection: 'connecting', connectionHeld: false })
       } else if (state.account?.id === e.account.id) setConnection(e.connection, { session: 'ready', account: e.account })
       else {
         // Another account (docs/accounts.md „Wechseln“): its list at once, nothing of the
         // one before. Open settings stay open; drafts stay with their account.
+        resetSearch()
         setConnection(e.connection, { ...EMPTY, session: 'ready', account: e.account, rooms: e.rooms ?? [], adding: false })
         void refreshSections()
         if (!e.rooms) void window.talk.rooms().then((rooms) => set({ rooms }))
@@ -258,11 +332,21 @@ export function handleEvent(e: TalkEvent): void {
     case 'messagesAdded':
       if (state.chats[e.token]) {
         countUnread(e.token, e.messages)
-        setChat(e.token, (c) => ({ ...c, messages: merge(c.messages, e.messages) }))
+        // In a window they would leave a hole: kept and counted until its end is reached.
+        setChat(e.token, (c) =>
+          c.hasNewer ? { ...c, held: hold(c.held, e.messages) } : { ...c, messages: merge(c.messages, e.messages) },
+        )
       }
+      refreshHits()
       break
     case 'messagesUpdated':
-      if (state.chats[e.token]) setChat(e.token, (c) => ({ ...c, messages: updateOnly(c.messages, e.messages) }))
+      if (state.chats[e.token])
+        setChat(e.token, (c) => ({
+          ...c,
+          messages: updateOnly(c.messages, e.messages),
+          held: updateOnly(c.held, e.messages),
+        }))
+      refreshHits()
       break
     case 'readStatus':
       if (state.chats[e.token])
@@ -276,7 +360,12 @@ export function handleEvent(e: TalkEvent): void {
       set({ settings: null })
       // The chat is open already (docs/notifications.md „War der Chat schon offen“): the
       // view stands as after a new opening, at the unread line or else at the end.
-      if (state.activeToken === e.token) set({ unreadLine: lineOnOpening(e.token), reopened: state.reopened + 1 })
+      if (state.activeToken === e.token) {
+        const again = () => set({ unreadLine: lineOnOpening(e.token), reopened: state.reopened + 1 })
+        // Out of a window first: the line and the end are in the newest messages.
+        if (state.chats[e.token]?.hasNewer) void showEnd(e.token, false).then(again)
+        else again()
+      }
       void openRoom(e.token)
       break
     case 'openSettings':
@@ -302,6 +391,9 @@ function roomsChanged(rooms: RoomView[]): void {
     !!token && state.rooms.some((r) => r.token === token) && !rooms.some((r) => r.token === token)
   const patch: Partial<State> = { rooms }
   if (gone(state.groupInfo)) patch.groupInfo = null
+  // The chat of the mark „in {Chat}“ is gone: the text searches all chats again.
+  const unscoped = gone(state.scope?.token ?? null)
+  if (unscoped) patch.scope = null
   if (gone(state.activeToken)) {
     const token = state.activeToken
     void window.talk.closeChat(token)
@@ -313,6 +405,9 @@ function roomsChanged(rooms: RoomView[]): void {
   for (const t of leaving) if (!rooms.some((r) => r.token === t)) leaving.delete(t)
   set(patch)
   void refreshSections()
+  // New messages of chats that are not open reach the index with the chat list.
+  if (unscoped) newSearch()
+  else refreshHits()
 }
 
 let sectionsSeq = 0
@@ -323,14 +418,164 @@ let sectionsSeq = 0
  */
 export async function refreshSections(): Promise<void> {
   const seq = ++sectionsSeq
-  const sections = await window.talk.roomSections(state.query, state.activeToken).catch(() => null)
+  // With the mark „in {Chat}“ the text searches that chat, not the names: the whole list
+  // stays behind the hits (Alt+↑/↓).
+  const sections = await window.talk.roomSections(state.scope ? '' : state.query, state.activeToken).catch(() => null)
   if (sections && seq === sectionsSeq && state.session === 'ready') set({ sections })
 }
 
 export function setQuery(query: string): void {
   if (query === state.query) return
-  set({ query })
+  set({ query, hit: null })
   void refreshSections()
+  newSearch()
+}
+
+// --- search in the messages (docs/search.md) ------------------------------------------------
+
+/** The list starts with this many hits and grows by as many. */
+const HITS_PAGE = 50
+/** In one chat: the row of hits the list shows. */
+const HITS_IN_CHAT = 500
+/** The server's hits are asked for this long after the last keystroke. */
+const EVERYWHERE_MS = 300
+/** While the history is still loading, the search runs again this often. */
+const LOADING_TICK_MS = 1000
+
+let hitLimit = HITS_PAGE
+let growing = false
+let searchSeq = 0
+let everywhereTimer = 0
+let tickTimer = 0
+/** The search whose shown hits the server completed. */
+let supplemented: string | null = null
+
+/** What a search is: the chat it is limited to and the text. */
+export function searchKey(s: State = state): string {
+  return `${s.scope?.token ?? ''}\n${s.query}`
+}
+
+/** From two characters on, spaces not counted. */
+export function searchable(query: string): boolean {
+  return query.replace(/\s/g, '').length >= 2
+}
+
+/** Another account: nothing of the search before arrives any more. */
+function resetSearch(): void {
+  searchSeq += 1
+  window.clearTimeout(everywhereTimer)
+  window.clearTimeout(tickTimer)
+  supplemented = null
+  hitLimit = HITS_PAGE
+  growing = false
+}
+
+/** Another search text or another chat: from the start. */
+function newSearch(): void {
+  hitLimit = HITS_PAGE
+  growing = false
+  void runSearch('typed')
+}
+
+function refreshHits(): void {
+  if (state.session === 'ready' && searchable(state.query)) void runSearch('refresh')
+}
+
+/**
+ * Searches on the device, on every change of the search text without waiting. While the
+ * history is not complete there, the server's hits follow 300 ms after the last keystroke.
+ * `tick` only watches the loading history.
+ */
+async function runSearch(reason: 'typed' | 'refresh' | 'tick'): Promise<void> {
+  const seq = ++searchSeq
+  window.clearTimeout(tickTimer)
+  const { query } = state
+  const token = state.scope?.token ?? null
+  const key = searchKey()
+  if (!searchable(query)) {
+    window.clearTimeout(everywhereTimer)
+    supplemented = null
+    if (state.hits || state.hitsFor !== key) set({ hits: null, hitsFor: key })
+    return
+  }
+  const limit = token ? HITS_IN_CHAT : hitLimit
+  const found = await window.talk.searchMessages(query, token, limit).catch(() => null)
+  // A result for an outdated search text is dropped.
+  if (!found || seq !== searchSeq || state.session !== 'ready') return
+  if (found.complete) supplemented = null
+  if (!found.complete && supplemented === key && state.hits) {
+    // The list with the server's hits stays until its successor is there.
+    set({ hits: { ...state.hits, chatsDone: found.chatsDone, chatsTotal: found.chatsTotal } })
+  } else {
+    growing = false
+    set({ hits: found, hitsFor: key })
+  }
+  if (!found.complete && reason !== 'tick') {
+    window.clearTimeout(everywhereTimer)
+    everywhereTimer = window.setTimeout(() => {
+      window.talk.searchMessagesEverywhere(query, token, limit).then(
+        (all) => {
+          if (searchKey() !== key || state.session !== 'ready') return
+          supplemented = key
+          growing = false
+          set({ hits: all, hitsFor: key })
+        },
+        // No network: the list stays as it is, without a notice.
+        () => {
+          growing = false
+        },
+      )
+    }, EVERYWHERE_MS)
+  }
+  if (found.chatsDone < found.chatsTotal) tickTimer = window.setTimeout(() => void runSearch('tick'), LOADING_TICK_MS)
+}
+
+/** The end of the hit list is reached: 50 more, when there are more. */
+export function moreHits(): void {
+  if (growing || state.scope || !state.hits?.more || state.hitsFor !== searchKey()) return
+  growing = true
+  hitLimit += HITS_PAGE
+  void runSearch('typed')
+}
+
+/** Sets or removes the mark „in {Chat}“; the search text stays. */
+export function setScope(room: { token: string; name: string } | null): void {
+  if ((room?.token ?? null) === (state.scope?.token ?? null)) return
+  set({ scope: room ? { token: room.token, name: room.name } : null, hit: null })
+  void refreshSections()
+  newSearch()
+}
+
+/** Esc in the search field: text and mark are gone. */
+export function clearSearch(): void {
+  if (!state.query && !state.scope) return
+  set({ query: '', scope: null, hit: null })
+  void refreshSections()
+  newSearch()
+}
+
+/**
+ * The focus goes into the search field: for the open chat (magnifier, Ctrl+Shift+F) or
+ * without a mark for all chats (Ctrl+F).
+ */
+export function focusSearch(inChat: boolean): void {
+  const room = inChat ? state.rooms.find((r) => r.token === state.activeToken) : null
+  setScope(room ?? null)
+  set({ searchFocus: state.searchFocus + 1 })
+}
+
+/** A click on a hit: it stays marked in the list, the chat shows the message. */
+export function openHit(hit: Pick<SearchHit, 'token' | 'messageId'>): void {
+  set({ hit: { token: hit.token, messageId: hit.messageId } })
+  void showMessage(hit.token, hit.messageId)
+}
+
+/** Arrow keys in the search field: the next older (1) or newer (-1) hit of the list. */
+export function moveHit(delta: number): void {
+  const list = state.hits?.hits ?? []
+  const i = list.findIndex((h) => h.token === state.hit?.token && h.messageId === state.hit?.messageId)
+  const next = i < 0 ? (delta > 0 ? list[0] : undefined) : list[Math.max(0, Math.min(list.length - 1, i + delta))]
+  if (next) set({ hit: { token: next.token, messageId: next.messageId } })
 }
 
 /** Opens or closes a section; the list follows via `roomsChanged`, an error comes as a toast. */
@@ -451,18 +696,40 @@ function lineOnOpening(token: string): UnreadLine | null {
   return room && room.lastReadMessage > 0 ? { token, from: room.lastReadMessage, base: room.unreadMessages } : null
 }
 
-export async function openRoom(token: string): Promise<void> {
+/** A chat left as a window starts anew the next time: its list has no end. */
+function withoutWindow(token: string | null): Record<string, ChatState> {
+  if (!token || !state.chats[token]?.hasNewer) return state.chats
+  const { [token]: _gone, ...rest } = state.chats
+  return rest
+}
+
+/** Opens a chat; with `at` it shows that message instead of its end (docs/search.md). */
+export async function openRoom(token: string, at?: number): Promise<void> {
   const previous = state.activeToken
   if (previous === token) {
     // Clicking the open chat in the list leaves its settings (or the page „Kategorien“).
     if (state.groupInfo || state.categories) set({ groupInfo: null, categories: false })
+    if (at != null) void showMessage(token, at)
     return
   }
+  if (at != null) return openAt(token, at)
   if (previous) void window.talk.closeChat(previous)
   // The snapshot comes first: the chat marks itself read as soon as it shows the end.
-  set({ activeToken: token, groupInfo: null, categories: false, unreadLine: lineOnOpening(token) })
+  set({
+    activeToken: token,
+    groupInfo: null,
+    categories: false,
+    unreadLine: lineOnOpening(token),
+    chats: withoutWindow(previous),
+    jump: null,
+  })
   void refreshSections()
   setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status), synced: false }))
+  await loadEnd(token)
+}
+
+/** The end of a chat that opens: unsent messages, the cache, then the server's page. */
+async function loadEnd(token: string): Promise<void> {
   try {
     // Unsent messages survive restarts: show them from the first frame.
     const pending = await window.talk.pending(token)
@@ -471,6 +738,8 @@ export async function openRoom(token: string): Promise<void> {
     const cached: ChatPage = await window.talk.cachedChat(token)
     if (state.activeToken === token && cached.messages.length > 0) {
       setChat(token, (c) => {
+        // A jump was quicker: the window stays.
+        if (c.hasNewer) return c
         const older = cached.oldestId != null && (c.oldestId == null || cached.oldestId < c.oldestId)
         return {
           ...c,
@@ -484,34 +753,182 @@ export async function openRoom(token: string): Promise<void> {
     }
     const page: ChatPage = await window.talk.openChat(token)
     const room = state.rooms.find((r) => r.token === token)
-    setChat(token, (c) => ({
-      ...c,
-      // Outdated cache, or more new messages than one page: drop what was shown, else a hole
-      // would stay between it and the new page (unsent messages stay).
-      messages: merge(page.reset || !joins(c.messages, page) ? c.messages.filter((m) => m.status) : c.messages, page.messages),
-      hasMore: page.hasMore,
-      oldestId: page.oldestId,
-      lastCommonRead: Math.max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0),
-      loading: false,
-      synced: true,
-    }))
+    const lastCommonRead = Math.max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
+    setChat(token, (c) =>
+      c.hasNewer
+        ? { ...c, lastCommonRead, loading: false, synced: true }
+        : {
+            ...c,
+            // Outdated cache, or more new messages than one page: drop what was shown, else a hole
+            // would stay between it and the new page (unsent messages stay).
+            messages: merge(page.reset || !joins(c.messages, page) ? c.messages.filter((m) => m.status) : c.messages, page.messages),
+            hasMore: page.hasMore,
+            oldestId: page.oldestId,
+            lastCommonRead,
+            loading: false,
+            synced: true,
+          },
+    )
   } catch {
     setChat(token, (c) => ({ ...c, loading: false, synced: true }))
   }
 }
 
+let jumpSeq = 0
+/** Counts the requests to show a message or the end: only the newest answer counts. */
+let jumpAsk = 0
+
+/**
+ * Another chat opens at a message (a hit of the search over all chats). The window comes
+ * first: without it the chat shown stays as it is. Then the chat opens with `openChat`,
+ * which starts the live messages as always, but its page is not shown: the end of the chat
+ * does not flash up.
+ */
+async function openAt(token: string, id: number): Promise<void> {
+  const previous = state.activeToken
+  const ask = ++jumpAsk
+  const [around, pending] = await Promise.all([
+    window.talk.messagesAround(token, id).catch((): AroundResult => ({ error: 'Keine Verbindung' })),
+    window.talk.pending(token).catch(() => [] as PendingMessage[]),
+  ])
+  // Another hit or another chat was quicker.
+  if (ask !== jumpAsk || state.activeToken !== previous) return
+  if ('error' in around || !around.messages.some((m) => m.id === id)) {
+    toast('error' in around ? around.error : 'Nachricht nicht gefunden')
+    return
+  }
+  if (previous) void window.talk.closeChat(previous)
+  const opening: Promise<ChatPage> = window.talk.openChat(token)
+  const chats = withoutWindow(previous)
+  // Nothing of an earlier visit: the list is the window.
+  const chat = windowed({ ...emptyChat(), view: chats[token]?.view ?? 0 }, around, pending)
+  set({
+    activeToken: token,
+    groupInfo: null,
+    categories: false,
+    // The read marker stays where it is; the line shows once its place is loaded.
+    unreadLine: lineOnOpening(token),
+    chats: { ...chats, [token]: chat },
+    jump: { token, id, seq: ++jumpSeq },
+  })
+  void refreshSections()
+  const room = state.rooms.find((r) => r.token === token)
+  try {
+    const page = await opening
+    setChat(token, (c) => {
+      const base = {
+        ...c,
+        lastCommonRead: Math.max(c.lastCommonRead, page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0),
+        synced: true,
+      }
+      if (c.hasNewer) return base
+      // The message is among the newest and the list reached the end already. More new
+      // messages than one page: the list stays a window and goes on after its last message.
+      if (page.reset || !joins(c.messages, page))
+        return { ...base, hasNewer: true, newestId: c.messages.findLast((m) => !m.status)?.id ?? null }
+      return { ...base, messages: merge(c.messages, page.messages) }
+    })
+  } catch {
+    setChat(token, (c) => ({ ...c, synced: true }))
+  }
+}
+
+/** The chat `c` with its list replaced by a window. */
+function windowed(c: ChatState, page: ChatPage, pending?: PendingMessage[]): ChatState {
+  let messages = merge(c.messages.filter((m) => m.status), page.messages)
+  if (pending) messages = withPending(messages, pending)
+  // Entering from the end, nothing is kept yet.
+  let held = c.hasNewer ? c.held : []
+  if (!page.hasNewer) {
+    messages = appendHeld(messages, held)
+    held = []
+  }
+  return {
+    ...c,
+    messages,
+    hasMore: page.hasMore,
+    oldestId: page.oldestId,
+    lastCommonRead: Math.max(c.lastCommonRead, page.lastCommonRead ?? 0),
+    loading: false,
+    loadingOlder: false,
+    loadingNewer: false,
+    hasNewer: page.hasNewer,
+    newestId: page.newestId,
+    held,
+    view: c.view + 1,
+  }
+}
+
+/**
+ * Shows a message (a search hit, a quoted message; docs/search.md „Chat an einer Nachricht
+ * öffnen“): scrolls to it when it is loaded, else the list becomes a window around it.
+ */
+export async function showMessage(token: string, id: number): Promise<void> {
+  if (state.activeToken !== token) return openRoom(token, id)
+  if (state.groupInfo || state.categories) set({ groupInfo: null, categories: false })
+  const ask = ++jumpAsk
+  if (state.chats[token]?.messages.some((m) => !m.status && m.id === id)) {
+    set({ jump: { token, id, seq: ++jumpSeq } })
+    return
+  }
+  const around = await window.talk.messagesAround(token, id).catch(() => ({ error: 'Keine Verbindung' }))
+  if (state.activeToken !== token || ask !== jumpAsk) return
+  // The chat stays as it is.
+  if ('error' in around) toast(around.error)
+  else if (!around.messages.some((m) => m.id === id)) toast('Nachricht nicht gefunden')
+  else
+    set({
+      chats: { ...state.chats, [token]: windowed(state.chats[token] ?? emptyChat(), around) },
+      jump: { token, id, seq: ++jumpSeq },
+    })
+}
+
+/**
+ * „Zum Ende springen“ in a window: the newest messages replace the list, and the chat goes
+ * to its end (`place` false: the caller places it).
+ */
+export async function showEnd(token: string, place = true): Promise<void> {
+  if (!state.chats[token]?.hasNewer) return
+  const ask = ++jumpAsk
+  const cached = await window.talk.cachedChat(token).catch(() => null)
+  const c = state.chats[token]
+  if (state.activeToken !== token || ask !== jumpAsk || !c?.hasNewer) return
+  if (!cached || cached.messages.length === 0) {
+    toast('Keine Verbindung')
+    return
+  }
+  const chat: ChatState = {
+    ...c,
+    messages: appendHeld(merge(c.messages.filter((m) => m.status), cached.messages), c.held),
+    hasMore: cached.hasMore,
+    oldestId: cached.oldestId,
+    lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
+    loadingOlder: false,
+    loadingNewer: false,
+    hasNewer: false,
+    newestId: null,
+    held: [],
+    view: c.view + 1,
+  }
+  set({ chats: { ...state.chats, [token]: chat }, jump: place ? { token, id: null, seq: ++jumpSeq } : null })
+}
+
 export function closeRoom(): void {
-  if (state.activeToken) void window.talk.closeChat(state.activeToken)
-  set({ activeToken: null, groupInfo: null, unreadLine: null })
+  const token = state.activeToken
+  if (token) void window.talk.closeChat(token)
+  set({ activeToken: null, groupInfo: null, unreadLine: null, chats: withoutWindow(token), jump: null })
   void refreshSections()
 }
 
 export async function loadOlder(token: string): Promise<void> {
   const chat = state.chats[token]
   if (!chat || !chat.hasMore || chat.loadingOlder || chat.oldestId == null) return
+  const { view } = chat
   setChat(token, (c) => ({ ...c, loadingOlder: true }))
   try {
     const page = await window.talk.loadOlder(token, chat.oldestId)
+    // The list was replaced meanwhile (a jump): the page belongs to the one before.
+    if (state.chats[token]?.view !== view) return
     setChat(token, (c) => ({
       ...c,
       messages: merge(c.messages, page.messages),
@@ -520,7 +937,47 @@ export async function loadOlder(token: string): Promise<void> {
       loadingOlder: false,
     }))
   } catch {
-    setChat(token, (c) => ({ ...c, loadingOlder: false }))
+    if (state.chats[token]?.view === view) setChat(token, (c) => ({ ...c, loadingOlder: false }))
+  }
+}
+
+type AppendListener = (token: string) => void
+let appendListener: AppendListener | null = null
+
+/** Called right before a window grows downwards, so the chat can keep its place. */
+export function onBeforeAppend(l: AppendListener): () => void {
+  appendListener = l
+  return () => {
+    if (appendListener === l) appendListener = null
+  }
+}
+
+/** The next messages below a window. At its end the kept messages follow, and it is none any more. */
+export async function loadNewer(token: string): Promise<void> {
+  const chat = state.chats[token]
+  if (!chat || !chat.hasNewer || chat.loadingNewer || chat.newestId == null) return
+  const { view, newestId } = chat
+  setChat(token, (c) => ({ ...c, loadingNewer: true }))
+  try {
+    const page = await window.talk.loadNewer(token, newestId)
+    if (state.chats[token]?.view !== view) return
+    appendListener?.(token)
+    setChat(token, (c) => {
+      const messages = merge(c.messages, page.messages)
+      return {
+        ...c,
+        // Only what is newer than the last message of the list: nothing twice, no hole.
+        messages: page.hasNewer ? messages : appendHeld(messages, c.held),
+        hasNewer: page.hasNewer,
+        newestId: page.newestId ?? c.newestId,
+        held: page.hasNewer ? c.held : [],
+        loadingNewer: false,
+      }
+    })
+    // A page of hidden messages only shows nothing: the next one right away.
+    if (page.hasNewer && page.messages.length === 0 && page.newestId != null && page.newestId > newestId) void loadNewer(token)
+  } catch {
+    if (state.chats[token]?.view === view) setChat(token, (c) => ({ ...c, loadingNewer: false }))
   }
 }
 
@@ -539,6 +996,8 @@ export function showQueued(token: string, p: PendingMessage): void {
       ? c
       : { ...c, messages: [...c.messages, toUi(p)] },
   )
+  // Unsent messages stand at the end of the chat: sending in a window leads there.
+  if (state.chats[token]?.hasNewer) void showEnd(token)
 }
 
 /** Queues the message in the outbox: it is delivered reliably, also after a restart. */
@@ -575,7 +1034,8 @@ export function markVisibleRead(token: string): void {
   if (!document.hasFocus() || document.visibilityState !== 'visible') return
   const chat = state.chats[token]
   const room = state.rooms.find((r) => r.token === token)
-  if (!chat || !room) return
+  // In a window the read marker does not move: its last message is not the newest.
+  if (!chat || !room || chat.hasNewer) return
   const newest = [...chat.messages].reverse().find((m) => !m.status)
   if (!newest) return
   if (room.unreadMessages > 0 || newest.id > room.lastReadMessage) {
@@ -601,6 +1061,15 @@ function countUnread(token: string, incoming: MessageView[]): void {
   const line = state.unreadLine?.token === token ? state.unreadLine : null
   // While opening, everything after the snapshot counts (the list may have been behind).
   if (!chat || (line && !chat.synced)) return
+  if (chat.hasNewer) {
+    // In a window everything new is out of sight. A line that still counts stays; else a
+    // new one starts at the first foreign message (it shows once the end is loaded).
+    const first = incoming.find((m) => !m.isOwn && m.kind !== 'system')
+    if (!first) return
+    if (line && (line.base > 0 || [...chat.messages, ...chat.held].some((m) => countsAsUnread(m, line.from)))) return
+    set({ unreadLine: { token, from: first.id - 1, base: 0 } })
+    return
+  }
   if (line && chat.messages.some((m) => countsAsUnread(m, line.from))) return
   const newest = chat.messages.findLast((m) => !m.status)
   if (!newest || !incoming.some((m) => countsAsUnread(m, newest.id))) return

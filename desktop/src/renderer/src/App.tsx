@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { closeRoom, closeSettings, getState, openCompose, openSettings, useStore } from './store'
+import { closeRoom, closeSettings, focusSearch, getState, openCompose, openSettings, useStore } from './store'
 import { GroupInfo } from './components/GroupInfo'
 import { Categories } from './components/Categories'
 import { Settings } from './components/Settings'
@@ -80,7 +80,6 @@ export function App() {
   const adding = useStore((s) => s.adding)
   // Tokens of different servers overlap: another account means another chat.
   const accountKey = useStore((s) => s.account?.id ?? '')
-  const search = useRef<HTMLInputElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const { width, handle } = useSidebarWidth()
 
@@ -96,14 +95,11 @@ export function App() {
         e.preventDefault()
         closeSettings()
         openCompose()
-      } else if (mod && (e.key === 'k' || e.key === 'f')) {
+      } else if (mod && !e.altKey && (e.key.toLowerCase() === 'f' || e.key === 'k')) {
+        // docs/search.md: Ctrl+F searches all chats, Ctrl+Shift+F the open one.
         e.preventDefault()
         closeSettings()
-        // After the list is no longer inert.
-        requestAnimationFrame(() => {
-          search.current?.focus()
-          search.current?.select()
-        })
+        focusSearch(e.shiftKey && e.key !== 'k')
       } else if (inSettings) {
         // The settings handle their own keys (Esc goes back to the chats).
       } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -152,7 +148,7 @@ export function App() {
     <div className="app-stage" style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
     {/* The settings cover chat list and chat; both stay mounted (draft, scroll position). */}
     <div className={`app${activeToken || categories ? ' has-chat' : ''}`} inert={!!settings}>
-      <Sidebar ref={search} />
+      <Sidebar />
       <div
         className="sidebar-resize"
         role="separator"

@@ -1,13 +1,20 @@
-import { forwardRef, memo, useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
-import { withAttachment, type CategoryView, type RoomView, type SectionView } from '@shared/core'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { withAttachment, type CategoryView, type RoomView, type SearchHit, type SectionView } from '@shared/core'
 import {
+  clearSearch,
   getState,
+  moreHits,
+  moveHit,
   openCategories,
   openCompose,
   openGroupInfo,
+  openHit,
   openRoom,
   openSettings,
+  searchable,
+  searchKey,
   setQuery,
+  setScope,
   shownConnection,
   shownRooms,
   toggleSection,
@@ -24,9 +31,25 @@ import { NameDialog } from './Categories'
 import { isGroupRoom, LEVELS } from './GroupInfo'
 
 
-export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, searchRef) {
+/** So many hit rows are drawn at first and added when the end of the list is reached. */
+const ROWS_STEP = 100
+
+/** „17 Treffer“ above the hits of one chat (docs/search.md). */
+function hitCount(total: number): string {
+  return total === 0 ? 'Keine Treffer' : total === 1 ? '1 Treffer' : `${total.toLocaleString('de-DE')} Treffer`
+}
+
+export function Sidebar() {
+  const searchRef = useRef<HTMLInputElement>(null)
   const sections = useStore((s) => s.sections)
   const query = useStore((s) => s.query)
+  const scope = useStore((s) => s.scope)
+  const results = useStore((s) => s.hits)
+  // The hits belong to what the field says (not to the search text before).
+  const current = useStore((s) => s.hitsFor === searchKey(s))
+  const chosen = useStore((s) => s.hit)
+  const searchFocus = useStore((s) => s.searchFocus)
+  const rooms = useStore((s) => s.rooms)
   const activeToken = useStore((s) => s.activeToken)
   const connection = useStore((s) => s.connection)
   const shown = useStore(shownConnection)
@@ -52,6 +75,28 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
 
   const onRoomMenu = useCallback((token: string, x: number, y: number) => setChatMenu({ token, x, y }), [])
 
+  // Ctrl+F, Ctrl+Shift+F and the magnifier of the chat (docs/search.md).
+  useEffect(() => {
+    if (searchFocus === 0) return
+    searchRef.current?.focus()
+    searchRef.current?.select()
+  }, [searchFocus])
+
+  const avatarVersions = useMemo(() => new Map(rooms.map((r) => [r.token, r.avatarVersion])), [rooms])
+
+  // In one chat the core hands over up to 500 hits: the rows follow in steps, so the list
+  // keeps up with the typing.
+  const [rowLimit, setRowLimit] = useState(ROWS_STEP)
+  const listKey = useStore(searchKey)
+  const [limitFor, setLimitFor] = useState(listKey)
+  if (limitFor !== listKey) {
+    setLimitFor(listKey)
+    setRowLimit(ROWS_STEP)
+  }
+  const chosenAt = chosen && results ? results.hits.findIndex((h) => h.token === chosen.token && h.messageId === chosen.messageId) : -1
+  // The arrow keys reach every hit, also one that is not drawn yet.
+  if (chosenAt >= rowLimit) setRowLimit(chosenAt + ROWS_STEP)
+
   if (composing) {
     return (
       <aside className="sidebar">
@@ -60,7 +105,31 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
     )
   }
 
+  const searching = searchable(query)
+  const hits = searching ? (results?.hits ?? []) : []
+  // Over all chats the list grows by 50 hits anyway (`moreHits`).
+  const rows = scope && hits.length > rowLimit ? hits.slice(0, rowLimit) : hits
   const empty = sections.every((s) => s.total === 0)
+  const noHits = !searching || (current && hits.length === 0)
+  const stillLoading = searching && !scope && !!results && results.chatsDone < results.chatsTotal
+
+  function onSearchKey(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') clearSearch()
+    else if (e.key === 'Backspace' && scope && e.currentTarget.value === '') setScope(null)
+    else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.altKey && hits.length > 0) {
+      e.preventDefault()
+      moveHit(e.key === 'ArrowDown' ? 1 : -1)
+    } else if (e.key === 'Enter') {
+      // Nothing of the key reaches the message field of a chat that opens.
+      e.preventDefault()
+      const first = scope ? undefined : sections[0]?.rooms[0]
+      if (chosen) openHit(chosen)
+      else if (first) {
+        void openRoom(first.token)
+        setQuery('')
+      } else if (hits[0]) openHit(hits[0])
+    }
+  }
   // Nothing to list yet (docs/connection.md „Leere Chatliste“): the circle in the middle
   // stands for the one in the header. `noRooms` is ahead of the sections by one answer.
   const loadingList = empty && noRooms && !query && shown === 'connecting'
@@ -127,41 +196,96 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
         </div>
       </header>
       <div className="search">
-        <input
-          ref={searchRef}
-          className="input search-input"
-          placeholder="Suchen"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') setQuery('')
-            const first = sections[0]?.rooms[0]
-            if (e.key === 'Enter' && first) {
-              void openRoom(first.token)
-              setQuery('')
-            }
-          }}
-        />
+        <div className="search-box">
+          {scope && (
+            <span className="search-scope">
+              <span className="ellipsis">in {rooms.find((r) => r.token === scope.token)?.name ?? scope.name}</span>
+              <button
+                className="search-scope-clear"
+                aria-label="In allen Chats suchen"
+                title="In allen Chats suchen"
+                onClick={() => {
+                  setScope(null)
+                  searchRef.current?.focus()
+                }}
+              >
+                <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden>
+                  <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              </button>
+            </span>
+          )}
+          <input
+            ref={searchRef}
+            className="search-field"
+            placeholder="Suchen"
+            aria-label={scope ? `In ${scope.name} suchen` : 'Suchen'}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onSearchKey}
+          />
+        </div>
       </div>
       <RecordingBanners />
-      <nav className="room-list" aria-label="Chats">
-        {sections.map((section) => (
-          <div key={section.id} role="group" aria-label={section.title || undefined}>
-            {section.title && <SectionHeader section={section} />}
-            {section.rooms.map((room) => (
-              <RoomItem
-                key={`${section.id}:${room.token}`}
-                room={room}
-                active={room.token === activeToken}
+      <nav
+        className="room-list"
+        aria-label={scope ? 'Treffer' : 'Chats'}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          if (el.scrollHeight - el.scrollTop - el.clientHeight > 300) return
+          if (rows.length < hits.length) setRowLimit(rowLimit + ROWS_STEP)
+          else moreHits()
+        }}
+      >
+        {/* With the mark „in {Chat}“ the list shows only the hits of that chat. */}
+        {!scope &&
+          sections.map((section) => (
+            <div key={section.id} role="group" aria-label={section.title || undefined}>
+              {section.title &&
+                (section.kind === 'archived' ? (
+                  <h3 className="list-section">{section.title}</h3>
+                ) : (
+                  <SectionHeader section={section} />
+                ))}
+              {section.rooms.map((room) => (
+                <RoomItem
+                  key={`${section.id}:${room.token}`}
+                  room={room}
+                  active={room.token === activeToken}
+                  now={now}
+                  onMenu={onRoomMenu}
+                />
+              ))}
+            </div>
+          ))}
+        {scope && searching && current && results && (
+          <p className="list-section hit-count" role="status">
+            {hitCount(results.total)}
+          </p>
+        )}
+        {hits.length > 0 && (
+          <div role="group" aria-label={scope ? undefined : 'Nachrichten'}>
+            {!scope && <h3 className="list-section">Nachrichten</h3>}
+            {rows.map((hit) => (
+              <HitRow
+                key={`${hit.token}:${hit.messageId}`}
+                hit={hit}
+                inChat={!!scope}
+                active={chosen?.token === hit.token && chosen.messageId === hit.messageId}
                 now={now}
-                onMenu={onRoomMenu}
+                version={avatarVersions.get(hit.token)}
               />
             ))}
           </div>
-        ))}
-        {empty && query && <p className="muted center pad">Keine Treffer</p>}
-        {empty && !query && noRooms && connection === 'online' && <p className="muted center pad">Noch keine Chats</p>}
-        {loadingList && <div className="spinner small quiet list-loading" role="status" aria-label="Verbinde …" />}
+        )}
+        {stillLoading && (
+          <p className="muted hits-loading" role="status">
+            Ältere Nachrichten werden noch geladen ({results.chatsDone} von {results.chatsTotal} Chats)
+          </p>
+        )}
+        {!scope && empty && query && noHits && <p className="muted center pad">Keine Treffer</p>}
+        {!scope && empty && !query && noRooms && connection === 'online' && <p className="muted center pad">Noch keine Chats</p>}
+        {!scope && loadingList && <div className="spinner small quiet list-loading" role="status" aria-label="Verbinde …" />}
       </nav>
       {chatMenu && (
         <ChatMenu
@@ -172,6 +296,57 @@ export const Sidebar = forwardRef<HTMLInputElement>(function Sidebar(_props, sea
         />
       )}
     </aside>
+  )
+}
+
+/**
+ * A message found by the search (docs/search.md „Trefferzeile“): the chat with its picture,
+ * or with the mark „in {Chat}“ the sender; below it the excerpt with the search words bold.
+ */
+const HitRow = memo(function HitRow({
+  hit,
+  inChat,
+  active,
+  now,
+  version,
+}: {
+  hit: SearchHit
+  inChat: boolean
+  active: boolean
+  now: number
+  version?: string
+}) {
+  const row = useRef<HTMLButtonElement>(null)
+  // The arrow keys of the search field move the choice: it stays in sight.
+  useEffect(() => {
+    if (active) row.current?.scrollIntoView({ block: 'nearest' })
+  }, [active])
+  const sender = hit.isOwn ? 'Du' : hit.actorName
+  return (
+    <button
+      ref={row}
+      className={`room hit${active ? ' active' : ''}`}
+      onClick={() => openHit(hit)}
+      aria-current={active}
+      data-hit={hit.messageId}
+      data-hit-token={hit.token}
+    >
+      {!inChat && <Avatar name={hit.roomName} token={hit.token} version={version} />}
+      <div className="room-body">
+        <div className="room-top">
+          <span className="room-title">
+            <span className="room-name">{inChat ? sender : hit.roomName}</span>
+          </span>
+          <span className="room-time">{listTime(hit.timestamp, now)}</span>
+        </div>
+        <div className="room-bottom">
+          <span className="room-preview">
+            {!inChat && hit.showActor && `${sender}: `}
+            {hit.snippet.map((part, i) => (part.hit ? <strong key={i}>{part.text}</strong> : part.text))}
+          </span>
+        </div>
+      </div>
+    </button>
   )
 })
 

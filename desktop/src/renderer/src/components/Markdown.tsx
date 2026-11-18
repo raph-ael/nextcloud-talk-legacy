@@ -3,37 +3,62 @@
 // Produces React elements only – no HTML injection possible.
 
 import { Fragment, type ReactNode } from 'react'
+import { splitMarks } from '../format'
+
+/** Search words of the chat's search, folded (docs/search.md „Hervorhebung“). */
+export type Marks = string[] | null | undefined
+
+/** `text` with the search words marked. */
+export function marked(text: string, marks: Marks, key: string | number = 0): ReactNode {
+  if (!marks?.length) return text
+  const parts = splitMarks(text, marks)
+  if (parts.length === 1 && !parts[0].hit) return text
+  return parts.map((p, i) =>
+    p.hit ? (
+      <mark key={`${key}/${i}`} className="search-mark">
+        {p.text}
+      </mark>
+    ) : (
+      p.text
+    ),
+  )
+}
 
 const INLINE =
   /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)|(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))|(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g
 
-function inline(text: string, key = 0): ReactNode[] {
+function inline(text: string, key = 0, marks?: Marks): ReactNode[] {
   const out: ReactNode[] = []
   let last = 0
+  const plainText = (t: string, at: number) => {
+    const node = marked(t, marks, `${key}-t${at}`)
+    if (Array.isArray(node)) out.push(...node)
+    else out.push(node)
+  }
   for (const m of text.matchAll(INLINE)) {
-    if (m.index > last) out.push(text.slice(last, m.index))
+    if (m.index > last) plainText(text.slice(last, m.index), last)
     const [tok] = m
     const k = `${key}-${m.index}`
-    if (m[1]) out.push(<code key={k}>{tok.slice(1, -1)}</code>)
-    else if (m[2]) out.push(<strong key={k}>{inline(tok.slice(2, -2), m.index)}</strong>)
-    else if (m[3]) out.push(<s key={k}>{inline(tok.slice(2, -2), m.index)}</s>)
-    else if (m[4]) out.push(<em key={k}>{inline(tok.slice(1, -1), m.index)}</em>)
+    if (m[1]) out.push(<code key={k}>{marked(tok.slice(1, -1), marks)}</code>)
+    else if (m[2]) out.push(<strong key={k}>{inline(tok.slice(2, -2), m.index, marks)}</strong>)
+    else if (m[3]) out.push(<s key={k}>{inline(tok.slice(2, -2), m.index, marks)}</s>)
+    else if (m[4]) out.push(<em key={k}>{inline(tok.slice(1, -1), m.index, marks)}</em>)
     else if (m[5]) {
       const close = tok.indexOf('](')
       out.push(
         <a key={k} href={tok.slice(close + 2, -1)} target="_blank" rel="noreferrer">
-          {tok.slice(1, close)}
+          {marked(tok.slice(1, close), marks)}
         </a>,
       )
     } else if (m[6])
       out.push(
         <a key={k} href={tok} target="_blank" rel="noreferrer">
-          {tok}
+          {marked(tok, marks)}
         </a>,
       )
     last = m.index + tok.length
   }
-  if (last < text.length) out.push(text.slice(last))
+  if (last < text.length) plainText(text.slice(last), last)
   return out
 }
 
@@ -87,28 +112,28 @@ function parse(src: string): Block[] {
   return blocks.filter((b) => b.kind !== 'p' || b.lines.length > 0)
 }
 
-const lines = (ls: string[]) =>
+const lines = (ls: string[], marks?: Marks) =>
   ls.map((l, i) => (
     <Fragment key={i}>
       {i > 0 && <br />}
-      {inline(l, i)}
+      {inline(l, i, marks)}
     </Fragment>
   ))
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, marks }: { text: string; marks?: Marks }) {
   const blocks = parse(text)
   // Plain single-paragraph messages stay inline so the timestamp can float beside them.
-  if (blocks.length === 1 && blocks[0].kind === 'p') return <>{lines(blocks[0].lines)}</>
+  if (blocks.length === 1 && blocks[0].kind === 'p') return <>{lines(blocks[0].lines, marks)}</>
   return (
     <div className="md">
       {blocks.map((b, i) => {
         switch (b.kind) {
           case 'p':
-            return <p key={i}>{lines(b.lines)}</p>
+            return <p key={i}>{lines(b.lines, marks)}</p>
           case 'h':
             return (
               <p key={i} className="md-h">
-                {inline(b.text)}
+                {inline(b.text, 0, marks)}
               </p>
             )
           case 'ul':
@@ -117,15 +142,15 @@ export function Markdown({ text }: { text: string }) {
             return (
               <List key={i}>
                 {b.items.map((it, j) => (
-                  <li key={j}>{inline(it, j)}</li>
+                  <li key={j}>{inline(it, j, marks)}</li>
                 ))}
               </List>
             )
           }
           case 'quote':
-            return <blockquote key={i}>{lines(b.lines)}</blockquote>
+            return <blockquote key={i}>{lines(b.lines, marks)}</blockquote>
           case 'code':
-            return <pre key={i}>{b.text}</pre>
+            return <pre key={i}>{marked(b.text, marks)}</pre>
           case 'hr':
             return <hr key={i} />
         }
