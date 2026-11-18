@@ -348,10 +348,11 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     }
                 },
                 actions = {
+                    // Not in the search: next to a text field one would call by accident (docs/search.md „Kopf“).
                     if (searchText == null) {
                         IconButton(onClick = { searchText = "" }) { Icon(Icons.Filled.Search, "Im Chat suchen") }
+                        CallButton(sessions, room)
                     }
-                    CallButton(sessions, room)
                 },
                 title = {
                     val groupRoom = room.roomType.toInt() in setOf(2, 3)
