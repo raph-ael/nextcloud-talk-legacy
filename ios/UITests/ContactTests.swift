@@ -170,21 +170,38 @@ final class ContactTests: XCTestCase {
 
         reveal(karla)
         karla.tap()
-        let ql = app.otherElements["QLPreviewControllerView"]
-        let named = app.navigationBars.matching(NSPredicate(format: "identifier CONTAINS 'Karla' OR label CONTAINS 'Karla'")).firstMatch
-        let card = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Karla'")).firstMatch
-        XCTAssertTrue(ql.waitForExistence(timeout: 15) || named.exists || card.exists, "no preview: \(app.debugDescription)")
-        // The card is drawn out of process (not in the tree) and takes a few seconds the
-        // first time; the screenshots show it.
-        sleep(8)
-        shot("05-preview")
-        app.swipeUp(velocity: 400)
+        // docs/attachments.md "Kontaktkachel": the system's contact view with saving.
+        let create = app.buttons.matching(NSPredicate(format: "label IN %@", ["Neuen Kontakt erstellen", "Create New Contact"])).firstMatch
+        let add = app.buttons.matching(NSPredicate(format: "label IN %@", ["Zu Kontakt hinzufügen", "Zu vorhandenem Kontakt hinzufügen", "Add to Existing Contact"])).firstMatch
+        if !create.waitForExistence(timeout: 15) { print("NOTE card tree: \(app.debugDescription)") }
+        XCTAssertTrue(create.exists, "no Neuen Kontakt erstellen")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Karla Brandt'")).firstMatch.exists, "card without the name")
+        print("NOTE add button: \(add.exists ? add.label : "-")")
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists, "asks for access")
         sleep(2)
-        shot("05b-preview-below")
-        let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["Fertig", "Done", "Schließen", "Close"])).firstMatch
-        if done.exists { done.tap() } else { app.swipeDown(velocity: .fast) }
-        sleep(1)
-        XCTAssertTrue(any["composer"].firstMatch.waitForExistence(timeout: 5), "preview did not close")
+        shot("05-card")
+        if !add.isHittable { app.swipeUp(velocity: 400); sleep(1) }
+        shot("05b-card-below")
+        XCTAssertTrue(add.exists, "no Zu Kontakt hinzufügen")
+
+        // Saving once, only when asked (it adds to the simulator's address book).
+        if env["TALK_CONTACT_SAVE"] == "1" {
+            if !create.isHittable { app.swipeDown(velocity: 400); sleep(1) }
+            create.tap()
+            let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["Fertig", "Done", "Sichern", "Save"])).firstMatch
+            XCTAssertTrue(done.waitForExistence(timeout: 10), "no editor: \(app.debugDescription)")
+            sleep(1)
+            shot("05c-editor")
+            done.tap()
+            sleep(2)
+            XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists, "asks for access")
+            shot("05d-saved")
+        }
+
+        let close = app.buttons["contact-card-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "no close button")
+        close.tap()
+        XCTAssertTrue(any["composer"].firstMatch.waitForExistence(timeout: 5), "card did not close")
     }
 
     /// Tests 13, 14 and 16: everything ticked, no tick leaves the button off, one number

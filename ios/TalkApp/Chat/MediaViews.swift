@@ -281,7 +281,7 @@ struct FileSendView: View {
 }
 
 /// Loads received files once (spinner in the tile meanwhile) and shows them in QuickLook
-/// under their real name, with the share button.
+/// under their real name, with the share button; contacts in the system's contact view.
 @MainActor
 @Observable
 final class FileOpener {
@@ -313,6 +313,9 @@ final class FileOpener {
                 Toast.show("Datei konnte nicht geladen werden")
                 return
             }
+            // docs/attachments.md "Kontaktkachel": a card goes to the system's contact view,
+            // which offers to save it; the preview is the way out when it cannot be read.
+            if !a.contactName.isEmpty, ContactCardViewer.open(url) { return }
             guard QLPreviewController.canPreview(url as NSURL) else {
                 Toast.show(a.contactName.isEmpty ? "Keine App zum Öffnen von \(name)" : "Keine Kontakte-App gefunden")
                 return

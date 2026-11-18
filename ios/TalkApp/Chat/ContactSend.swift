@@ -47,6 +47,37 @@ enum ContactPicker {
     }
 }
 
+/// docs/attachments.md "Kontaktkachel": a received card in the system's contact view for an
+/// unknown contact, with "Neuen Kontakt erstellen" and "Zu Kontakt hinzufügen". It runs out
+/// of process and needs no access to the address book; whether to save is the user's
+/// decision there, the app writes nothing itself.
+@MainActor
+enum ContactCardViewer {
+    /// false when the file holds no readable card (the caller falls back to the preview).
+    static func open(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let contact = (try? CNContactVCardSerialization.contacts(with: data))?.first,
+              let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
+                ?? UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              var top = scene.keyWindow?.rootViewController else { return false }
+        while let next = top.presentedViewController { top = next }
+        let card = CNContactViewController(forUnknownContact: contact)
+        card.contactStore = CNContactStore()
+        card.allowsActions = true
+        card.allowsEditing = true
+        let close = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak card] _ in
+            card?.navigationController?.dismiss(animated: true)
+        })
+        close.accessibilityLabel = "Schließen"
+        close.accessibilityIdentifier = "contact-card-close"
+        card.navigationItem.leftBarButtonItem = close
+        let nav = UINavigationController(rootViewController: card)
+        nav.view.accessibilityIdentifier = "contact-card"
+        top.present(nav, animated: true)
+        return true
+    }
+}
+
 /// The part of an address book entry the sheet offers: name, organization and one line per
 /// number, e-mail address and postal address. Photo, notes, birthday and everything else are
 /// never read.
@@ -297,8 +328,8 @@ struct ContactSendSheet: View {
 
 /// docs/attachments.md "Kontaktkachel": initials avatar, the name (two lines at most) and
 /// "Kontakt" below, never a photo. Pending like a file: the ring in place of the avatar, a
-/// tap on a failed or waiting one sends it again. Delivered: a tap loads the vCard and hands
-/// it to the preview, which offers "Neuen Kontakt erstellen"; the app writes nothing to the
+/// tap on a failed or waiting one sends it again. Delivered: a tap loads the vCard and shows
+/// it in the system's contact view (`ContactCardViewer`); the app writes nothing to the
 /// address book.
 struct ContactRow: View {
     let m: UiMessage
