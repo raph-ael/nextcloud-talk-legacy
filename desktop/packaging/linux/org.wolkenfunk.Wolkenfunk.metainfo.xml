@@ -81,6 +81,17 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.3" date="2026-11-18" type="development">
+      <description>
+        <p>Suche in den Nachrichten. Das Suchfeld der Chatliste findet jetzt auch Nachrichten aus allen Chats, mit jedem Tastendruck und ohne Netz. Mehrere Wörter dürfen in beliebiger Reihenfolge stehen, auch Wortteile treffen, Groß- und Kleinschreibung und Akzente zählen nicht. Gefunden werden auch Dateinamen, Kontakte und Standorte.</p>
+        <p>Suche im Chat. Auf Android über die Lupe im Chat-Kopf, mit Zähler und Pfeilen von Treffer zu Treffer. Am Computer über die Lupe oder Strg+Umschalt+F, die Treffer stehen in der Seitenleiste.</p>
+        <p>Ein Treffer öffnet den Chat an der Nachricht, auch wenn sie weit zurückliegt. Ein Tipp auf ein Zitat springt zur zitierten Nachricht.</p>
+        <p>Für die Suche laden die Apps den Verlauf deiner Chats im Hintergrund auf das Gerät.</p>
+        <p>Android: Kontakt senden. Vor dem Senden wählst du, welche Nummern, E-Mail-Adressen und Anschriften mitgehen. Empfangene Kontakte erscheinen überall als Kachel mit Namen.</p>
+        <p>Reagiert jemand auf deine Nachricht, sagt die Benachrichtigung das jetzt („Hat mit 👍 reagiert auf: …“), statt nur deine eigene Nachricht zu wiederholen.</p>
+        <p>Android: „Umfrage“ ist aus dem Anhang-Menü verschwunden, bis es Umfragen gibt.</p>
+      </description>
+    </release>
     <release version="0.6.2" date="2026-11-18" type="development">
       <description>
         <p>Android: Dateien senden. Über das Anhang-Menü lassen sich mehrere Dateien auf einmal mit einer Beschreibung senden, sie gehen unverändert raus. Empfangene Dateien laden in der App und öffnen sich mit der passenden App.</p>
