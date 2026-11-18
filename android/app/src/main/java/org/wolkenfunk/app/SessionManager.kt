@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.wolkenfunk.app.media.PickedFile
@@ -37,6 +38,9 @@ import java.util.concurrent.ConcurrentHashMap
 import uniffi.talk_ffi.CallIceCandidate
 import uniffi.talk_ffi.CallView
 import uniffi.talk_ffi.CategoryView
+import uniffi.talk_ffi.ChatPage
+import uniffi.talk_ffi.SearchResults
+import java.util.concurrent.atomic.AtomicInteger
 import uniffi.talk_ffi.PeerState
 import uniffi.talk_ffi.SdpType
 import org.wolkenfunk.app.call.CallActions
@@ -93,6 +97,9 @@ import android.graphics.Shader
 import androidx.compose.ui.graphics.asAndroidBitmap
 import org.wolkenfunk.app.ui.withAttachment
 
+/** So long a tapped search hit waits for its window before the chat opens with a spinner. */
+private const val AROUND_WAIT_MS = 400L
+
 enum class SessionState { LOADING, LOGGED_OUT, READY }
 enum class SendStatus { SENDING, WAITING, FAILED }
 
@@ -120,7 +127,27 @@ data class ChatState(
     val loadingOlder: Boolean = false,
     /** The server page of this opening has arrived (or failed): more than the cache. */
     val synced: Boolean = false,
+    /**
+     * Window into the history (docs/search.md „Chat an einer Nachricht öffnen“): newer
+     * messages exist below the list, [newestId] is the pointer for `loadNewer`.
+     */
+    val hasNewer: Boolean = false,
+    /** Set by the pages of a window, also once it reached the end; null for a chat opened at its end. */
+    val newestId: Long? = null,
+    val loadingNewer: Boolean = false,
+    /** Messages that arrived while the list was a window: they follow at its end, the jump button counts them. */
+    val held: List<MessageView> = emptyList(),
+    /** Changes when the list is replaced: a page asked for before does not belong to it any more. */
+    val rev: Int = 0,
+    /** Counts the jumps from a window to the end of the chat: the view follows. */
+    val endRev: Int = 0,
 )
+
+/**
+ * A message the open chat shows (search hit, quoted message): the screen scrolls it into the
+ * upper part and lights it up. Not [ready] while the chat still opens at it.
+ */
+data class Jump(val token: String, val messageId: Long, val seq: Int, val ready: Boolean)
 
 /**
  * Ungelesen-Linie of the open chat (docs/chat.md „Datum und Ungelesen-Linie“), pure UI state
@@ -163,6 +190,7 @@ data class UiState(
     val connectionSince: Long = 0,
     val activeToken: String? = null,
     val unreadLine: UnreadLine? = null,
+    val jump: Jump? = null,
     /** Counts taps on a notification of the chat that was open already: its view starts over. */
     val chatFollowed: Int = 0,
     /** All signed-in accounts in the order they signed in (the active one included). */
@@ -1040,11 +1068,22 @@ class SessionManager(private val context: Context) {
             is CoreEvent.MessagesAdded -> if (shown) {
                 adoptLocalPreviews(rt.id, event.messages)
                 trackUnreadLine(rt.id, event.token, event.messages)
-                updateChat(rt.id, event.token) { it.copy(messages = merge(it.messages, event.messages)) }
+                updateChat(rt.id, event.token) {
+                    // In a window they would leave a gap: kept for its end (docs/search.md).
+                    if (it.hasNewer) {
+                        val ids = event.messages.mapTo(HashSet()) { m -> m.id }
+                        it.copy(held = (it.held.filter { h -> h.id !in ids } + event.messages).sortedBy { m -> m.id })
+                    } else {
+                        it.copy(messages = merge(it.messages, event.messages))
+                    }
+                }
             }
             is CoreEvent.MessagesUpdated -> updateChat(rt.id, event.token) { c ->
                 val byId = event.messages.associateBy { it.id }
-                c.copy(messages = c.messages.map { m -> byId[m.msg.id]?.let { UiMessage(it) } ?: m })
+                c.copy(
+                    messages = c.messages.map { m -> byId[m.msg.id]?.let { UiMessage(it) } ?: m },
+                    held = if (c.held.isEmpty()) c.held else c.held.map { m -> byId[m.id] ?: m },
+                )
             }
             is CoreEvent.ReadStatus -> updateChat(rt.id, event.token) {
                 it.copy(lastCommonRead = maxOf(it.lastCommonRead, event.lastCommonRead))
@@ -1060,7 +1099,8 @@ class SessionManager(private val context: Context) {
             }
             CoreEvent.AuthFailed -> scope.launch { expire(rt) }
             is CoreEvent.OutboxChanged -> {
-                updateChat(rt.id, event.token) { c -> c.copy(messages = withPending(c.messages, event.items)) }
+                // Unsent messages stand at the end of the chat, not in a window.
+                updateChat(rt.id, event.token) { c -> if (c.hasNewer) c else c.copy(messages = withPending(c.messages, event.items)) }
                 announceFailures(rt, event.token, event.items)
             }
             is CoreEvent.CallChanged -> {
@@ -1135,10 +1175,22 @@ class SessionManager(private val context: Context) {
         val st = _state.value
         if (st.accountId != account || st.activeToken != token) return
         val chat = st.chats[token] ?: return
+        val line = st.unreadLine?.takeIf { it.token == token }
+        if (chat.hasNewer) {
+            // A window is never at the bottom: the line starts above the first message kept
+            // for its end, unless the line from opening counts unread ones already.
+            val fresh = incoming.filter { !it.isOwn && it.kind != MessageKind.SYSTEM }
+            if (fresh.isEmpty()) return
+            val counting = line != null && (
+                line.base > 0 || chat.messages.any { countsUnread(it, line.from) } ||
+                    chat.held.any { it.id > line.from && !it.isOwn && it.kind != MessageKind.SYSTEM }
+                )
+            if (!counting) _state.update { it.copy(unreadLine = UnreadLine(token, fresh.minOf { m -> m.id } - 1, 0)) }
+            return
+        }
         if (!chat.synced) return
         val newest = chat.messages.lastOrNull { it.status == null }?.msg?.id ?: return
         if (incoming.none { it.id > newest && !it.isOwn && it.kind != MessageKind.SYSTEM }) return
-        val line = st.unreadLine?.takeIf { it.token == token }
         if (line != null && chat.messages.any { countsUnread(it, line.from) }) return
         val inFront = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         val next = if (!chatAtBottom || !inFront) UnreadLine(token, newest, 0) else null
@@ -1314,10 +1366,10 @@ class SessionManager(private val context: Context) {
         val previous = _state.value.activeToken
         MessageNotifications.cancel(context, rt.id, token)
         // Snapshot before anything can set the read marker (docs/chat.md).
-        val line = _state.value.rooms.find { it.token == token }?.takeIf { it.lastReadMessage > 0 }
-            ?.let { UnreadLine(token, it.lastReadMessage, it.unreadMessages.toInt()) }
+        val line = unreadLineAtOpening(token)
         if (previous == token) {
             if (followed) {
+                leaveWindow(token)
                 chatAtBottom = true
                 _state.update { it.copy(unreadLine = line, chatFollowed = it.chatFollowed + 1) }
             }
@@ -1327,13 +1379,17 @@ class SessionManager(private val context: Context) {
         // Cached messages and unsent ones (both survive restarts): shown in the first frame.
         val cached = s.cachedChat(token)
         chatAtBottom = true
+        jumpSeq++
+        val rev = listRev.incrementAndGet()
         _state.update { st ->
-            val chat = st.chats[token] ?: ChatState()
+            // What a window left behind is not the end of the chat: start from the cache.
+            val chat = st.chats[token]?.takeIf { !it.hasNewer } ?: ChatState()
             val messages = merge(chat.messages, cached.messages)
             val older = cached.oldestId != null && (chat.oldestId == null || cached.oldestId!! < chat.oldestId!!)
             st.copy(
                 activeToken = token,
                 unreadLine = line,
+                jump = null,
                 chats = st.chats + (token to chat.copy(
                     loading = messages.none { it.status == null },
                     synced = false,
@@ -1341,42 +1397,71 @@ class SessionManager(private val context: Context) {
                     hasMore = if (older) cached.hasMore else chat.hasMore,
                     oldestId = if (older) cached.oldestId else chat.oldestId,
                     lastCommonRead = maxOf(chat.lastCommonRead, cached.lastCommonRead ?: 0),
+                    newestId = null,
+                    loadingOlder = false,
+                    rev = rev,
                 )),
             )
         }
         scope.launch {
-            try {
-                val page = s.openChat(token)
-                val room = _state.value.rooms.find { it.token == token }
-                updateChat(rt.id, token) {
-                    // Outdated cache, or a hole between what was shown and the newest page (more
-                    // than a page arrived meanwhile): drop what was shown (unsent messages stay).
-                    val shownNewest = it.messages.lastOrNull { m -> m.status == null }?.msg?.id
-                    val hole = shownNewest != null && page.oldestId != null && shownNewest < page.oldestId!!
-                    val base = if (page.reset || hole) it.messages.filter { m -> m.status != null } else it.messages
-                    it.copy(
-                        messages = merge(base, page.messages),
-                        hasMore = page.hasMore,
-                        oldestId = page.oldestId,
-                        lastCommonRead = maxOf(page.lastCommonRead ?: 0, room?.lastCommonReadMessage ?: 0),
-                        loading = false,
-                        synced = true,
-                    )
-                }
-                // With a line the chat opens there; the screen marks read once at the bottom.
-                if (_state.value.accountId != rt.id) return@launch
-                val loaded = _state.value.chats[token]?.messages.orEmpty()
-                if (line == null || loaded.none { countsUnread(it, line.from) }) markVisibleRead(token)
-            } catch (e: CoreException) {
-                updateChat(rt.id, token) { it.copy(loading = false, synced = true) }
-            }
+            if (!onOpened(rt, token, try { s.openChat(token) } catch (e: CoreException) { null })) return@launch
+            // With a line the chat opens there; the screen marks read once at the bottom.
+            if (_state.value.accountId != rt.id) return@launch
+            val loaded = _state.value.chats[token]?.messages.orEmpty()
+            if (line == null || loaded.none { countsUnread(it, line.from) }) markVisibleRead(token)
         }
+    }
+
+    private fun unreadLineAtOpening(token: String): UnreadLine? =
+        _state.value.rooms.find { it.token == token }?.takeIf { it.lastReadMessage > 0 }
+            ?.let { UnreadLine(token, it.lastReadMessage, it.unreadMessages.toInt()) }
+
+    /**
+     * The newest page of an opening ([page] null: it failed). A window into the history keeps
+     * its list, `loadNewer` leads to this page. Returns whether the page arrived.
+     */
+    private fun onOpened(rt: Runtime, token: String, page: ChatPage?): Boolean {
+        val room = _state.value.rooms.find { it.token == token }
+        updateChat(rt.id, token) {
+            // A chat that opens at a message keeps its spinner until the window is there.
+            val waiting = it.hasNewer && it.loading
+            if (page == null) return@updateChat it.copy(loading = waiting, synced = true)
+            val read = maxOf(it.lastCommonRead, page.lastCommonRead ?: 0, room?.lastCommonReadMessage ?: 0)
+            if (it.hasNewer) return@updateChat it.copy(lastCommonRead = read, loading = waiting, synced = true)
+            // Outdated cache, or a hole between what was shown and the newest page (more
+            // than a page arrived meanwhile): drop what was shown (unsent messages stay).
+            val shownNewest = it.messages.lastOrNull { m -> m.status == null }?.msg?.id
+            val hole = shownNewest != null && page.oldestId != null && shownNewest < page.oldestId!!
+            if ((page.reset || hole) && it.newestId != null) {
+                // The window ended where the cache did, and the chat goes on behind a gap: a window again.
+                return@updateChat it.copy(
+                    messages = it.messages.filter { m -> m.status == null },
+                    hasNewer = true,
+                    lastCommonRead = read,
+                    loading = false,
+                    synced = true,
+                )
+            }
+            val base = if (page.reset || hole) it.messages.filter { m -> m.status != null } else it.messages
+            // A window that reached the end may reach further back than the newest page.
+            val own = it.newestId != null && it.oldestId != null && (page.oldestId == null || it.oldestId <= page.oldestId!!)
+            it.copy(
+                messages = merge(base, page.messages),
+                hasMore = if (own) it.hasMore else page.hasMore,
+                oldestId = if (own) it.oldestId else page.oldestId,
+                lastCommonRead = maxOf(page.lastCommonRead ?: 0, room?.lastCommonReadMessage ?: 0),
+                loading = false,
+                synced = true,
+            )
+        }
+        return page != null
     }
 
     fun closeRoom() {
         val token = _state.value.activeToken ?: return
         session?.closeChat(token)
-        _state.update { it.copy(activeToken = null, unreadLine = null) }
+        jumpSeq++
+        _state.update { it.copy(activeToken = null, unreadLine = null, jump = null) }
     }
 
     fun loadOlder(token: String) {
@@ -1385,27 +1470,224 @@ class SessionManager(private val context: Context) {
         val chat = _state.value.chats[token] ?: return
         val before = chat.oldestId ?: return
         if (!chat.hasMore || chat.loadingOlder) return
+        val rev = chat.rev
         updateChat(rt.id, token) { it.copy(loadingOlder = true) }
         scope.launch {
-            try {
-                val page = s.loadOlder(token, before)
-                updateChat(rt.id, token) {
-                    it.copy(
+            val page = try { s.loadOlder(token, before) } catch (e: CoreException) { null }
+            updateChat(rt.id, token) {
+                when {
+                    // The list was replaced meanwhile (window, jump to the end).
+                    it.rev != rev -> it
+                    page == null -> it.copy(loadingOlder = false)
+                    else -> it.copy(
                         messages = merge(it.messages, page.messages),
                         hasMore = page.hasMore,
                         oldestId = page.oldestId ?: it.oldestId,
                         loadingOlder = false,
                     )
                 }
-            } catch (e: CoreException) {
-                updateChat(rt.id, token) { it.copy(loadingOlder = false) }
             }
         }
+    }
+
+    // --- search and the window into the history (docs/search.md) --------------------------
+
+    private var jumpSeq = 0
+    private val listRev = AtomicInteger()
+
+    /** Searches the messages on the device, in one chat or ([token] null) in all; off the main thread. */
+    suspend fun searchMessages(query: String, token: String?, limit: Int): SearchResults? {
+        val s = session ?: return null
+        return withContext(Dispatchers.IO) { runCatching { s.searchMessages(query, token, limit.toUInt()) }.getOrNull() }
+    }
+
+    /** The same with the server's hits added; null when that failed (no network). */
+    suspend fun searchMessagesEverywhere(query: String, token: String?, limit: Int): SearchResults? {
+        val s = session ?: return null
+        return try { s.searchMessagesEverywhere(query, token, limit.toUInt()) } catch (e: CoreException) { null }
+    }
+
+    /**
+     * Opens a chat at a message (a hit of the search over all chats). The window around the
+     * message is asked for first: if that fails at once (no network), the search stays as it
+     * was. After [AROUND_WAIT_MS] the chat opens anyway and waits there. `openChat` starts
+     * the live messages as always, but the list is the window, never the end of the chat.
+     */
+    fun openRoomAt(token: String, messageId: Long) {
+        val rt = active ?: return
+        val s = rt.session
+        if (_state.value.activeToken == token) return jumpTo(token, messageId)
+        val seq = ++jumpSeq
+        scope.launch {
+            val around = async {
+                try { Result.success(s.messagesAround(token, messageId)) } catch (e: CoreException) { Result.failure(e) }
+            }
+            val early = withTimeoutOrNull(AROUND_WAIT_MS) { around.await() }
+            // Something else was opened meanwhile.
+            if (jumpSeq != seq || active !== rt) return@launch
+            (early?.exceptionOrNull() as? CoreException)?.let {
+                Toast.makeText(context, jumpError(it), Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val previous = _state.value.activeToken
+            MessageNotifications.cancel(context, rt.id, token)
+            val line = unreadLineAtOpening(token)
+            previous?.let { s.closeChat(it) }
+            chatAtBottom = false
+            val rev = listRev.incrementAndGet()
+            _state.update { st ->
+                st.copy(
+                    activeToken = token,
+                    unreadLine = line,
+                    jump = Jump(token, messageId, seq, ready = false),
+                    chats = st.chats + (token to ChatState(hasNewer = true, lastCommonRead = st.chats[token]?.lastCommonRead ?: 0, rev = rev)),
+                )
+            }
+            launch { onOpened(rt, token, try { s.openChat(token) } catch (e: CoreException) { null }) }
+            val page = (early ?: around.await()).getOrElse { e ->
+                val open = _state.value.accountId == rt.id && _state.value.activeToken == token
+                val waiting = open && _state.value.chats[token]?.let { it.hasNewer && it.loading } == true
+                if (jumpSeq == seq && e is CoreException) Toast.makeText(context, jumpError(e), Toast.LENGTH_SHORT).show()
+                // Nothing to show there: the chat stands at its end, as after a usual opening.
+                if (waiting) leaveWindow(token)
+                return@launch
+            }
+            if (_state.value.accountId != rt.id || _state.value.activeToken != token) return@launch
+            // Something else was asked for meanwhile; then this window only ends the waiting.
+            if (jumpSeq != seq && _state.value.chats[token]?.loading != true) return@launch
+            showWindow(rt, token, page, seq)
+        }
+    }
+
+    /**
+     * Shows a message of the open chat (hit of the search in the chat, tapped quote): scrolls
+     * to it when it is loaded, else the window around it replaces the list.
+     */
+    fun jumpTo(token: String, messageId: Long) {
+        val rt = active ?: return
+        val st = _state.value
+        val chat = st.chats[token] ?: return
+        if (st.activeToken != token) return
+        val seq = ++jumpSeq
+        if (chat.messages.any { it.status == null && it.msg.id == messageId }) {
+            _state.update { it.copy(jump = Jump(token, messageId, seq, ready = true)) }
+            return
+        }
+        scope.launch {
+            val page = try {
+                rt.session.messagesAround(token, messageId)
+            } catch (e: CoreException) {
+                if (jumpSeq == seq) Toast.makeText(context, jumpError(e), Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            if (jumpSeq != seq || _state.value.accountId != rt.id || _state.value.activeToken != token) return@launch
+            _state.update { it.copy(jump = Jump(token, messageId, seq, ready = false)) }
+            showWindow(rt, token, page, seq)
+        }
+    }
+
+    private fun jumpError(e: CoreException) = if (e is CoreException.Network) "Keine Verbindung" else "Nachricht nicht gefunden"
+
+    /** Replaces the list of a chat by a window; the jump [seq] that waits for it becomes ready. */
+    private fun showWindow(rt: Runtime, token: String, page: ChatPage, seq: Int) {
+        val pending = rt.session.pending(token)
+        val rev = listRev.incrementAndGet()
+        updateChat(rt.id, token) { c ->
+            val next = c.copy(
+                messages = merge(emptyList(), page.messages),
+                hasMore = page.hasMore,
+                oldestId = page.oldestId,
+                newestId = page.newestId,
+                lastCommonRead = maxOf(c.lastCommonRead, page.lastCommonRead ?: 0),
+                // Coming from the end of the chat nothing is kept: the cache has it all.
+                held = if (c.hasNewer) c.held else emptyList(),
+                hasNewer = true,
+                loading = false,
+                loadingOlder = false,
+                loadingNewer = false,
+                rev = rev,
+            )
+            if (page.hasNewer) next else atEnd(next, pending)
+        }
+        _state.update { if (it.jump?.seq == seq) it.copy(jump = it.jump.copy(ready = true)) else it }
+    }
+
+    /** The window reached the end of the chat: what arrived meanwhile follows, then the unsent messages. */
+    private fun atEnd(c: ChatState, pending: List<PendingMessage>): ChatState {
+        val last = c.messages.lastOrNull { it.status == null }?.msg?.id ?: 0
+        return c.copy(
+            messages = withPending(merge(c.messages, c.held.filter { it.id > last }), pending),
+            hasNewer = false,
+            held = emptyList(),
+        )
+    }
+
+    /** The next page below a window; at the end of the chat the list goes on as usual. */
+    fun loadNewer(token: String) {
+        val rt = active ?: return
+        val s = rt.session
+        val chat = _state.value.chats[token] ?: return
+        val after = chat.newestId ?: return
+        if (!chat.hasNewer || chat.loadingNewer || chat.loading) return
+        val rev = chat.rev
+        updateChat(rt.id, token) { it.copy(loadingNewer = true) }
+        scope.launch {
+            val page = try { s.loadNewer(token, after) } catch (e: CoreException) { null }
+            val pending = s.pending(token)
+            updateChat(rt.id, token) {
+                when {
+                    it.rev != rev -> it
+                    page == null -> it.copy(loadingNewer = false)
+                    else -> {
+                        val next = it.copy(
+                            messages = merge(it.messages, page.messages),
+                            newestId = page.newestId ?: it.newestId,
+                            loadingNewer = false,
+                        )
+                        if (page.hasNewer) next else atEnd(next, pending)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * „Zum Ende springen“ in a window, and before sending from one: the cached end of the
+     * chat replaces the list, with what arrived meanwhile and the unsent messages.
+     */
+    fun leaveWindow(token: String) {
+        val rt = active ?: return
+        if (_state.value.chats[token]?.hasNewer != true) return
+        val cached = rt.session.cachedChat(token)
+        val pending = rt.session.pending(token)
+        val rev = listRev.incrementAndGet()
+        jumpSeq++
+        updateChat(rt.id, token) { c ->
+            if (!c.hasNewer) return@updateChat c
+            atEnd(
+                c.copy(
+                    messages = merge(emptyList(), cached.messages),
+                    hasMore = cached.hasMore,
+                    oldestId = cached.oldestId,
+                    newestId = null,
+                    lastCommonRead = maxOf(c.lastCommonRead, cached.lastCommonRead ?: 0),
+                    // Nothing cached and the newest page still on its way: it fills the list.
+                    loading = cached.messages.isEmpty() && !c.synced,
+                    loadingOlder = false,
+                    loadingNewer = false,
+                    rev = rev,
+                    endRev = c.endRev + 1,
+                ),
+                pending,
+            )
+        }
+        _state.update { if (it.jump?.token == token) it.copy(jump = null) else it }
     }
 
     /** Queues a text message in the outbox; it shows up at once and is delivered reliably. */
     fun send(token: String, text: String, replyTo: MessageView?) {
         val s = session ?: return
+        leaveWindow(token)
         clearUnreadLine()
         s.enqueueText(token, text, replyTo?.toReply(), newReferenceId())
         OutboxWorker.schedule(context)
@@ -1467,6 +1749,7 @@ class SessionManager(private val context: Context) {
     fun sendImage(token: String, image: PreparedImage, caption: String, replyTo: MessageView?) {
         val rt = active ?: return
         val s = rt.session
+        leaveWindow(token)
         clearUnreadLine()
         val ref = newReferenceId()
         val localKey = "${rt.id}|$ref"
@@ -1518,6 +1801,7 @@ class SessionManager(private val context: Context) {
      */
     fun sendFiles(token: String, files: List<PickedFile>, caption: String, replyTo: MessageView?, onDone: (unreadable: List<Uri>) -> Unit) {
         val rt = active ?: return onDone(emptyList())
+        leaveWindow(token)
         scope.launch {
             val prepared = ArrayList<PreparedFile>()
             val unreadable = ArrayList<Uri>()
@@ -1629,6 +1913,7 @@ class SessionManager(private val context: Context) {
      */
     fun sendLocation(token: String, latitude: Double, longitude: Double, name: String) {
         val s = session ?: return
+        leaveWindow(token)
         clearUnreadLine()
         s.enqueueLocation(token, latitude, longitude, name, newReferenceId())
         OutboxWorker.schedule(context)
@@ -1640,6 +1925,7 @@ class SessionManager(private val context: Context) {
      */
     fun sendContact(token: String, card: ContactCard, replyTo: MessageView?) {
         val rt = active ?: return
+        leaveWindow(token)
         clearUnreadLine()
         scope.launch {
             val queued = withContext(Dispatchers.IO) {
@@ -1685,7 +1971,10 @@ class SessionManager(private val context: Context) {
         if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
         val st = _state.value
         val room = st.rooms.find { it.token == token } ?: return
-        val newest = st.chats[token]?.messages?.lastOrNull { it.status == null }?.msg ?: return
+        val chat = st.chats[token] ?: return
+        // In a window into the history the read marker does not move (docs/search.md).
+        if (chat.hasNewer) return
+        val newest = chat.messages.lastOrNull { it.status == null }?.msg ?: return
         if (room.unreadMessages > 0 || newest.id > room.lastReadMessage) {
             scope.launch { runCatching { s.markRead(token, newest.id) } }
         }

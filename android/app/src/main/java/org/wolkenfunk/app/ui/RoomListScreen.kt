@@ -25,7 +25,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.heading
+import uniffi.talk_ffi.SearchResults
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -91,17 +97,19 @@ import uniffi.talk_ffi.SectionView
 fun RoomListScreen(
     sessions: SessionManager,
     state: UiState,
+    search: RoomListSearch,
+    listState: LazyListState,
     onCompose: () -> Unit = {},
     onSettings: () -> Unit = {},
     onGroupSettings: (String) -> Unit = {},
     onAddAccount: () -> Unit = {},
 ) {
-    var searching by rememberSaveable { mutableStateOf(false) }
+    val searching = search.active
     // Account menu at the own avatar, from two accounts on (docs/accounts.md).
     var accountMenu by rememberSaveable { mutableStateOf(false) }
     // Chat menu after a long press (docs/settings.md); follows the live room.
     var menuFor by rememberSaveable { mutableStateOf<String?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
+    val query = search.query
     var menu by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -119,6 +127,57 @@ fun RoomListScreen(
             delay(30_000)
             now = System.currentTimeMillis()
         }
+    }
+
+    // Hits in the messages (docs/search.md): the device answers with every keystroke; while
+    // the history still loads, the server adds its hits 300 ms after the last one. A new
+    // room list searches again, so a message that just arrived is found.
+    val q = query.trim()
+    val inMessages = searchable(q)
+    LaunchedEffect(q, search.limit, state.roomsRev) {
+        if (!inMessages) {
+            search.results = null
+            search.resultsFor = null
+            return@LaunchedEffect
+        }
+        val wanted = q to search.limit
+        fun show(r: SearchResults) {
+            search.results = r
+            search.resultsFor = wanted
+        }
+        var shown = sessions.searchMessages(q, null, search.limit) ?: return@LaunchedEffect
+        // The same search again (back from a chat, new room list): the list with the
+        // server's hits stays until the new one with them is there.
+        val again = search.resultsFor == wanted
+        if (shown.complete || !again) show(shown)
+        if (shown.complete) return@LaunchedEffect
+        if (!again) delay(300)
+        show(sessions.searchMessagesEverywhere(q, null, search.limit)?.also { shown = it } ?: shown)
+        // The line „Ältere Nachrichten werden noch geladen“ follows the loading.
+        while (shown.chatsDone < shown.chatsTotal) {
+            delay(1000)
+            val local = sessions.searchMessages(q, null, search.limit) ?: break
+            if (local.chatsDone == shown.chatsDone) continue
+            shown = if (local.complete) local else sessions.searchMessagesEverywhere(q, null, search.limit) ?: local
+            show(shown)
+        }
+    }
+    val found = search.results.takeIf { inMessages }
+    val hits = found?.hits.orEmpty()
+    // 50 more once the end of the list is reached.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            info.totalItemsCount > 0 && (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 3
+        }.collect { atEnd ->
+            val r = search.results
+            if (atEnd && r != null && r.more && r.hits.size >= search.limit) search.limit += SEARCH_PAGE
+        }
+    }
+    val keyboard = LocalSoftwareKeyboardController.current
+    BackHandler(enabled = searching) {
+        search.close()
+        scope.launch { listState.scrollToItem(0) }
     }
 
     // docs/connection.md: spinner next to the title, „Keine Verbindung“ below it when offline.
@@ -139,10 +198,15 @@ fun RoomListScreen(
             TopAppBar(
                 title = {
                     if (searching) {
-                        LaunchedEffect(Unit) { focus.requestFocus() }
+                        // Not when coming back from a hit: the keyboard would cover the list.
+                        LaunchedEffect(Unit) { if (query.isEmpty()) focus.requestFocus() }
                         TextField(
                             value = query,
-                            onValueChange = { query = it },
+                            onValueChange = {
+                                if (it.trim() != q) scope.launch { listState.scrollToItem(0) }
+                                search.query = it
+                                search.limit = SEARCH_PAGE
+                            },
                             placeholder = { Text("Suchen") },
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
@@ -168,7 +232,7 @@ fun RoomListScreen(
                 },
                 navigationIcon = {
                     if (searching) {
-                        IconButton(onClick = { searching = false; query = "" }) {
+                        IconButton(onClick = { search.close(); scope.launch { listState.scrollToItem(0) } }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Suche schließen")
                         }
                     } else {
@@ -177,7 +241,7 @@ fun RoomListScreen(
                 },
                 actions = {
                     if (!searching) {
-                        IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "Suchen") }
+                        IconButton(onClick = { search.active = true }) { Icon(Icons.Default.Search, "Suchen") }
                     }
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Menü") }
@@ -204,22 +268,39 @@ fun RoomListScreen(
             },
             modifier = Modifier.padding(padding).fillMaxSize(),
         ) {
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (query.isEmpty()) item(key = "recordings", contentType = "recordings") {
                     RecordingBanners(sessions) { sessions.openRoom(it) }
                 }
                 for (section in sections) {
                     if (section.title.isNotEmpty()) {
-                        item(key = "h-${section.id}", contentType = "header") {
-                            SectionHeader(section) { sessions.toggleSection(section.id) }
+                        if (section.kind == "archived") {
+                            // No category behind it: it cannot be collapsed (docs/categories.md „Suche“).
+                            item(key = "h-${section.id}", contentType = "title") { SectionTitle(section.title) }
+                        } else {
+                            item(key = "h-${section.id}", contentType = "header") {
+                                SectionHeader(section) { sessions.toggleSection(section.id) }
+                            }
                         }
                     }
                     items(section.rooms, key = { "${section.id}:${it.token}" }, contentType = { "room" }) { room ->
                         RoomRow(room, sessions, now, onMenu = { menuFor = room.token }) { sessions.openRoom(room.token) }
                     }
                 }
+                if (hits.isNotEmpty()) {
+                    item(key = "h-messages", contentType = "title") { SectionTitle("Nachrichten") }
+                    items(hits, key = { "m:${it.token}:${it.messageId}" }, contentType = { "hit" }) { hit ->
+                        val version = state.rooms.find { it.token == hit.token }?.avatarVersion.orEmpty()
+                        SearchHitRow(hit, version, sessions, now) {
+                            keyboard?.hide()
+                            sessions.openRoomAt(hit.token, hit.messageId)
+                        }
+                    }
+                }
                 when {
-                    sections.isNotEmpty() -> {}
+                    sections.isNotEmpty() || hits.isNotEmpty() -> {}
+                    // The hits to this search text are still on their way.
+                    inMessages && search.resultsFor?.first != q -> {}
                     // Empty list (docs/connection.md): still loading, really empty, or offline
                     // (then the header says so and the middle stays free).
                     !listEmpty || state.connection == ConnectionState.ONLINE -> item {
@@ -233,6 +314,16 @@ fun RoomListScreen(
                         Box(Modifier.fillParentMaxSize(), Alignment.Center) {
                             ConnectionSpinner(true, size = 24.dp, stroke = 2.dp)
                         }
+                    }
+                }
+                if (found != null && found.chatsDone < found.chatsTotal) {
+                    item(key = "history", contentType = "history") {
+                        Text(
+                            "Ältere Nachrichten werden noch geladen (${found.chatsDone} von ${found.chatsTotal} Chats)",
+                            style = ListType.body,
+                            color = LocalTalkColors.current.muted,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+                        )
                     }
                 }
             }
@@ -298,6 +389,21 @@ private fun SectionHeader(section: SectionView, onToggle: () -> Unit) {
             modifier = Modifier.padding(start = 4.dp).size(20.dp).rotate(angle),
         )
     }
+}
+
+/** A section title that is no button: „Archiviert“ and „Nachrichten“ of a search. */
+@Composable
+private fun SectionTitle(title: String) {
+    Text(
+        title,
+        style = ListType.section,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { heading() }
+            .padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 8.dp),
+    )
 }
 
 /** System setting „Animationen entfernen“ (animator duration scale 0). */

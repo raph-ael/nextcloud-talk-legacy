@@ -1,6 +1,7 @@
 package org.wolkenfunk.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -54,6 +55,9 @@ fun TalkApp(sessions: SessionManager) {
                 val active = state.activeToken
                 // „Neue Nachricht“ over the list, group settings over the chat (docs/groups.md).
                 var composing by rememberSaveable { mutableStateOf(false) }
+                // Search and position of the chat list outlive an opened chat (docs/search.md „Antippen“).
+                val listSearch = rememberRoomListSearch()
+                val listState = rememberLazyListState()
                 var infoFor by rememberSaveable { mutableStateOf<String?>(null) }
                 // Group settings belong to the open chat, or come over the list from the chat menu.
                 if (infoFor != null && active != null && infoFor != active) infoFor = null
@@ -76,6 +80,8 @@ fun TalkApp(sessions: SessionManager) {
                         RoomListScreen(
                             sessions,
                             state,
+                            listSearch,
+                            listState,
                             onCompose = { composing = true },
                             onSettings = { settings = true },
                             onGroupSettings = { infoFor = it },

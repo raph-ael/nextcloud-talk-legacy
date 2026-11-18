@@ -29,6 +29,8 @@ data class TalkColors(
     /** Reaction pill under a bubble, and the one holding the own reaction (docs/chat.md). */
     val reaction: Color,
     val reactionMine: Color,
+    /** Behind search words in a bubble, and over the whole bubble a jump lights up (docs/search.md „Farbe“). */
+    val searchMark: Color,
 )
 
 private val LightTalk = TalkColors(
@@ -43,6 +45,7 @@ private val LightTalk = TalkColors(
     floating = Color(0xFFFFFFFF),
     reaction = Color(0xFFE9E9E9),
     reactionMine = Color(0xFFB9B9B9),
+    searchMark = Color(0xFFFFD60A).copy(alpha = 0.45f),
 )
 
 private val DarkTalk = TalkColors(
@@ -57,6 +60,7 @@ private val DarkTalk = TalkColors(
     floating = Color(0xFF2E2E2E),
     reaction = Color(0xFF1B1B1B),
     reactionMine = Color(0xFF5E5E5E),
+    searchMark = Color(0xFFFFD60A).copy(alpha = 0.35f),
 )
 
 /** Conversation-list typography (Signal: BodyLarge/BodyMedium with tighter line spacing). */

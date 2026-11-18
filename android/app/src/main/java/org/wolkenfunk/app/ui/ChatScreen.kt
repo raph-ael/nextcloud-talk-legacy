@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import androidx.compose.animation.core.tween
@@ -99,7 +100,20 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
+import org.wolkenfunk.app.Jump
 import org.wolkenfunk.app.SendStatus
+import uniffi.talk_ffi.SearchHit
+import uniffi.talk_ffi.SearchResults
 import uniffi.talk_ffi.SendError
 import org.wolkenfunk.app.SessionManager
 import org.wolkenfunk.app.UiMessage
@@ -161,6 +175,66 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     DarkSystemBars(overlay != null && overlay !is Overlay.Files)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Window into the history (docs/search.md „Chat an einer Nachricht öffnen“): the list does not reach the end.
+    val window = chat?.hasNewer == true
+
+    // Search in the chat (docs/search.md „Suche im Chat“). `searchText` null: closed.
+    var searchText by rememberSaveable(room.token) { mutableStateOf<String?>(null) }
+    var found by remember(room.token) { mutableStateOf<SearchResults?>(null) }
+    var selected by remember(room.token) { mutableIntStateOf(0) }
+    // The search text `found` belongs to, and the hit the chat jumped to last.
+    var searchedFor by remember(room.token) { mutableStateOf<String?>(null) }
+    var lastHit by remember(room.token) { mutableStateOf<Long?>(null) }
+    val searchQuery = searchText?.trim()
+    val marks = remember(searchQuery) { searchQuery?.let(::searchWords).orEmpty() }
+    val goToHit = { hit: SearchHit ->
+        lastHit = hit.messageId
+        sessions.jumpTo(room.token, hit.messageId)
+    }
+    val closeSearch = {
+        searchText = null
+        found = null
+        searchedFor = null
+        lastHit = null
+    }
+    BackHandler(enabled = searchText != null, onBack = closeSearch)
+    // Every change of the text searches at once and jumps to the newest hit. A change of the
+    // loaded messages (edited, deleted, new) searches again a moment later and keeps the chosen hit.
+    LaunchedEffect(room.token, searchQuery, messages) {
+        val q = searchQuery ?: return@LaunchedEffect
+        if (!searchable(q)) {
+            found = null
+            selected = 0
+            searchedFor = q
+            return@LaunchedEffect
+        }
+        val fresh = searchedFor != q
+        fun show(r: SearchResults, jump: Boolean) {
+            val kept = found?.hits?.getOrNull(selected)?.messageId?.takeIf { !jump }
+            val at = if (kept == null) -1 else r.hits.indexOfFirst { it.messageId == kept }
+            found = r
+            searchedFor = q
+            selected = if (at >= 0) at else if (jump) 0 else selected.coerceIn(0, maxOf(0, r.hits.size - 1))
+            if (jump) r.hits.firstOrNull()?.takeIf { it.messageId != lastHit }?.let(goToHit)
+        }
+        if (!fresh) delay(250)
+        val local = sessions.searchMessages(q, room.token, CHAT_SEARCH_LIMIT) ?: return@LaunchedEffect
+        if (local.complete || fresh) {
+            show(local, fresh)
+            if (local.complete) return@LaunchedEffect
+            // The history still loads: the server adds its hits once the typing pauses.
+            delay(300)
+        }
+        sessions.searchMessagesEverywhere(q, room.token, CHAT_SEARCH_LIMIT)?.let { show(it, false) }
+    }
+    // The message a jump lights up (docs/search.md „Aufleuchten“).
+    var flash by remember(room.token) { mutableStateOf<Jump?>(null) }
+    LaunchedEffect(flash) {
+        if (flash != null) {
+            delay(2200)
+            flash = null
+        }
+    }
 
     // The edit mode ends when the message was deleted meanwhile.
     val editedId = editing?.msg?.id
@@ -180,55 +254,125 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
         counting.firstOrNull()?.key to maxOf(unreadLine?.base ?: 0, counting.size)
     }
     val unreadLabel = if (unreadCount == 1) "1 ungelesene Nachricht" else "$unreadCount ungelesene Nachrichten"
-    // Opening at the line: until positioned, neither the read marker nor the autoscroll interferes.
-    var opening by remember(room.token) { mutableStateOf(unreadLine != null) }
+    // Opened at a message (hit of the search over all chats): the jump positions the list, not the line.
+    val jump = state.jump?.takeIf { it.token == room.token }
+    val openedAtMessage = remember(room.token) { jump != null }
+    // Opening at the line or at a message: until positioned, neither the read marker nor the autoscroll interferes.
+    var opening by remember(room.token) { mutableStateOf(unreadLine != null || openedAtMessage) }
     // A tap on a notification of this chat while it was open: the view starts over, first at
     // the end as a new opening would, then at the line if there is one (docs/notifications.md).
     val followedAtOpen = remember(room.token) { state.chatFollowed }
     LaunchedEffect(room.token, state.chatFollowed) {
-        if (state.chatFollowed != followedAtOpen) {
+        val followed = state.chatFollowed != followedAtOpen
+        if (followed) {
             opening = true
             listState.scrollToItem(0)
         }
-        if (opening) {
+        if (opening && (followed || !openedAtMessage)) {
             positionAtUnreadLine(sessions, listState, room.token)
             opening = false
         }
     }
+    // A jump to a message (docs/search.md): scrolled into the upper part, then it lights up.
+    var jumped by rememberSaveable(room.token) { mutableIntStateOf(0) }
+    LaunchedEffect(room.token, jump?.seq, jump?.ready) {
+        when {
+            // The message could not be shown: the chat stands at its end.
+            jump == null -> if (openedAtMessage && state.chatFollowed == followedAtOpen) opening = false
+            jump.ready && jumped != jump.seq -> {
+                positionAtMessage(sessions, listState, room.token, jump.messageId)
+                jumped = jump.seq
+                opening = false
+                flash = jump
+                // The keyboard of the hit list may still be closing: the list grows, the message keeps its place.
+                withTimeoutOrNull(800) {
+                    snapshotFlow { listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset }
+                        .drop(1)
+                        .collectLatest {
+                            if (!listState.isScrollInProgress) positionAtMessage(sessions, listState, room.token, jump.messageId)
+                        }
+                }
+            }
+        }
+    }
+    // „Zum Ende springen“ out of a window, or sent from one: the list is the end of the chat again.
+    val endRev = chat?.endRev ?: 0
+    val endRevAtOpen = remember(room.token) { endRev }
+    LaunchedEffect(room.token, endRev) {
+        if (endRev != endRevAtOpen) listState.scrollToItem(0)
+    }
 
-    LaunchedEffect(room.token, messages.size, room.unreadMessages) {
+    val windowNow by rememberUpdatedState(window)
+    val newestNow by rememberUpdatedState(chat?.newestId)
+    LaunchedEffect(room.token, messages.size, room.unreadMessages, window) {
         if (!opening && listState.firstVisibleItemIndex <= 1) sessions.markVisibleRead(room.token)
     }
     // Arriving back at the bottom (scrolling or the jump button) sets the read marker too.
     LaunchedEffect(listState, room.token) {
-        snapshotFlow { !opening && listState.firstVisibleItemIndex <= 1 }
+        snapshotFlow { !opening && !windowNow && listState.firstVisibleItemIndex <= 1 }
             .collect { atBottom -> if (atBottom) sessions.markVisibleRead(room.token) }
     }
     LaunchedEffect(listState, room.token) {
-        snapshotFlow { listState.firstVisibleItemIndex <= 1 }.collect { sessions.setChatAtBottom(it) }
+        snapshotFlow { !windowNow && listState.firstVisibleItemIndex <= 1 }.collect { sessions.setChatAtBottom(it) }
     }
     LaunchedEffect(listState, room.token) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
             .collect { last -> if (last >= reversed.size - 40) sessions.loadOlder(room.token) }
     }
-    // Keep the newest message visible when sending / receiving while at the bottom.
-    LaunchedEffect(messages.lastOrNull()?.key) {
-        if (!opening && listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
+    // In a window the list loads on towards the end as well; each page moves the pointer.
+    LaunchedEffect(listState, room.token) {
+        snapshotFlow { Triple(windowNow && !opening, listState.firstVisibleItemIndex, newestNow) }
+            .collect { (newer, first, _) -> if (newer && first <= 15) sessions.loadNewer(room.token) }
+    }
+    // Keep the newest message visible when sending / receiving while at the bottom. Pages
+    // loaded below a window are not new messages: the list stays where it is.
+    var atEndBefore by remember(room.token) { mutableStateOf(!window) }
+    LaunchedEffect(messages.lastOrNull()?.key, window) {
+        if (atEndBefore && !window && !opening && listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
+        atEndBefore = !window
     }
 
+    val composerState = rememberSaveableStateHolder()
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = { sessions.closeRoom() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück")
+                    // In the search the arrow closes it; only the next one leaves the chat.
+                    if (searchText != null) {
+                        IconButton(onClick = closeSearch) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Suche schließen") }
+                    } else {
+                        IconButton(onClick = { sessions.closeRoom() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück")
+                        }
                     }
                 },
-                actions = { CallButton(sessions, room) },
+                actions = {
+                    if (searchText == null) {
+                        IconButton(onClick = { searchText = "" }) { Icon(Icons.Filled.Search, "Im Chat suchen") }
+                    }
+                    CallButton(sessions, room)
+                },
                 title = {
                     val groupRoom = room.roomType.toInt() in setOf(2, 3)
-                    Row(
+                    if (searchText != null) {
+                        val focus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { focus.requestFocus() }
+                        TextField(
+                            value = searchText.orEmpty(),
+                            onValueChange = { searchText = it },
+                            placeholder = { Text("Suchen") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                            ),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                        )
+                    } else Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = if (groupRoom) {
                             Modifier
@@ -263,10 +407,21 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
         Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
             RecordingBanners(sessions, room.token)
             Box(Modifier.weight(1f)) {
+                // Opened at a message: nothing of the window shows before the message stands in its place.
+                val placing = openedAtMessage && opening
+                var waiting by remember(room.token) { mutableStateOf(false) }
+                LaunchedEffect(placing) {
+                    waiting = false
+                    if (placing) {
+                        delay(400)
+                        waiting = true
+                    }
+                }
+                if (waiting) CircularProgressIndicator(Modifier.align(Alignment.Center).size(24.dp))
                 LazyColumn(
                     state = listState,
                     reverseLayout = true,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (placing) 0f else 1f },
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     itemsIndexed(
@@ -283,6 +438,9 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                             isGroup = isGroup,
                             read = m.msg.isOwn && m.status == null && m.msg.id <= lastCommonRead,
                             unreadLabel = if (m.key == unreadKey) unreadLabel else null,
+                            marks = marks,
+                            flash = flash?.takeIf { m.status == null && it.messageId == m.msg.id }?.seq ?: 0,
+                            onJump = { sessions.jumpTo(room.token, it) },
                             canReact = room.canReact,
                             canChat = room.canChat,
                             canDeleteOthers = room.canDeleteOthers,
@@ -316,16 +474,49 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     }
                 }
                 ScrollDatePill(listState, reversed, enabled = !opening, Modifier.align(Alignment.TopCenter))
-                JumpToEnd(listState, room.unreadMessages.toInt(), Modifier.align(Alignment.BottomEnd))
+                // In a window the button counts what arrived meanwhile (docs/search.md „Neue Nachrichten“).
+                val arrived = chat?.held.orEmpty().count { !it.isOwn && it.kind != MessageKind.SYSTEM }
+                JumpToEnd(
+                    listState,
+                    maxOf(room.unreadMessages.toInt(), arrived),
+                    window,
+                    onLeaveWindow = { sessions.leaveWindow(room.token) },
+                    Modifier.align(Alignment.BottomEnd),
+                )
             }
-            if (room.readOnly) {
+            if (searchText != null) {
+                val hits = found?.hits.orEmpty()
+                ChatSearchBar(
+                    counter = when {
+                        searchQuery.isNullOrEmpty() -> ""
+                        hits.isEmpty() -> "Keine Treffer"
+                        else -> "${selected + 1} von ${found?.total ?: hits.size}"
+                    },
+                    // Newest first: the older hit is the next one in the row.
+                    older = selected < hits.size - 1,
+                    newer = hits.isNotEmpty() && selected > 0,
+                    onOlder = {
+                        hits.getOrNull(selected + 1)?.let {
+                            selected += 1
+                            goToHit(it)
+                        }
+                    },
+                    onNewer = {
+                        hits.getOrNull(selected - 1)?.let {
+                            selected -= 1
+                            goToHit(it)
+                        }
+                    },
+                )
+            } else if (room.readOnly) {
                 Text(
                     "Diese Unterhaltung ist schreibgeschützt.",
                     color = LocalTalkColors.current.muted,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                 )
-            } else {
+            } else composerState.SaveableStateProvider("composer") {
+                // Kept while the search bar stands in its place: the draft is there again afterwards.
                 Composer(
                     token = room.token,
                     replyTo = replyTo,
@@ -359,6 +550,7 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                     },
                     voice = sessions.voice,
                     onVoiceSent = {
+                        sessions.leaveWindow(room.token)
                         sessions.clearUnreadLine()
                         scope.launch { listState.animateScrollToItem(0) }
                     },
@@ -489,25 +681,42 @@ private suspend fun positionAtUnreadLine(sessions: SessionManager, listState: La
     val messages = chat.messages
     val first = messages.firstOrNull { countsUnread(it, line.from) }
     val target = first ?: messages.firstOrNull()?.takeIf { gapAfter(chat, line.from) } ?: return
-    val fromTop = if (first != null) 0.25f else 0f
+    scrollToKey(sessions, listState, token, target.key, if (first != null) 0.25f else 0f)
+}
+
+/** Height of the list between its paddings. */
+private fun LazyListState.innerHeight(): Int =
+    layoutInfo.run { viewportEndOffset - viewportStartOffset - beforeContentPadding - afterContentPadding }
+
+/** Places the message with [key] so that its top is [fromTop] of the list's height below the upper edge. */
+private suspend fun scrollToKey(sessions: SessionManager, listState: LazyListState, token: String, key: String, fromTop: Float) {
     // New messages may arrive meanwhile and the list composes a frame later: look the item up
     // by key each time and try again when it is not where the index said.
     repeat(5) {
         val current = sessions.state.value.chats[token]?.messages ?: return
-        val pos = current.indexOfFirst { it.key == target.key }
+        val pos = current.indexOfFirst { it.key == key }
         if (pos < 0) return
         val index = current.size - 1 - pos
         withTimeoutOrNull(1000) { snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > index } }
         listState.scrollToItem(index)
         val item = withTimeoutOrNull(500) {
-            snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == target.key } }.filterNotNull().first()
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } }.filterNotNull().first()
         } ?: return@repeat
-        val info = listState.layoutInfo
-        val height = info.viewportEndOffset - info.viewportStartOffset - info.beforeContentPadding - info.afterContentPadding
         // Reverse layout: the item sits at the bottom now; scrolling backwards lifts it.
-        listState.scrollBy(-(height * (1 - fromTop) - item.size))
+        listState.scrollBy(-(listState.innerHeight() * (1 - fromTop) - item.size))
         return
     }
+}
+
+/**
+ * Shows a message a jump leads to (docs/search.md „Position“): its upper edge at about a
+ * fifth of the list's height, placed at once, without gliding over other messages.
+ */
+private suspend fun positionAtMessage(sessions: SessionManager, listState: LazyListState, token: String, id: Long) {
+    val messages = sessions.state.value.chats[token]?.messages ?: return
+    // A message that is hidden in the list: the one before it stands for it.
+    val target = messages.lastOrNull { it.status == null && it.msg.id <= id } ?: messages.firstOrNull { it.status == null } ?: return
+    scrollToKey(sessions, listState, token, target.key, 0.2f)
 }
 
 /**
@@ -603,10 +812,10 @@ private sealed interface ReactionSheet {
  * than half a screen away from the newest message, with the unread count as badge.
  */
 @Composable
-private fun JumpToEnd(listState: LazyListState, unread: Int, modifier: Modifier) {
+private fun JumpToEnd(listState: LazyListState, unread: Int, window: Boolean, onLeaveWindow: () -> Unit, modifier: Modifier) {
     val colors = LocalTalkColors.current
     val scope = rememberCoroutineScope()
-    val visible by remember(listState) {
+    val far by remember(listState) {
         derivedStateOf {
             val info = listState.layoutInfo
             val half = (info.viewportEndOffset - info.viewportStartOffset) / 2
@@ -627,7 +836,8 @@ private fun JumpToEnd(listState: LazyListState, unread: Int, modifier: Modifier)
         else -> "Zum Ende springen"
     }
     AnimatedVisibility(
-        visible = visible,
+        // In a window into the history the end is never on the screen: always there.
+        visible = far || window,
         modifier = modifier.padding(end = 14.dp, bottom = 14.dp),
         enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.6f),
         exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.6f),
@@ -641,10 +851,15 @@ private fun JumpToEnd(listState: LazyListState, unread: Int, modifier: Modifier)
                     .clip(CircleShape)
                     .background(colors.floating)
                     .clickable {
-                        scope.launch {
-                            // Far away: jump close without animation, then glide the rest.
-                            if (listState.firstVisibleItemIndex > 15) listState.scrollToItem(10)
-                            listState.animateScrollToItem(0)
+                        if (window) {
+                            // The end of the chat replaces the list; the screen follows it.
+                            onLeaveWindow()
+                        } else {
+                            scope.launch {
+                                // Far away: jump close without animation, then glide the rest.
+                                if (listState.firstVisibleItemIndex > 15) listState.scrollToItem(10)
+                                listState.animateScrollToItem(0)
+                            }
                         }
                     }
                     .semantics(mergeDescendants = true) {
@@ -728,6 +943,11 @@ private fun MessageRow(
     isGroup: Boolean,
     read: Boolean,
     unreadLabel: String?,
+    /** Search words to mark in the text (docs/search.md „Hervorhebung“); empty outside the search. */
+    marks: List<String>,
+    /** Not 0: a jump just led here, the bubble lights up once for this number. */
+    flash: Int,
+    onJump: (Long) -> Unit,
     canReact: Boolean,
     canChat: Boolean,
     canDeleteOthers: Boolean,
@@ -804,6 +1024,17 @@ private fun MessageRow(
         // Reactable like „Antworten“, files and voice messages included (docs/chat.md).
         val reactable = replyable && canReact
         val threshold = 160f
+        // Lit up for about 1.5 s after a jump, then fading (docs/search.md „Aufleuchten“).
+        val glow = remember { Animatable(0f) }
+        LaunchedEffect(flash) {
+            if (flash != 0) {
+                glow.snapTo(1f)
+                delay(1500)
+                glow.animateTo(0f, tween(400))
+            } else {
+                glow.snapTo(0f)
+            }
+        }
 
         Box(
             Modifier
@@ -870,6 +1101,10 @@ private fun MessageRow(
                                         else -> colors.bubbleOther
                                     },
                                 )
+                                .drawBehind {
+                                    val lit = glow.value
+                                    if (lit > 0f) drawRect(colors.searchMark.copy(alpha = colors.searchMark.alpha * lit))
+                                }
                                 .combinedClickable(
                                     onClick = { if (m.status == SendStatus.FAILED || m.status == SendStatus.WAITING) onRetry(msg) },
                                     onLongClick = {
@@ -897,15 +1132,31 @@ private fun MessageRow(
                                 )
                             }
                             msg.replyTo?.let { r ->
+                                val quoted = withAttachment(r.text, r.attachment, r.location)
                                 Column(
                                     inset
                                         .padding(top = 2.dp, bottom = 6.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(textColor.copy(alpha = 0.1f))
+                                        // A tap jumps to the quoted message; a deleted one does nothing (docs/search.md „Zitat antippen“).
+                                        .then(
+                                            if (quoted.isEmpty()) {
+                                                Modifier
+                                            } else {
+                                                Modifier.combinedClickable(
+                                                    onClickLabel = "Zur Nachricht springen",
+                                                    onClick = { onJump(r.id) },
+                                                    onLongClick = {
+                                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        menu = true
+                                                    },
+                                                )
+                                            },
+                                        )
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
                                 ) {
                                     Text(if (r.isOwn) "Du" else r.author, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text(withAttachment(r.text, r.attachment, r.location).ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(quoted.ifEmpty { "Nachricht gelöscht" }, color = textColor.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                             val metaOnImage = image && msg.text.isEmpty()
@@ -1016,7 +1267,9 @@ private fun MessageRow(
                                     Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
                                 jumbo -> Text(msg.text, fontSize = 44.sp)
                                 else -> Text(
-                                    remember(msg.text, msg.markdown, textColor) { renderMessage(msg.text, msg.markdown, textColor) },
+                                    remember(msg.text, msg.markdown, textColor, marks, colors.searchMark) {
+                                        markWords(renderMessage(msg.text, msg.markdown, textColor), marks, colors.searchMark)
+                                    },
                                     color = textColor,
                                     style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
                                     modifier = inset.padding(top = if (image) 6.dp else 0.dp),
