@@ -81,6 +81,15 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.2" date="2026-11-18" type="development">
+      <description>
+        <p>Android: Dateien senden. Über das Anhang-Menü lassen sich mehrere Dateien auf einmal mit einer Beschreibung senden, sie gehen unverändert raus. Empfangene Dateien laden in der App und öffnen sich mit der passenden App.</p>
+        <p>Android: Standort senden. Die App zeigt Karte, Adresse und Genauigkeit und sendet den Standort erst nach der Bestätigung. Im Chat erscheint er als Kartenbild, Antippen öffnet die Karten-App. Am Computer steht ein empfangener Standort als Kachel mit Link zur Karte.</p>
+        <p>Android: Reaktionen stehen jetzt unter der Nachricht statt in der Blase.</p>
+        <p>Reaktionen anderer erscheinen im offenen Chat nach wenigen Sekunden statt nach bis zu 30 Sekunden.</p>
+        <p>Behoben: Lag im Talk-Ordner schon eine Datei mit gleichem Namen und gleicher Größe, konnte nach einem Sendeversuch ohne Netz die alte Datei statt der neuen geteilt werden.</p>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-11-16" type="development">
       <description>
         <p>Nach dem Antippen einer Benachrichtigung ist die neue Nachricht sofort im Chat zu sehen. Die App holt sie schon, wenn die Benachrichtigung eintrifft, und nicht erst beim Öffnen.</p>

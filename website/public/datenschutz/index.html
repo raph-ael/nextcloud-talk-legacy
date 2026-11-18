@@ -36,6 +36,12 @@
 
     <h2>Paketquellen und Updates</h2>
     <p>Unter pkg.wolkenfunk.org stellen wir die Programmdateien von Wolkenfunk bereit (für Windows, macOS, Linux und Android, unter Linux auch als APT-Paketquelle). Wenn Sie dort ein Paket herunterladen oder Ihr System dort nach Updates fragt, verarbeitet der Server dieselben Protokolldaten wie beim Aufruf der Website, zum selben Zweck und mit derselben Speicherdauer. Das gilt auch, wenn Wolkenfunk unter Windows oder als AppImage unter Linux selbst nach Updates sucht (beim Start und danach alle sechs Stunden).</p>
+
+    <h2>Standort und Karten in den Apps</h2>
+    <p>Die App für Android verwendet Ihren Standort nur, wenn Sie ihn in einem Chat senden. Das System fragt dafür nach der Berechtigung. Geortet wird nur, solange das Blatt „Standort senden“ offen ist, nie im Hintergrund. Die Position geht mit der Nachricht an Ihren Nextcloud-Server und von dort an die Teilnehmer des Chats, nicht an uns.</p>
+    <p>Um zur Position eine Adresse zu zeigen, fragt die App den Adressdienst des Betriebssystems, je nach Gerät ist das ein Dienst von Google. Dieser Dienst erfährt dabei die Position.</p>
+    <p>Ein Standort im Chat erscheint auf Android als Kartenbild. Die App lädt dafür Kartenkacheln von tile.openstreetmap.org (OpenStreetMap Foundation, Vereinigtes Königreich). Der Kartendienst erfährt dabei Ihre IP-Adresse und die ungefähre Gegend des Standorts, auch bei Standorten, die Sie empfangen. Die Kacheln bleiben auf dem Gerät zwischengespeichert. Die Apps für Windows, macOS und Linux laden kein Kartenbild. Erst wenn Sie dort den Standort anklicken, öffnet Ihr Browser die Stelle auf openstreetmap.org.</p>
+
     <h2>Hosting</h2>
     <p>Die Website läuft auf einem von uns selbst betriebenen Server in einem Rechenzentrum der Hetzner Online GmbH in Finnland. Mit dem Anbieter besteht ein Vertrag zur Auftragsverarbeitung. Eine Übermittlung in Länder außerhalb der EU findet nicht statt.</p>
 
