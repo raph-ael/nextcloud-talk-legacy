@@ -299,7 +299,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
               </svg>
               Nachricht bearbeiten
             </div>
-            <div className="quote-text">{editing.msg.text.trim() || editing.msg.attachment?.name || ''}</div>
+            <div className="quote-text">{editing.msg.text.trim() || editing.msg.attachment?.contactName || editing.msg.attachment?.name || ''}</div>
           </div>
           <button className="icon-button" aria-label="Bearbeiten abbrechen" title="Bearbeiten abbrechen" onClick={onEndEdit}>
             <CloseIcon />

@@ -1134,7 +1134,11 @@ const MIME_BY_EXT: Record<string, string> = {
 }
 
 function mimeFor(name: string, given: string): string {
-  return given || MIME_BY_EXT[extname(name).toLowerCase()] || 'application/octet-stream'
+  const ext = extname(name).toLowerCase()
+  // A contact (docs/attachments.md): the server calls every `.vcf` a vCard, whatever the
+  // system says, and the pending bubble shows the contact tile from this type.
+  if (ext === '.vcf') return 'text/vcard'
+  return given || MIME_BY_EXT[ext] || 'application/octet-stream'
 }
 
 /**

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { locationName, type FileAttachment, type GeoLocation } from '@shared/core'
 import { accountId, type UiMessage } from '../store'
 import { coordinates, fileSize, locationLink } from '../format'
+import { Avatar } from './Avatar'
 
 /** Width of photos in chat bubbles (CSS px). */
 export const IMAGE_WIDTH = 300
@@ -109,14 +110,33 @@ function extension(name: string): string {
   return i > 0 && name.length - i <= 5 ? name.slice(i + 1).toLowerCase() : ''
 }
 
-/** Document icon with extension, file name and size; a click opens the file in the browser. */
+/**
+ * Document icon with extension, file name and size; a click opens the file in the browser.
+ * A contact (a vCard file) shows the person instead: initials, name and „Kontakt“
+ * (docs/attachments.md „Kontaktkachel“).
+ */
 export function FileRow({ msg }: { msg: UiMessage }) {
   const a = msg.attachment!
   const ext = extension(a.name)
-  const body = (
+  const uploading = msg.status === 'sending' && (msg.progress ?? -1) >= 0
+  const body = a.contactName ? (
+    <>
+      {uploading ? (
+        <span className="contact-ring" aria-hidden>
+          <ProgressRing progress={msg.progress!} size={32} />
+        </span>
+      ) : (
+        <Avatar name={a.contactName} size={40} />
+      )}
+      <span className="file-text">
+        <span className="file-name contact-name">{a.contactName}</span>
+        <span className="file-size">Kontakt</span>
+      </span>
+    </>
+  ) : (
     <>
       <span className="file-icon" aria-hidden>
-        {msg.status === 'sending' && (msg.progress ?? -1) >= 0 ? (
+        {uploading ? (
           <ProgressRing progress={msg.progress!} size={32} />
         ) : (
           <span className={ext.length > 3 ? 'small' : ''}>{ext}</span>

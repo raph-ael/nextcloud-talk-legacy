@@ -13,6 +13,8 @@ export interface FileAttachment {
   previewAvailable: boolean
   link: string
   voiceMessage: boolean
+  /** The person of a shared contact (a vCard file), never empty for one; empty for every other file. */
+  contactName: string
 }
 
 /** A place shared into a chat (WGS 84, degrees); `name` may be empty. */
@@ -28,8 +30,8 @@ export function locationName(l: GeoLocation): string {
 }
 
 /**
- * Short label for a file message ("📷 Foto", "📎 name.pdf"), followed by its caption, or
- * for a location ("📍 name"), whose `text` is its name again.
+ * Short label for a file message ("📷 Foto", "📎 name.pdf", "👤 name" for a contact),
+ * followed by its caption, or for a location ("📍 name"), whose `text` is its name again.
  */
 export function withAttachment(
   text: string,
@@ -38,13 +40,15 @@ export function withAttachment(
 ): string {
   if (location) return `📍 ${locationName(location)}`
   if (!a) return text
-  const label = a.voiceMessage
-    ? '🎤 Sprachnachricht'
-    : a.mimetype.startsWith('image/')
-      ? '📷 Foto'
-      : a.mimetype.startsWith('video/')
-        ? '🎬 Video'
-        : `📎 ${a.name}`
+  const label = a.contactName
+    ? `👤 ${a.contactName}`
+    : a.voiceMessage
+      ? '🎤 Sprachnachricht'
+      : a.mimetype.startsWith('image/')
+        ? '📷 Foto'
+        : a.mimetype.startsWith('video/')
+          ? '🎬 Video'
+          : `📎 ${a.name}`
   return text ? `${label} · ${text}` : label
 }
 

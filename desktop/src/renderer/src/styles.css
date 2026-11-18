@@ -1049,7 +1049,24 @@ a.file-row:hover .file-name {
   height: 36px;
   border-radius: 50%;
 }
-.location-name {
+/* A contact: the ring of an upload stands where the initials will be. */
+.contact-ring {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.12);
+}
+.msg.own .contact-ring {
+  background: rgb(255 255 255 / 0.22);
+}
+.contact-ring .progress-ring {
+  position: static;
+}
+.location-name,
+.contact-name {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
