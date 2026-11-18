@@ -85,7 +85,7 @@ Gesendet wird ein Eintrag aus dem Adressbuch des Geräts. Talk kennt dafür kein
 - Avatar-Kreis mit den Initialen wie bei einem Chat ohne Bild, daneben der Name (höchstens zwei Zeilen) und darunter in `muted` „Kontakt“. Die Uhrzeit steht darunter wie bei einer Datei. Ein Foto zeigt die Kachel nicht.
 - Sie erscheint für jede Datei mit `attachment.contactName`, gleich von wem und womit sie gesendet wurde, also auch für eine `.vcf`, die am Desktop als Datei angehängt wurde. Eine Beschreibung steht darunter wie bei Dateien.
 - **Ausstehend:** wie die Dateikachel. Der Ring steht statt des Avatars, die Statuszeile ist dieselbe, Antippen einer fehlgeschlagenen sendet erneut.
-- **Antippen** (Android, iOS) lädt die Datei wie unter „Empfangene Datei öffnen“ und reicht sie dem System: auf Android an die Kontakte-App („Öffnen mit“, Typ `text/x-vcard`), auf iOS an die Vorschau, die den Kontakt mit „Neuen Kontakt erstellen“ zeigt. Dort entscheidet der Benutzer über das Speichern. Die App selbst schreibt nichts ins Adressbuch.
+- **Antippen** (Android, iOS) lädt die Datei wie unter „Empfangene Datei öffnen“ und reicht sie dem System: auf Android an die Kontakte-App („Öffnen mit“, Typ `text/x-vcard`), auf iOS an die Kontaktansicht des Systems (`CNContactViewController` für einen unbekannten Kontakt) mit „Neuen Kontakt erstellen“ und „Zu Kontakt hinzufügen“. Die Datei-Vorschau zeigt die Karte zwar, bietet aber kein Speichern an. Sie bleibt der Ausweg, wenn sich die Karte nicht lesen lässt. Die Kontaktansicht braucht keine Berechtigung. Über das Speichern entscheidet der Benutzer dort. Die App selbst schreibt nichts ins Adressbuch.
 - **Desktop:** dieselbe Kachel. Ein Klick öffnet wie bei Dateien die Nextcloud-Seite im Browser.
 - Das Menü ist das einer Datei.
 
