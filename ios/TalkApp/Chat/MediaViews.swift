@@ -314,7 +314,7 @@ final class FileOpener {
                 return
             }
             guard QLPreviewController.canPreview(url as NSURL) else {
-                Toast.show("Keine App zum Öffnen von \(name)")
+                Toast.show(a.contactName.isEmpty ? "Keine App zum Öffnen von \(name)" : "Keine Kontakte-App gefunden")
                 return
             }
             preview = url

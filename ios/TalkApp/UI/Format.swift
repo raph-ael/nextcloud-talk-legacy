@@ -110,9 +110,11 @@ enum Format {
         return (1...3).contains(count)
     }
 
-    /// Short label for a file message: "📷 Foto", "🎤 Sprachnachricht", "📎 name.pdf".
+    /// Short label for a file message: "📷 Foto", "🎤 Sprachnachricht", "📎 name.pdf",
+    /// "👤 {Name}" for a contact (docs/attachments.md "Kontakt", "Vorschau").
     static func attachmentLabel(_ a: FileAttachment) -> String {
         if a.voiceMessage { return "🎤 Sprachnachricht" }
+        if !a.contactName.isEmpty { return "👤 \(a.contactName)" }
         if a.mimetype.hasPrefix("image/") { return "📷 Foto" }
         if a.mimetype.hasPrefix("video/") { return "🎬 Video" }
         return "📎 \(a.name)"

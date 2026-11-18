@@ -33,6 +33,7 @@ struct ChatView: View {
     /// docs/attachments.md: the system's file picker, the picked files, the place sheet.
     @State private var filePicker = false
     @State private var placeSheet = false
+    @State private var contact: PickedContact?
     @AppStorage("keyboard_height") private var keyboardHeight: Double = 300
 
     var body: some View {
@@ -148,7 +149,12 @@ struct ChatView: View {
                         },
                         onCamera: { camera = true },
                         onFile: { filePicker = true },
-                        onPlace: { placeSheet = true }
+                        onPlace: { placeSheet = true },
+                        onContact: {
+                            ContactPicker.present { picked in
+                                if let picked { contact = picked } else { Toast.show("Kontakt konnte nicht gelesen werden") }
+                            }
+                        }
                     )
                     .transition(.move(edge: .bottom))
                 }
@@ -321,7 +327,8 @@ struct ChatView: View {
         }
         .modifier(AttachmentSheets(
             store: store, token: token, replyTo: $replyTo, panelOpen: $panelOpen,
-            scrollTick: $scrollTick, filePicker: $filePicker, placeSheet: $placeSheet
+            scrollTick: $scrollTick, filePicker: $filePicker, placeSheet: $placeSheet,
+            contact: $contact
         ))
         .onAppear { store.markVisibleRead(token) }
     }
@@ -468,8 +475,8 @@ private struct JumpToBottomButton: View {
     }
 }
 
-/// docs/attachments.md: the file picker, the "Datei senden" screen, the place sheet and the
-/// QuickLook preview of received files.
+/// docs/attachments.md: the file picker, the "Datei senden" screen, the place sheet, the
+/// "Kontakt senden" sheet and the QuickLook preview of received files and contacts.
 private struct AttachmentSheets: ViewModifier {
     let store: SessionStore
     let token: String
@@ -478,6 +485,7 @@ private struct AttachmentSheets: ViewModifier {
     @Binding var scrollTick: Int
     @Binding var filePicker: Bool
     @Binding var placeSheet: Bool
+    @Binding var contact: PickedContact?
     @State private var files: FileBatch?
 
     func body(content: Content) -> some View {
@@ -518,6 +526,22 @@ private struct AttachmentSheets: ViewModifier {
                     onClose: { placeSheet = false }
                 )
                 .presentationDetents([.height(420)])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $contact) { c in
+                // docs/attachments.md "Senden": with the quote, the reply bar closes.
+                ContactSendSheet(
+                    contact: c,
+                    onSend: { card in
+                        store.sendContact(token, card, replyTo: replyTo)
+                        replyTo = nil
+                        contact = nil
+                        panelOpen = false
+                        scrollTick += 1
+                    },
+                    onClose: { contact = nil }
+                )
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
             .quickLookPreview(Binding(get: { FileOpener.shared.preview }, set: { FileOpener.shared.preview = $0 }))

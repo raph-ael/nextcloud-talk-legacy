@@ -1250,6 +1250,20 @@ final class SessionStore {
         BackgroundSender.shared.queued()
     }
 
+    /// docs/attachments.md "Kontakt": the core builds the vCard from exactly what is in `card`
+    /// and queues it like a file; it goes out with the quote.
+    func sendContact(_ token: String, _ card: ContactCard, replyTo: MessageView?) {
+        guard let s = session else { return }
+        clearUnreadLine(token)
+        do {
+            _ = try s.enqueueContact(token: token, card: card, replyTo: replyTo?.toReply, referenceId: newReferenceId())
+        } catch {
+            Log.media.error("enqueue contact: \(error.localizedDescription, privacy: .public)")
+            Toast.show("Kontakt konnte nicht gespeichert werden")
+        }
+        BackgroundSender.shared.queued()
+    }
+
     /// Sends a failed message again (or a waiting one right now).
     func retry(_ msg: MessageView) {
         activeId.flatMap { runtimes[$0] }?.notifiedFailures.remove(msg.referenceId)

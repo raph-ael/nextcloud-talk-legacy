@@ -189,6 +189,9 @@ struct Bubble: View {
                             meta: metaInVoice && showMeta ? MessageMeta(m: m, own: own, read: read, color: metaColor) : nil
                         )
                         .padding(.bottom, msg.text.isEmpty ? 0 : 4)
+                    } else if let a = attachment, !a.contactName.isEmpty {
+                        ContactRow(m: m, attachment: a, textColor: textColor, onRetry: onRetry)
+                            .padding(.bottom, msg.text.isEmpty ? 0 : 4)
                     } else if let a = attachment {
                         FileRow(m: m, attachment: a, textColor: textColor, onRetry: onRetry)
                             .padding(.bottom, msg.text.isEmpty ? 0 : 4)
@@ -389,40 +392,40 @@ struct FileRow: View {
         let a = attachment
         let opener = FileOpener.shared
         let loading = opener.isLoading(a)
-        Button {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(textColor.opacity(0.12))
+                let pending = m.status == .sending || m.status == .waiting
+                if pending && (0..<0.999).contains(m.progress) {
+                    Circle().stroke(textColor.opacity(0.25), lineWidth: 3).padding(5)
+                    Circle().trim(from: 0, to: CGFloat(max(0.03, m.progress)))
+                        .stroke(textColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .padding(5)
+                } else if pending || loading {
+                    ProgressView().tint(textColor)
+                } else {
+                    Image(systemName: FileIcon.name(a.mimetype)).font(.system(size: 18))
+                }
+            }
+            .frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(a.name).font(.system(size: 15, weight: .medium)).lineLimit(2)
+                Text(Format.fileSize(a.size)).font(.system(size: 12)).opacity(0.75)
+            }
+        }
+        .foregroundStyle(textColor)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        // A tap gesture, not a Button: a Button would swallow the long press of the list
+        // that opens the message menu.
+        .onTapGesture {
             switch m.status {
             case .failed, .waiting: onRetry(m.msg)
             case .sending: break
             case nil: opener.open(a)
             }
-        } label: {
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(textColor.opacity(0.12))
-                    let pending = m.status == .sending || m.status == .waiting
-                    if pending && (0..<0.999).contains(m.progress) {
-                        Circle().stroke(textColor.opacity(0.25), lineWidth: 3).padding(5)
-                        Circle().trim(from: 0, to: CGFloat(max(0.03, m.progress)))
-                            .stroke(textColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                            .padding(5)
-                    } else if pending || loading {
-                        ProgressView().tint(textColor)
-                    } else {
-                        Image(systemName: FileIcon.name(a.mimetype)).font(.system(size: 18))
-                    }
-                }
-                .frame(width: 40, height: 40)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(a.name).font(.system(size: 15, weight: .medium)).lineLimit(2)
-                    Text(Format.fileSize(a.size)).font(.system(size: 12)).opacity(0.75)
-                }
-            }
-            .foregroundStyle(textColor)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(a.name), \(Format.fileSize(a.size))")
         .accessibilityValue(loading ? "Wird geladen" : "")

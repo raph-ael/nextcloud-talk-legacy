@@ -4,7 +4,9 @@ import UserNotifications
 /// placeholder); this extension decrypts them with the core (docs/notifications.md). The key
 /// that decrypts names the account (docs/accounts.md "Push"). Sender and text come from
 /// `pushChatParts`; the extension does not know the conversation list, so the title stays
-/// the push's first line ("Bob", in groups "Bob in Projekt"). From two accounts on the
+/// the push's first line ("Bob", in groups "Bob in Projekt"). A reaction looks the same: the
+/// core names the reacting person as sender ("Bob", "Bob in Projekt") and gives the text
+/// "Hat mit 👍 reagiert auf: „…“", so nothing here tells them apart. From two accounts on the
 /// subtitle names the account. Every message adds one to the shared icon number, plays the
 /// standard sound and carries the actions "Antworten" and "Als gelesen markieren". Taps open
 /// the conversation (`account` and `token` in userInfo, like the app's own notifications).
