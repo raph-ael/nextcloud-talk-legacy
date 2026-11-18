@@ -41,7 +41,7 @@ Einstieg ist das vorhandene Suchfeld der Chatliste.
 | Punkt | Regel |
 |---|---|
 | Einstieg | Lupe im Chat-Kopf, links neben dem Anruf-Knopf. Bezeichnung „Im Chat suchen“. |
-| Kopf | Das Suchfeld ersetzt Avatar und Namen, die Tastatur öffnet sich. Platzhalter „Suchen“. Der Zurück-Pfeil schließt die Suche und zeigt wieder den Kopf, erst ein weiteres Zurück verlässt den Chat. |
+| Kopf | Das Suchfeld ersetzt Avatar und Namen, die Tastatur öffnet sich. Lupe und Anruf-Knopf sind solange weg: Neben einem Textfeld ruft man sonst aus Versehen an. Platzhalter „Suchen“. Der Zurück-Pfeil schließt die Suche und zeigt wieder den Kopf, erst ein weiteres Zurück verlässt den Chat. |
 | Leiste | Statt der Eingabeleiste steht eine Leiste mit dem Zähler links („3 von 17“, ohne Treffer „Keine Treffer“, bei leerem Feld nichts) und rechts zwei Pfeilen: nach oben zum älteren, nach unten zum neueren Treffer. Am Ende der Reihe ist der Pfeil ausgegraut. |
 | Treffer | `searchMessages(text, token, 500)` bei jeder Änderung. Die Treffer sind die Reihe, `total` der Zähler. Der neueste Treffer ist gewählt (Nummer 1), und der Chat springt zu ihm. |
 | Sprung | Wie „Chat an einer Nachricht öffnen“. Der gewählte Treffer leuchtet kurz auf. |
