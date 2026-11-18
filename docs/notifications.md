@@ -58,14 +58,22 @@ Der Kern merkt sich pro Chat die zuletzt gemeldete Nachricht und speichert das. 
 | Titel | Name des Chats, aus der Chatliste (`rooms()`) über den Token |
 | Text, Einzelchat | die Nachricht |
 | Text, Gruppe | „{Autor}: {Nachricht}“, auf Android der Autor als `Person` im `MessagingStyle` |
-| Anhang | die Bezeichnungen der Chatliste: „🎤 Sprachnachricht“, „📷 Foto“, „🎬 Video“, „📎 {Name}“, „📍 {Bezeichnung}“ (`docs/attachments.md`) |
+| Anhang | die Bezeichnungen der Chatliste: „🎤 Sprachnachricht“, „📷 Foto“, „🎬 Video“, „📎 {Name}“, „📍 {Bezeichnung}“, „👤 {Name}“ (`docs/attachments.md`) |
+| Reaktion | „Hat mit 👍 reagiert auf: „{eigene Nachricht}““, in Gruppen mit dem Autor davor wie bei einer Nachricht. Ohne Text der Nachricht nur „Hat mit 👍 reagiert“. |
 | ohne lesbaren Text | „Neue Nachricht“ |
 | Kontozeile | ab zwei Konten „{Name} · {Server}“, wie in `docs/accounts.md`. Android zeichnet `setSubText` im `MessagingStyle` nicht: Dort steht sie zusätzlich im Gesprächstitel, „{Chat} – {Name} · {Server}“ (`setConversationTitle`, mit `setGroupConversation` passend zum Chat). |
 | Ton | der Standardton des Systems |
 
 Bei Push kommt der Text aus dem Push selbst, ohne Netz: `pushChatParts(subject, roomName)` liefert Absender und Text. Den Titel bestimmt die App trotzdem aus der Chatliste, denn der Server schreibt bei Gruppen „Bob in Projekt“ in die erste Zeile, in der Sprache des Benutzers. Kennt die App den Chat noch nicht, nimmt sie die erste Zeile.
 
-Reaktionen, Erinnerungen und Einladungen in eine Gruppe kommen ebenfalls als Nachrichten-Push. Sie haben keinen Zeilenumbruch und stehen dann ganz im Text. Bei einer Einladung kennt die App den Chat noch nicht: Der Titel ist dann „Wolkenfunk“.
+**Reaktionen** kommen ebenfalls als Nachrichten-Push. Der Server schreibt „{Name} hat mit 👍 reagiert“ in die erste Zeile und darunter die Nachricht, auf die reagiert wurde, also die eigene. Wie eine Nachricht gezeigt, sähe das aus, als hätte der andere sie geschrieben. `pushChatParts` erkennt die Reaktion deshalb und liefert als Absender den Namen und als Text „Hat mit 👍 reagiert auf: „…““ (Zeilenumbrüche der Nachricht werden Leerzeichen). Die Plattformen zeigen beides wie bei einer Nachricht und müssen nichts unterscheiden.
+
+- Der Push hat kein Feld, das eine Reaktion ausweist. Der Kern erkennt sie am Satz der ersten Zeile, in der Sprache, die im Nextcloud-Konto eingestellt ist. Die Sätze aller Sprachen stehen in `core/talk-core/src/push_l10n.rs`, erzeugt aus den Übersetzungen von Talk (`scripts/push-l10n.py`). Ändert Talk einen Satz, erscheint die Reaktion bis zur nächsten Erzeugung wieder wie eine Nachricht.
+- Kennt die App den Chat nicht (die iOS-Erweiterung), ist der Absender bei Gruppen „{Name} in {Chat}“ wie bei einer Nachricht.
+- Reagiert ein Gast ohne Namen, heißt der Absender „Jemand“.
+- Am Desktop gibt es für Reaktionen keine Benachrichtigung: `messageNotices` meldet nur Nachrichten.
+
+Erinnerungen tragen in der ersten Zeile den Satz des Servers (englisch „Reminder: {Name} in {Chat}“) und stehen so da. Einladungen in eine Gruppe haben keinen Zeilenumbruch und stehen ganz im Text. Bei einer Einladung kennt die App den Chat noch nicht: Der Titel ist dann „Wolkenfunk“.
 
 Ein Push, der nicht zu Talk gehört (auch der von „Push testen“), erscheint als einfache Benachrichtigung: Titel „Wolkenfunk“, Text aus dem Push, ohne Chat. Antippen öffnet die App.
 

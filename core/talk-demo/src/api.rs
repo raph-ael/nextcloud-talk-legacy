@@ -592,7 +592,7 @@ pub async fn chat_share(AxState(app): S, Path(token): Path<String>, p: Params) -
 /// signed-in user gets something unread (several accounts: the badge of the account you
 /// are not in, docs/accounts.md). `token`, `text` ("@id" mentions) and optionally `from`
 /// (a member; default: the first other member). With `lat` and `lon` it is a shared place
-/// and `text` its name.
+/// and `text` its name. With `contact=1` it is a shared contact, `text` the person's name.
 pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
     let mut st = app.st.lock().unwrap();
     let token = p.str("token").unwrap_or_default();
@@ -609,7 +609,21 @@ pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
     if from == st.me || !room.is_member(&from) {
         return bad_request("from");
     }
+    let contact = p.str("contact").is_some_and(|v| v != "0" && !v.is_empty());
     let m = match place {
+        _ if contact => {
+            let name = text.trim().replace(['\r', '\n', ';', ',', '\\', '/'], " ");
+            let card = format!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\nN:{name};;;;\r\nFN:{name}\r\nTEL;TYPE=CELL:+49 30 23125 118\r\nEND:VCARD\r\n"
+            );
+            let file = format!("{name}.vcf");
+            let file_id = st.add_file(&file, &format!("Talk/{file}"), std::sync::Arc::new(card.into_bytes()));
+            let mut m = st.new_msg(&from, "{file}".into());
+            m.params.insert("actor".into(), st.user_param(&from));
+            m.params.insert("file".into(), st.file_param(file_id));
+            m.file = Some(file_id);
+            m
+        }
         Some((lat, lon)) => {
             let mut m = st.new_msg(&from, "{object}".into());
             m.params.insert("actor".into(), st.user_param(&from));

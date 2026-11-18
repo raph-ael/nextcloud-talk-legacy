@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Brandt;Karla;;;
+FN:Karla Brandt
+ORG:Hüpfburg-Verleih Brandt
+TEL;TYPE=CELL:+49 30 23125 117
+EMAIL;TYPE=INTERNET,WORK:karla@example.org
+ADR;TYPE=WORK:;;Am Hof 3;Berlin;;10249;Deutschland
+END:VCARD

@@ -171,6 +171,65 @@ pub struct FileAttachment {
     pub preview_available: bool,
     pub link: String,
     pub voice_message: bool,
+    /// The person of a shared contact (a vCard file); empty for every other file.
+    pub contact_name: String,
+}
+
+/// A phone number or an e-mail address. `kind`: "mobile", "home", "work" or empty.
+#[derive(uniffi::Record, Clone)]
+pub struct ContactValue {
+    pub kind: String,
+    pub value: String,
+}
+
+/// A postal address. `kind`: "home", "work" or empty.
+#[derive(uniffi::Record, Clone)]
+pub struct ContactAddress {
+    pub kind: String,
+    pub street: String,
+    pub city: String,
+    pub region: String,
+    pub postal_code: String,
+    pub country: String,
+}
+
+/// The part of an address book entry that is sent (docs/attachments.md "Kontakt").
+#[derive(uniffi::Record, Clone)]
+pub struct ContactCard {
+    /// The name as the address book shows it.
+    pub name: String,
+    pub given_name: String,
+    pub family_name: String,
+    pub organization: String,
+    pub phones: Vec<ContactValue>,
+    pub emails: Vec<ContactValue>,
+    pub addresses: Vec<ContactAddress>,
+}
+
+impl From<ContactCard> for core::ContactCard {
+    fn from(c: ContactCard) -> Self {
+        let value = |v: ContactValue| core::ContactValue { kind: v.kind, value: v.value };
+        Self {
+            name: c.name,
+            given_name: c.given_name,
+            family_name: c.family_name,
+            organization: c.organization,
+            phones: c.phones.into_iter().map(value).collect(),
+            emails: c.emails.into_iter().map(value).collect(),
+            addresses: c
+                .addresses
+                .into_iter()
+                .map(|a| core::ContactAddress {
+                    kind: a.kind,
+                    street: a.street,
+                    city: a.city,
+                    region: a.region,
+                    postal_code: a.postal_code,
+                    country: a.country,
+                })
+                .collect(),
+        }
+    }
 }
 
 impl From<core::FileAttachment> for FileAttachment {
@@ -186,6 +245,7 @@ impl From<core::FileAttachment> for FileAttachment {
             preview_available: a.preview_available,
             link: a.link,
             voice_message: a.voice_message,
+            contact_name: a.contact_name,
         }
     }
 }
@@ -497,6 +557,7 @@ impl From<ReplyPreview> for core::ReplyPreview {
                 preview_available: a.preview_available,
                 link: a.link,
                 voice_message: a.voice_message,
+                contact_name: a.contact_name,
             }),
             location: r.location.map(Into::into),
         }
@@ -1250,6 +1311,21 @@ impl TalkSession {
                 reply_to.map(Into::into),
                 &reference_id,
             )?
+            .into())
+    }
+
+    /// Queues a contact. It goes out as a vCard file named after the person and runs
+    /// like any file: progress, "Wartet auf Netz", retry.
+    pub fn enqueue_contact(
+        &self,
+        token: String,
+        card: ContactCard,
+        reply_to: Option<ReplyPreview>,
+        reference_id: String,
+    ) -> Result<PendingMessage, CoreError> {
+        Ok(self
+            .engine
+            .enqueue_contact(&token, &card.into(), reply_to.map(Into::into), &reference_id)?
             .into())
     }
 

@@ -358,6 +358,7 @@ pub fn mime_for(name: &str) -> &'static str {
         "mp4" => "video/mp4",
         "pdf" => "application/pdf",
         "txt" => "text/plain",
+        "vcf" => "text/vcard",
         _ => "application/octet-stream",
     }
 }
@@ -674,6 +675,13 @@ impl State {
         if image && f.width > 0 {
             p["width"] = f.width.to_string().into();
             p["height"] = f.height.to_string().into();
+        }
+        // Talk reads the name out of a vCard; a card without one has no `contact-name`.
+        if f.mime == "text/vcard" {
+            let card = String::from_utf8_lossy(&f.data).replace("\r\n ", "");
+            if let Some(name) = card.lines().find_map(|l| l.strip_prefix("FN:")).filter(|n| !n.trim().is_empty()) {
+                p["contact-name"] = name.trim().replace("\\,", ",").replace("\\;", ";").into();
+            }
         }
         p
     }

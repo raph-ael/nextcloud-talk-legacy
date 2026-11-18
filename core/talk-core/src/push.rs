@@ -184,7 +184,7 @@ pub fn caller_from_subject(subject: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatPushParts {
-    /// Who wrote; empty when the push does not say (reactions, reminders, invitations).
+    /// Who wrote or reacted; empty when the push does not say (invitations).
     pub sender: String,
     pub text: String,
 }
@@ -193,13 +193,31 @@ pub struct ChatPushParts {
 /// groups `"{user} in {conversation}\n{message}"` with the "in" in the user's language,
 /// and shortens the message to fit the push. `room_name`: the conversation's name from
 /// the room list (empty if unknown); with it the sender is cut out of the first line.
-/// A subject without a line break (a reaction, a reminder) is all text.
+/// A subject without a line break (an invitation) is all text.
+///
+/// A reaction comes as `"{user} reacted with {reaction}\n{message}"`, with the user's own
+/// message below. Shown like a message it would read as if the other one had written it,
+/// so the text says what happened: „Hat mit 👍 reagiert auf: „Bis morgen““.
 pub fn chat_parts(subject: &str, room_name: &str) -> ChatPushParts {
     let Some((first, text)) = subject.split_once('\n') else {
         return ChatPushParts { sender: String::new(), text: subject.trim().to_string() };
     };
     let first = first.trim();
     let room_name = room_name.trim();
+    if let Some(r) = reaction_line(first, room_name) {
+        let quoted = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = match quoted.is_empty() {
+            true => format!("Hat mit {} reagiert", r.reaction),
+            false => format!("Hat mit {} reagiert auf: „{quoted}“", r.reaction),
+        };
+        // The app that knows the chat has its name as the title. One that does not (the
+        // iOS extension) gets the line a message would have: "Bob in Projekt".
+        let sender = match r.call {
+            Some(call) if call != room_name => r.in_call.replace("{user}", r.name).replace("{call}", call),
+            _ => r.name.to_string(),
+        };
+        return ChatPushParts { sender, text };
+    }
     let sender = first
         .strip_suffix(room_name)
         .filter(|head| !room_name.is_empty() && !head.trim().is_empty())
@@ -208,6 +226,119 @@ pub fn chat_parts(subject: &str, room_name: &str) -> ChatPushParts {
         .filter(|name| !name.is_empty())
         .unwrap_or(first);
     ChatPushParts { sender: sender.to_string(), text: text.trim().to_string() }
+}
+
+/// The first line of a reaction push, taken apart.
+struct ReactionLine<'a> {
+    /// Who reacted; "Jemand" for a guest without a name or a deleted user.
+    name: &'a str,
+    reaction: &'a str,
+    /// The conversation, in groups.
+    call: Option<&'a str>,
+    /// `{user} in {call}` in the language of the line.
+    in_call: &'static str,
+}
+
+/// Recognises the first line of a reaction push. Only the wording marks it: the push has
+/// no field for it, and the sentence is in the language of the account
+/// (`push_l10n.rs`, from Talk's translations).
+///
+/// `room_name`: the conversation's name if known. Where a language puts nothing but a
+/// space between the name and the conversation, only it tells the two apart.
+fn reaction_line<'a>(first: &'a str, room_name: &str) -> Option<ReactionLine<'a>> {
+    // First with the conversation as the app knows it, then with any (renamed, unknown).
+    let rooms: &[&str] = if room_name.is_empty() { &[""] } else { &[room_name, ""] };
+    for room in rooms {
+        for (sentence, in_call) in crate::push_l10n::REACTIONS {
+            let mut found = [None; 3];
+            if fit(&slots(sentence.trim()), first, room, &mut found) {
+                return Some(ReactionLine {
+                    name: found[NAME].unwrap_or("Jemand"),
+                    reaction: found[REACTION]?,
+                    call: found[CALL],
+                    in_call,
+                });
+            }
+        }
+    }
+    None
+}
+
+const NAME: usize = 0;
+const REACTION: usize = 1;
+const CALL: usize = 2;
+
+enum Part<'a> {
+    Text(&'a str),
+    Slot(usize),
+}
+
+/// `"{user} reacted with {reaction}"` → slot, text, slot.
+fn slots(sentence: &str) -> Vec<Part<'_>> {
+    let mut parts = Vec::new();
+    let mut rest = sentence;
+    while let Some(open) = rest.find('{') {
+        let Some(len) = rest[open..].find('}') else { break };
+        let slot = match &rest[open + 1..open + len] {
+            "user" | "guest" => NAME,
+            "reaction" => REACTION,
+            "call" => CALL,
+            _ => break,
+        };
+        if open > 0 {
+            parts.push(Part::Text(&rest[..open]));
+        }
+        parts.push(Part::Slot(slot));
+        rest = &rest[open + len + 1..];
+    }
+    if !rest.is_empty() {
+        parts.push(Part::Text(rest));
+    }
+    parts
+}
+
+/// Whether `line` is the sentence `parts`, and what stands in its slots. A slot takes the
+/// shortest text that lets the rest fit, so a name with the sentence's words in it is
+/// still found. With a `room`, the conversation has to be that one.
+fn fit<'a>(parts: &[Part<'_>], line: &'a str, room: &str, found: &mut [Option<&'a str>; 3]) -> bool {
+    let fills = |slot: usize, value: &str| match slot {
+        REACTION => is_reaction(value),
+        CALL if !room.is_empty() => value == room,
+        _ => !value.trim().is_empty(),
+    };
+    match parts {
+        [] => line.is_empty(),
+        [Part::Text(text), rest @ ..] => line.strip_prefix(text).is_some_and(|line| fit(rest, line, room, found)),
+        [Part::Slot(slot)] => {
+            let fits = fills(*slot, line);
+            if fits {
+                found[*slot] = Some(line);
+            }
+            fits
+        }
+        [Part::Slot(slot), Part::Text(text), rest @ ..] => {
+            for (at, _) in line.match_indices(text) {
+                if fills(*slot, &line[..at]) && fit(rest, &line[at + text.len()..], room, found) {
+                    found[*slot] = Some(&line[..at]);
+                    return true;
+                }
+            }
+            false
+        }
+        // Two slots with nothing between them: no sentence has that.
+        [Part::Slot(_), Part::Slot(_), ..] => false,
+    }
+}
+
+/// An emoji, as far as it takes to tell it from a word: short, no space, no letters.
+/// (The squared letters 🅰 🅱 count as alphabetic in Unicode, hence the range.)
+fn is_reaction(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 12
+        && !value.is_ascii()
+        && value.chars().all(|c| {
+            !c.is_whitespace() && (!c.is_alphabetic() || ('\u{1F100}'..='\u{1F1FF}').contains(&c))
+        })
 }
 
 #[cfg(test)]
@@ -229,8 +360,66 @@ mod tests {
         // The conversation is not known (yet): the first line as it is.
         assert_eq!(parts("Bob in Projekt\nHallo", ""), ("Bob in Projekt".into(), "Hallo".into()));
         assert_eq!(parts("Bob in Projekt\nHallo", "Anderes"), ("Bob in Projekt".into(), "Hallo".into()));
-        // Reactions, reminders and invitations have no line break.
-        assert_eq!(parts("Bob hat mit 👍 reagiert", "Projekt"), ("".into(), "Bob hat mit 👍 reagiert".into()));
+        // An invitation has no line break.
+        assert_eq!(parts("Bob hat dich zu Projekt eingeladen", "Projekt"), ("".into(), "Bob hat dich zu Projekt eingeladen".into()));
+    }
+
+    #[test]
+    fn a_reaction_says_so_instead_of_repeating_the_own_message() {
+        let parts = |subject: &str, room: &str| {
+            let p = chat_parts(subject, room);
+            (p.sender, p.text)
+        };
+        let said = |text: &str| format!("Hat mit 👍 reagiert auf: „{text}“");
+        // One-to-one, in German and in the server's other languages.
+        assert_eq!(parts("Bob hat mit 👍 reagiert\nBis morgen", "Bob"), ("Bob".into(), said("Bis morgen")));
+        assert_eq!(parts("Bob reacted with 👍\nBis morgen", "Bob"), ("Bob".into(), said("Bis morgen")));
+        assert_eq!(parts("Bob a réagi avec 👍\nBis morgen", "Bob"), ("Bob".into(), said("Bis morgen")));
+        assert_eq!(parts("Bob が 👍 で反応しました\nBis morgen", "Bob"), ("Bob".into(), said("Bis morgen")));
+        // A group the app knows: the name alone, the chat is the title.
+        assert_eq!(
+            parts("Anna Beispiel hat mit 👍 in Projekt reagiert\nErste Zeile\nzweite …", "Projekt"),
+            ("Anna Beispiel".into(), said("Erste Zeile zweite …"))
+        );
+        // One it does not know (the iOS extension): the line a message would have.
+        assert_eq!(
+            parts("Anna Beispiel hat mit 👍 in Projekt reagiert\nHallo", ""),
+            ("Anna Beispiel in Projekt".into(), said("Hallo"))
+        );
+        assert_eq!(parts("Anna a réagi avec 👍 dans Jardin partagé\nSalut", ""), ("Anna dans Jardin partagé".into(), said("Salut")));
+        // A guest without a name, and a message that is only an attachment without a name.
+        assert_eq!(parts("Guest reacted with 👍 in Projekt\nHallo", "Projekt"), ("Jemand".into(), said("Hallo")));
+        assert_eq!(parts("Bob hat mit 👍 reagiert\n", "Bob"), ("Bob".into(), "Hat mit 👍 reagiert".into()));
+        // The sentence's words in a name do not confuse it.
+        assert_eq!(parts("Bob hat mit Stil hat mit 👍 reagiert\nHallo", ""), ("Bob hat mit Stil".into(), said("Hallo")));
+        // Emoji of several code points, a keycap, a squared letter.
+        for emoji in ["👍🏽", "👨‍👩‍👧‍👦", "🇩🇪", "1️⃣", "🅰️", "❤️"] {
+            let p = chat_parts(&format!("Bob hat mit {emoji} reagiert\nHallo"), "Bob");
+            assert_eq!(p.text, format!("Hat mit {emoji} reagiert auf: „Hallo“"));
+        }
+        // Messages stay messages, also from names with an emoji or with the sentence in them.
+        assert_eq!(parts("Anna 🌻\nHallo", "Anna 🌻"), ("Anna 🌻".into(), "Hallo".into()));
+        assert_eq!(parts("Anna 🌻 in Projekt\nHallo", "Projekt"), ("Anna 🌻".into(), "Hallo".into()));
+        assert_eq!(parts("Bob hat mit Anna reagiert\nHallo", ""), ("Bob hat mit Anna reagiert".into(), "Hallo".into()));
+        assert_eq!(parts("Bob\nAnna hat mit 👍 reagiert", "Bob"), ("Bob".into(), "Anna hat mit 👍 reagiert".into()));
+    }
+
+    #[test]
+    fn every_language_of_the_server_is_recognised() {
+        for (sentence, _) in crate::push_l10n::REACTIONS {
+            let line = sentence
+                .replace("{user}", "Ann Lee")
+                .replace("{guest}", "Ann Lee")
+                .replace("{reaction}", "👍🏽")
+                .replace("{call}", "Team Rot");
+            // Without the conversation's name the emoji is still found.
+            assert_eq!(reaction_line(line.trim(), "").map(|r| r.reaction), Some("👍🏽"), "{line}");
+            let r = reaction_line(line.trim(), "Team Rot").unwrap_or_else(|| panic!("not recognised: {line}"));
+            let named = sentence.contains("{user}") || sentence.contains("{guest}");
+            assert_eq!(r.reaction, "👍🏽", "{line}");
+            assert_eq!(r.name, if named { "Ann Lee" } else { "Jemand" }, "{line}");
+            assert_eq!(r.call, sentence.contains("{call}").then_some("Team Rot"), "{line}");
+        }
     }
 
     fn encrypt(public_pem: &str, plain: &str, oaep: bool) -> String {

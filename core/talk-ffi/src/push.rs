@@ -83,8 +83,9 @@ pub fn decrypt_push_for(keys: Vec<PushKey>, subject: String) -> Option<AccountPu
 /// Sender and text of a chat push, for a notification built without network.
 #[derive(uniffi::Record, Clone)]
 pub struct ChatPushParts {
-    /// Who wrote; empty when the push does not say (reactions, reminders).
+    /// Who wrote or reacted; empty when the push does not say (invitations).
     pub sender: String,
+    /// The message. For a reaction: „Hat mit 👍 reagiert auf: „…““.
     pub text: String,
 }
 

@@ -20,6 +20,7 @@ pub mod categories;
 pub(crate) mod cache;
 pub mod client;
 pub mod connection;
+pub mod contact;
 pub mod engine;
 pub mod error;
 pub mod groups;
@@ -28,6 +29,7 @@ pub mod models;
 pub mod notices;
 pub mod outbox;
 pub mod push;
+mod push_l10n;
 pub mod voice;
 
 pub use accounts::{AccountIdentity, BadgeView, account_key, resolve_account, revoke_app_password, server_key};
@@ -40,6 +42,7 @@ pub use client::{
     Account, ChatBatch, CurrentUser, Platform, RoomsBatch, TalkClient, new_reference_id,
 };
 pub use connection::ConnectionState;
+pub use contact::{ContactAddress, ContactCard, ContactValue};
 pub use engine::{
     ChatPage, Engine, Event, EventSink, MessageOp, MessageView, ReactionView, ReplyPreview, RoomView, message_error_text,
     reaction_error_text,

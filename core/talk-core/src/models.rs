@@ -199,11 +199,16 @@ impl ChatMessage {
             _ => String::new(),
         };
         let n = |k: &str| s(k).parse::<i64>().unwrap_or(0);
+        let contact_name = match crate::contact::is_vcard(&s("mimetype")) {
+            true => crate::contact::display_name(&s("contact-name"), &s("name")),
+            false => String::new(),
+        };
         Some(FileAttachment {
             id: s("id"),
             name: s("name"),
             path: s("path"),
             mimetype: s("mimetype"),
+            contact_name,
             size: n("size"),
             width: n("width"),
             height: n("height"),
@@ -290,6 +295,10 @@ pub struct FileAttachment {
     pub link: String,
     /// Sent as a voice message (`messageType: voice-message`).
     pub voice_message: bool,
+    /// The person of a shared contact (a vCard file), never empty for one; empty for
+    /// every other file. Who has it draws the contact tile instead of the file tile.
+    #[serde(default)]
+    pub contact_name: String,
 }
 
 impl FileAttachment {

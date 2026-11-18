@@ -1,8 +1,8 @@
-# Anhänge – Dateien und Standort
+# Anhänge – Dateien, Standort und Kontakt
 
-Verbindlich für Android und iOS, wo nichts anderes steht. Der Desktop sendet Dateien schon (Büroklammer, Ablegen, Einfügen) und liest Standorte, er sendet keine. Bilder aus der Galerie, Kamera und Sprachnachrichten bleiben, wie sie sind.
+Verbindlich für Android und iOS, wo nichts anderes steht. Der Desktop sendet Dateien schon (Büroklammer, Ablegen, Einfügen) und liest Standorte und Kontakte, er sendet keine. Bilder aus der Galerie, Kamera und Sprachnachrichten bleiben, wie sie sind.
 
-Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste, mit den Knöpfen „Datei“ und „Standort“. Sie stehen gleich nach „Galerie“, vor den Platzhaltern „Umfrage“ und „Kontakt“ (auf iOS steht dazwischen noch „Kamera“), damit sie auch auf schmalen Geräten ohne Wischen zu sehen sind. Beim Bearbeiten einer Nachricht ist das Menü ausgeblendet (`docs/chat.md`).
+Einstieg ist auf Mobilgeräten das Anhang-Menü (＋) in der Eingabeleiste. Es hat der Reihe nach „Galerie“, „Datei“, „Standort“ und „Kontakt“, auf iOS steht vor „Kontakt“ noch „Kamera“. Jeder Knopf tut etwas: Einen Platzhalter mit „kommt bald“ gibt es nicht mehr. „Umfrage“ ist ausgeblendet, bis es Umfragen gibt. Beim Bearbeiten einer Nachricht ist das Menü ausgeblendet (`docs/chat.md`).
 
 ## Datei senden
 
@@ -64,6 +64,32 @@ Chatliste, Zitat und Benachrichtigung zeigen „📍 {Bezeichnung}“, bei leere
 
 Ausnahme ist die Benachrichtigung aus einem Push: Ihr Text kommt aus dem Push selbst, und der trägt nur die Bezeichnung, ohne „📍“ (bei Dateien ebenso nur den Dateinamen).
 
+## Kontakt
+
+Gesendet wird ein Eintrag aus dem Adressbuch des Geräts. Talk kennt dafür keine eigene Nachricht: Ein Kontakt ist eine vCard-Datei (`.vcf`), die der Server als Kontakt ausweist. So teilen ihn auch die offiziellen Apps, und Talk-Web zeigt ihn als Kontakt.
+
+### Senden
+| Punkt | Regel |
+|---|---|
+| Einstieg | „Kontakt“ im Anhang-Menü öffnet die Kontaktauswahl des Systems, für einen Kontakt. Abbrechen ändert nichts. |
+| Berechtigung | iOS braucht keine: Die Auswahl läuft im System, die App bekommt nur den gewählten Eintrag. Android fragt beim ersten Mal nach der Berechtigung „Kontakte“, bevor sich die Auswahl öffnet. Abgelehnt: „Wolkenfunk darf die Kontakte nicht lesen“ mit „Einstellungen öffnen“. Die App liest nur den gewählten Eintrag und nur in diesem Moment, nie das Adressbuch als Ganzes und nie im Hintergrund. |
+| Blatt | Titel „Kontakt senden“. Oben der Avatar mit den Initialen, der Name und in `muted` die Organisation. Darunter je Telefonnummer, E-Mail-Adresse und Anschrift eine Zeile mit Haken, dem Wert und in `muted` der Art („Mobil“, „Privat“, „Arbeit“, sonst nichts). Alle Zeilen sind angehakt, Antippen nimmt den Haken weg. Unten der Knopf „Kontakt senden“. |
+| Was mitgeht | Der Name, die Organisation und die angehakten Zeilen. Nie das Foto, Notizen, Geburtstag, Spitzname, Beziehungen, Webseiten oder andere Felder. |
+| Leer | Ohne angehakte Zeile ist der Knopf aus. Hat der Eintrag weder Nummer noch E-Mail-Adresse noch Anschrift, steht statt der Zeilen „Dieser Kontakt hat keine Nummer und keine Adresse“. |
+| Senden | `enqueueContact(token, card, replyTo, referenceId)`. Das Blatt und das Anhang-Menü schließen, die Antwortleiste auch (das Zitat geht mit), und der Chat steht am Ende. Eine Beschreibung gibt es nicht. |
+| Name | Der Name, wie ihn das Adressbuch zeigt. Fehlt er, nimmt der Kern Vor- und Nachname, sonst die Organisation, sonst die erste Nummer oder E-Mail-Adresse. |
+
+### Kontaktkachel (alle Plattformen)
+- Avatar-Kreis mit den Initialen wie bei einem Chat ohne Bild, daneben der Name (höchstens zwei Zeilen) und darunter in `muted` „Kontakt“. Die Uhrzeit steht darunter wie bei einer Datei. Ein Foto zeigt die Kachel nicht.
+- Sie erscheint für jede Datei mit `attachment.contactName`, gleich von wem und womit sie gesendet wurde, also auch für eine `.vcf`, die am Desktop als Datei angehängt wurde. Eine Beschreibung steht darunter wie bei Dateien.
+- **Ausstehend:** wie die Dateikachel. Der Ring steht statt des Avatars, die Statuszeile ist dieselbe, Antippen einer fehlgeschlagenen sendet erneut.
+- **Antippen** (Android, iOS) lädt die Datei wie unter „Empfangene Datei öffnen“ und reicht sie dem System: auf Android an die Kontakte-App („Öffnen mit“, Typ `text/x-vcard`), auf iOS an die Vorschau, die den Kontakt mit „Neuen Kontakt erstellen“ zeigt. Dort entscheidet der Benutzer über das Speichern. Die App selbst schreibt nichts ins Adressbuch.
+- **Desktop:** dieselbe Kachel. Ein Klick öffnet wie bei Dateien die Nextcloud-Seite im Browser.
+- Das Menü ist das einer Datei.
+
+### Vorschau
+Chatliste, Zitat und Benachrichtigung zeigen „👤 {Name}“, auf allen Plattformen. Mit Beschreibung steht sie wie bei Dateien dahinter. Die Benachrichtigung aus einem Push trägt nur den Dateinamen („Karla Brandt.vcf“), siehe oben.
+
 ## Kern-Vertrag
 
 - **Standort lesen:** `MessageView.location`, `ReplyPreview.location` und `MessagePreview.location` sind `GeoLocation { latitude, longitude, name }` (WGS 84, Grad) oder leer. `text` bleibt die Bezeichnung, damit nichts leer wird, wo der Standort nicht ausgewertet ist. Wer `location` hat, zeichnet die Blase und zeigt `text` nicht noch einmal.
@@ -72,7 +98,12 @@ Ausnahme ist die Benachrichtigung aus einem Push: Ihr Text kommt aus dem Push se
 - **Rechte:** `editable` ist bei Standorten immer falsch. Reagieren und Löschen gehen wie bei Text.
 - **Datei senden:** `enqueueFile(token, localPath, name, mime, width, height, caption, replyTo, referenceId)`. Der Kern verschiebt die Datei in den Postausgang, die App darf den Pfad danach nicht mehr verwenden. Über 10 MiB lädt er in Stücken und setzt nach einem Abbruch fort. Den MIME-Typ rät er nicht.
 - **Datei laden:** `fetchFile(path, size)` gibt den lokalen Pfad zurück, lädt nur einmal und setzt nach einem Abbruch fort. Einen Fortschritt meldet er nicht.
-- **Zum Testen:** `talk-cli send-location <token> <breite> <länge> -n <name>`. Der Demo-Server nimmt Standorte an, hat einen im Chat „Sommerfest“ und liefert mit `POST /demo/incoming` (`token`, `text`, `lat`, `lon`, optional `from`) einen fremden.
+- **Kontakt lesen:** `FileAttachment.contactName` ist der Name der Person, wenn die Datei eine vCard ist (`text/vcard`), sonst leer. Bei einer vCard ist er nie leer: Der Server liest ihn aus der Karte (`contact-name`), sonst nimmt der Kern den Dateinamen ohne `.vcf`. Das Feld steht überall, wo ein Anhang steht (`MessageView`, `ReplyPreview`, `MessagePreview`). Wer es hat, zeichnet die Kontaktkachel statt der Dateikachel.
+- **Kontakt senden:** `enqueueContact(token, card, replyTo, referenceId)` baut aus `ContactCard` eine vCard 3.0, legt sie als „{Name}.vcf“ in den Postausgang und gibt die ausstehende Blase zurück (`attachment.contactName` gesetzt). Danach läuft sie wie jede Datei. Der Kern sendet genau, was in `card` steht: Die Auswahl trifft die App.
+  - `ContactCard { name, givenName, familyName, organization, phones, emails, addresses }`. `phones` und `emails` sind `ContactValue { kind, value }`, `addresses` sind `ContactAddress { kind, street, city, region, postalCode, country }`.
+  - `kind` ist „mobile“, „home“, „work“ oder leer. Alles andere (Fax, Pager, eigene Bezeichnungen) geht als leer.
+  - Leere Werte lässt der Kern weg. Der Dateiname enthält keine Zeichen, die ein Dateisystem ablehnt.
+- **Zum Testen:** `talk-cli send-location <token> <breite> <länge> -n <name>`, für einen Kontakt `talk-cli send-file <token> <datei.vcf>`. Der Demo-Server nimmt Standorte und Kontakte an, hat im Chat „Sommerfest“ einen Standort und den Kontakt „Karla Brandt“ und liefert mit `POST /demo/incoming` (`token`, `text`, optional `from`) eine fremde Nachricht: mit `lat` und `lon` einen Standort, mit `contact=1` einen Kontakt, `text` ist dann der Name.
 
 ## Test
 
@@ -89,3 +120,14 @@ Standort-Tests laufen mit einer gesetzten Position (Emulator, Simulator), nicht 
 9. Fremder Standort: Blase mit Karte, Antippen öffnet die Karten-App. Chatliste, Zitat und Benachrichtigung zeigen „📍 …“.
 10. Standort ohne Netz: wartet und geht danach raus. Karte ohne Netz: Fläche mit Pin.
 11. Desktop: fremder Standort als Kachel in Hell und Dunkel, Klick öffnet den Browser, Seitenleiste zeigt „📍 …“.
+
+Kontakt-Tests laufen mit erfundenen Kontakten im Emulator und im Simulator. Auf einem echten Gerät wird kein Eintrag aus dem Adressbuch gewählt und die Kontaktauswahl nicht fotografiert.
+
+12. Anhang-Menü: „Galerie“, „Datei“, „Standort“, „Kontakt“ (iOS mit „Kamera“), keine „Umfrage“, ohne Wischen zu sehen.
+13. Kontakt mit zwei Nummern, E-Mail-Adresse und Anschrift wählen: Das Blatt zeigt alles angehakt. Eine Nummer abwählen und senden: Kachel mit Ring, danach fertig. Die Gegenseite sieht in Talk-Web einen Kontakt, die Datei enthält die abgewählte Nummer nicht.
+14. Kontakt ohne Nummer und Adresse: Hinweis, der Knopf ist aus. Alle Haken weg: Knopf aus.
+15. Android: Berechtigung ablehnen (Hinweis mit „Einstellungen öffnen“), dann erlauben.
+16. Kontakt bei offener Antwortleiste: geht mit Zitat raus, die Leiste schließt.
+17. Ohne Netz senden: „Wartet auf Netz …“, geht danach von selbst raus.
+18. Fremder Kontakt: Kachel mit Initialen und Name, in Hell und Dunkel. Antippen öffnet ihn im System. Chatliste, Zitat und Benachrichtigung zeigen „👤 …“.
+19. Desktop: fremder Kontakt als Kachel in Hell und Dunkel, Seitenleiste zeigt „👤 …“. Eine am Desktop angehängte `.vcf` erscheint als Kontakt.

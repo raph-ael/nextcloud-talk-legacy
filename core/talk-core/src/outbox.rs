@@ -29,6 +29,7 @@ use tokio::task::AbortHandle;
 use crate::client::{PutOutcome, remote_path};
 use crate::engine::{Engine, Event, MessageView, ReplyPreview};
 use crate::error::{Error, Result};
+use crate::contact::ContactCard;
 use crate::models::{FileAttachment, GeoLocation};
 
 /// How long an item is retried before it is marked failed (Signal: one day).
@@ -313,6 +314,26 @@ impl Engine {
     ) -> Result<PendingMessage> {
         self.enqueue_file_inner(
             token, local_path, name, mime, width, height, caption, reply_to, reference_id, false,
+        )
+    }
+
+    /// Queues a contact: the card goes out as a vCard file named after the person, which
+    /// is how Talk shares contacts. It then runs like any file.
+    pub fn enqueue_contact(
+        self: &Arc<Self>,
+        token: &str,
+        card: &ContactCard,
+        reply_to: Option<ReplyPreview>,
+        reference_id: &str,
+    ) -> Result<PendingMessage> {
+        let name = format!("{}.vcf", file_stem(&card.display_name()));
+        let dir = self.outbox.store.files_dir().unwrap_or_else(std::env::temp_dir);
+        let fresh = dir.join(format!("{reference_id}.new"));
+        std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::write(&fresh, card.vcard()))
+            .map_err(|e| Error::LocalFile(format!("{}: {e}", fresh.display())))?;
+        self.enqueue_file_inner(
+            token, &fresh.to_string_lossy(), &name, "text/vcard", 0, 0, "", reply_to, reference_id, false,
         )
     }
 
@@ -1001,6 +1022,10 @@ impl Engine {
                     preview_available: f.mime.starts_with("image/"),
                     link: String::new(),
                     voice_message: f.voice,
+                    contact_name: match crate::contact::is_vcard(&f.mime) {
+                        true => crate::contact::display_name("", &f.name),
+                        false => String::new(),
+                    },
                 }),
                 location: item.location.clone(),
                 // Not on the server yet: `discard` removes it.
@@ -1076,6 +1101,18 @@ fn unix_now() -> i64 {
 }
 
 /// File names must not contain path separators or start with a dot.
+/// A person's name as a file name: nothing a file system or a sync client rejects, and
+/// not longer than a name usually is.
+fn file_stem(name: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
+        .collect();
+    let stem: String = stem.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+    let stem = stem.trim().trim_matches('.').trim().to_string();
+    if stem.is_empty() { "Kontakt".into() } else { stem }
+}
+
 fn sanitize_name(name: &str) -> String {
     let n: String = name
         .chars()

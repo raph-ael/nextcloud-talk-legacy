@@ -1229,6 +1229,93 @@ async fn a_place_is_sent_and_read() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// docs/attachments.md „Kontakt“: a contact goes out as a vCard file named after the
+/// person and comes back with the name the server read from it; somebody else's contact
+/// carries it too, in the chat and in the preview of the list.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contact_is_sent_and_read() {
+    use talk_core::{ContactCard, ContactValue};
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let contact = |name: &'static str| {
+        let events = sink.0.lock().unwrap();
+        events.iter().find_map(|e| match e {
+            Event::MessagesAdded { messages, .. } => {
+                messages.iter().find(|m| m.attachment.as_ref().is_some_and(|a| a.contact_name == name)).cloned()
+            }
+            _ => None,
+        })
+    };
+
+    // A contact in the history: a file with the person's name, other files have none.
+    let page = engine.open_chat("sommerfest").await.unwrap();
+    let karla = page.messages.iter().find_map(|m| m.attachment.clone().filter(|a| !a.contact_name.is_empty()));
+    let karla = karla.expect("the contact of the fixtures");
+    assert_eq!((karla.contact_name.as_str(), karla.mimetype.as_str()), ("Karla Brandt", "text/vcard"));
+    let garden = engine.open_chat("garten").await.unwrap().messages.into_iter().find_map(|m| m.attachment).unwrap();
+    assert!(garden.is_image() && garden.contact_name.is_empty());
+    engine.close_chat("garten");
+
+    // Sending: pending at once under the person's name, then the server's message.
+    let card = ContactCard {
+        name: "Hanna Lindqvist".into(),
+        given_name: "Hanna".into(),
+        family_name: "Lindqvist".into(),
+        phones: vec![ContactValue { kind: "mobile".into(), value: "+49 30 23125 117".into() }],
+        ..Default::default()
+    };
+    let pending = engine.enqueue_contact("sommerfest", &card, None, "ref-contact").unwrap();
+    let a = pending.message.attachment.clone().unwrap();
+    assert!(pending.message.id < 0 && pending.message.text.is_empty());
+    assert_eq!((a.name.as_str(), a.contact_name.as_str(), a.mimetype.as_str()), ("Hanna Lindqvist.vcf", "Hanna Lindqvist", "text/vcard"));
+    until("the contact arrives", || contact("Hanna Lindqvist").is_some()).await;
+    let sent = contact("Hanna Lindqvist").unwrap();
+    assert!(sent.id > 0 && sent.is_own && sent.reference_id == "ref-contact" && sent.text.is_empty());
+    until("the outbox is empty", || engine.pending("sommerfest").is_empty()).await;
+    // The file on the server is the card.
+    let path = sent.attachment.unwrap().path;
+    let stored = reqwest::Client::new()
+        .get(format!("{server}/remote.php/dav/files/demo/{path}"))
+        .basic_auth("demo", Some("demo"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(stored, card.vcard());
+
+    // A name no file system takes: the file gets a clean one, the card keeps the name.
+    let odd = ContactCard { name: "A/B: \"C\"?".into(), ..Default::default() };
+    let pending = engine.enqueue_contact("sommerfest", &odd, None, "ref-odd").unwrap();
+    assert_eq!(pending.message.attachment.unwrap().name, "A B C.vcf");
+    until("the odd one arrives", || contact("A/B: \"C\"?").is_some()).await;
+
+    // Somebody else's contact: in the chat and in the list.
+    let r = reqwest::Client::new()
+        .post(format!("{server}/demo/incoming"))
+        .form(&[("token", "sommerfest"), ("text", "Ole Petersen"), ("contact", "1"), ("from", "paul")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+    until("their contact arrives", || contact("Ole Petersen").is_some()).await;
+    assert!(!contact("Ole Petersen").unwrap().is_own);
+    let preview = || engine.rooms().into_iter().find(|r| r.token == "sommerfest").and_then(|r| r.last_message);
+    until("the preview of the list", || {
+        preview().and_then(|m| m.attachment).is_some_and(|a| a.contact_name == "Ole Petersen")
+    })
+    .await;
+
+    engine.close_chat("sommerfest");
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// docs/attachments.md „Datei senden“: a file whose first attempt ran without network is
 /// uploaded afterwards, also when the folder already holds a file of the same name and
 /// size. That one is somebody else's and is never shared in its place.
