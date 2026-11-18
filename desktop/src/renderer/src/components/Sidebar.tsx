@@ -300,8 +300,9 @@ export function Sidebar() {
 }
 
 /**
- * A message found by the search (docs/search.md „Trefferzeile“): the chat with its picture,
- * or with the mark „in {Chat}“ the sender; below it the excerpt with the search words bold.
+ * A message found by the search (docs/search.md „Trefferzeile“): picture and name of the
+ * chat, or with the mark „in {Chat}“ of the sender; below it the excerpt with the search
+ * words bold.
  */
 const HitRow = memo(function HitRow({
   hit,
@@ -331,7 +332,11 @@ const HitRow = memo(function HitRow({
       data-hit={hit.messageId}
       data-hit-token={hit.token}
     >
-      {!inChat && <Avatar name={hit.roomName} token={hit.token} version={version} />}
+      {inChat ? (
+        <Avatar name={hit.actorName} userId={hit.actorType === 'users' ? hit.actorId : undefined} />
+      ) : (
+        <Avatar name={hit.roomName} token={hit.token} version={version} />
+      )}
       <div className="room-body">
         <div className="room-top">
           <span className="room-title">

@@ -233,6 +233,9 @@ export interface SearchHit {
   messageId: number
   timestamp: number
   roomName: string
+  /** The sender, as in `MessageView` (`users`, `guests`, `bots` …). */
+  actorType: string
+  actorId: string
   actorName: string
   isOwn: boolean
   /** The sender goes before the excerpt („Du: “ or „{Name}: “). */
