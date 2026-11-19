@@ -1547,9 +1547,9 @@ button.who-row:focus-visible {
   text-align: center;
   box-shadow: 0 0 0 2px var(--bg);
 }
-/* The „@“ button: 8 px above „Zum Ende springen“ (docs/mentions.md). */
+/* The „@“ button: 16 px above „Zum Ende springen“, clear of its badge (docs/mentions.md). */
 .jump.mention-jump {
-  bottom: 56px;
+  bottom: 64px;
   font-size: 17px;
   font-weight: 600;
   line-height: 1;
