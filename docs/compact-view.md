@@ -27,23 +27,24 @@ Eine zweite Ansicht für Linux, Windows und macOS. Sie zeigt eine einzeilige Cha
 | Punkt | Regel |
 |---|---|
 | Ausrichtung | Alle Nachrichten linksbündig, auch die eigenen. Keine Blasenfläche. Volle Breite mit 20 Rand. |
-| Kopf einer Folge | Links ein Avatar 36. Daneben in einer Zeile: Name (halbfett, `text`), Uhrzeit (12, `muted`), gegebenenfalls „bearbeitet“, bei eigenen Nachrichten die Häkchen. Darunter der Text. |
+| Kopf einer Folge | Links ein Avatar 36. Daneben in einer Zeile: Name (halbfett, `text`) und Uhrzeit (12, `muted`). Darunter der Text. |
 | Folge | Dieselbe Person innerhalb von 3 Minuten (`continues()`) bekommt keinen neuen Kopf. Beim Überfahren steht die Uhrzeit klein und `muted` in der Avatar-Spalte. |
 | Einzelchats | Auch dort Avatar und Name, damit beide Ansichten gleich lesbar sind. |
-| Überfahren | Die Zeile wird mit `--bg-hover` hinterlegt. Reaktion, Antworten und „Mehr“ liegen als kleine schwebende Leiste oben rechts in der Zeile (`--bg-elev`, Rand `border`, Schatten wie das Emoji-Popover). |
+| Überfahren | Die Zeile wird leicht hinterlegt (`fill` zu 60 %). Reaktion, Antworten und „Mehr“ liegen als kleine schwebende Leiste oben rechts in der Zeile (`bg-elev`, dünner Rand, leichter Schatten). |
 
 **Inhalte:**
 | Punkt | Regel |
 |---|---|
-| Zitat | Schmaler Balken links in `border`, darin Name und Text in `muted`. Ein Klick springt wie bisher. |
-| Bild | Unter dem Text, höchstens 360 breit, Ecken 8. Die Uhrzeit steht im Kopf, nicht auf dem Bild. |
-| Datei, Standort, Sprachnachricht | Als Karte mit Rand `border`, Ecken 10, höchstens 420 breit. |
+| Zitat | Schmaler Balken links (`text` zu 14 %), darin Name und Text in `muted`. Ein Klick springt wie bisher. |
+| Bild | Höchstens 360 breit, Ecken 8. Die Uhrzeit steht im Kopf, nicht auf dem Bild. |
+| Datei, Kontakt, Standort, Sprachnachricht | Als Karte mit dünnem Rand (`text` zu 14 %), Ecken 10, höchstens 420 breit. |
 | Reaktionen | Unter der Nachricht, linksbündig, ohne Überlappung. Das Popover öffnet nach rechts. |
-| Status | „Wird gesendet …“ und „Fehlgeschlagen“ stehen im Kopf statt der Uhrzeit. In einer Folge stehen sie in `muted` unter dem Text. |
+| Am Ende des Textes | Klein in `muted`: „bearbeitet“, „Wird gesendet …“ bzw. „Fehlgeschlagen“ (in `danger`, ein Klick sendet neu) und bei der letzten eigenen Nachricht einer Folge die Häkchen. Bei einem Bild ohne Text steht das unter dem Bild. |
 | Unverändert | Systemmeldungen, Datumstrenner, Ungelesen-Linie, Datums-Pille, Erwähnungen (`docs/mentions.md`), Suchmarken, Aufleuchten nach einem Sprung, Kontextmenü, Doppelklick zum Antworten, Eingabefeld |
 
 **Technische Haken, die bleiben müssen:**
-- Das Element mit dem Text hat weiter die Klasse `bubble` und `data-id`. Daran hängen der Sprung, das Aufleuchten, „Erwähnung gesehen“ und der Anker des Reaktions-Popovers.
+- Das Element mit dem Text hat weiter die Klasse `bubble` und `data-id`. Daran hängen der Sprung, „Erwähnung gesehen“ und der Anker des Reaktions-Popovers. Aufleuchten lässt in der kompakten Ansicht die ganze Zeile.
+- Eigene Nachrichten tragen hier die Klasse `other`. So greift keine Regel für eigene Blasen (Farbe, rechts).
 - Die Zeile hat weiter `data-ts`. Daran hängen die Datums-Pille und das Halten der Scrollposition.
 - Beim Umschalten bleiben der Entwurf und ungefähr die Scrollposition erhalten.
 

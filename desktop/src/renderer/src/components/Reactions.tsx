@@ -3,6 +3,7 @@ import type { ReactionView } from '@shared/core'
 import { accountId, useStore, type UiMessage } from '../store'
 import { toast } from '../call/store'
 import { Avatar } from './Avatar'
+import { isCompact } from '../appearance'
 
 const EmojiPicker = lazy(() => import('./EmojiPicker').then((m) => ({ default: m.EmojiPicker })))
 
@@ -87,7 +88,8 @@ export function ReactionPopover({
     if (!el) return
     const place = () => {
       const r = el.getBoundingClientRect()
-      let left = msg.isOwn ? anchor.right - r.width : anchor.left
+      // Compact view: every message stands on the left, so the popover opens to the right.
+      let left = msg.isOwn && !isCompact() ? anchor.right - r.width : anchor.left
       left = Math.max(8, Math.min(left, window.innerWidth - r.width - 8))
       let top = anchor.top - r.height - 6
       if (top < 8) top = Math.min(anchor.bottom + 6, window.innerHeight - r.height - 8)

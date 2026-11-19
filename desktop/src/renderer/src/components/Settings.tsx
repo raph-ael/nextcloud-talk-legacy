@@ -3,11 +3,11 @@
 // list and an open chat stay mounted underneath (draft, scroll position); a call goes on.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AppInfo, Theme, UpdateCheck } from '@shared/core'
+import type { AppInfo, Layout, Theme, UpdateCheck } from '@shared/core'
 import { closeSettings, MAX_ACCOUNTS, setSettingsPage, startAddAccount, useStore, type SettingsPage } from '../store'
 import { toast } from '../call/store'
 import { ACCENTS } from '../accents'
-import { setAppearance, useAppearance } from '../appearance'
+import { setAppearance, setLayout, setSplitChats, useAppearance } from '../appearance'
 import { Avatar } from './Avatar'
 import { Categories } from './Categories'
 import { ConfirmDialog } from './Modal'
@@ -28,6 +28,30 @@ const THEMES: { theme: Theme; label: string }[] = [
   { theme: 'light', label: 'Hell' },
   { theme: 'dark', label: 'Dunkel' },
 ]
+
+/** „Ansicht“ (docs/compact-view.md). */
+const LAYOUTS: { layout: Layout; label: string; sub?: string }[] = [
+  { layout: 'bubbles', label: 'Blasen' },
+  { layout: 'compact', label: 'Kompakt', sub: 'Einzeilige Chatliste, Nachrichten untereinander' },
+]
+
+/** The preview of „Darstellung“ in the compact view: two runs with their heads. */
+function CompactPreviewRow({ name, text, time }: { name: string; text: string; time: string }) {
+  return (
+    <div className="msg other first last">
+      <div className="msg-avatar">
+        <Avatar name={name} size={36} />
+      </div>
+      <div className="msg-col">
+        <div className="msg-head">
+          <span className="msg-name">{name}</span>
+          <span className="msg-time">{time}</span>
+        </div>
+        <div className="bubble">{text}</div>
+      </div>
+    </div>
+  )
+}
 
 export function Settings() {
   const page = useStore((s) => s.settings) ?? 'appearance'
@@ -259,22 +283,31 @@ function GeneralPage() {
   )
 }
 
-/** „Darstellung“: preview, design and accent; every change applies at once. */
+/** „Darstellung“: preview, design, accent, view and chat list; every change applies at once. */
 function AppearancePage() {
-  const { theme, accent, dark } = useAppearance()
+  const { theme, accent, dark, layout, splitChats } = useAppearance()
   return (
     <>
       <div className="appearance-preview" aria-hidden>
-        <div className="msg other first last">
-          <div className="msg-col">
-            <div className="bubble">Wie gefällt dir die neue Farbe?</div>
-          </div>
-        </div>
-        <div className="msg own first last">
-          <div className="msg-col">
-            <div className="bubble">Sieht gut aus!</div>
-          </div>
-        </div>
+        {layout === 'compact' ? (
+          <>
+            <CompactPreviewRow name="Lena" time="14:02" text="Wie gefällt dir die neue Farbe?" />
+            <CompactPreviewRow name="Du" time="14:03" text="Sieht gut aus!" />
+          </>
+        ) : (
+          <>
+            <div className="msg other first last">
+              <div className="msg-col">
+                <div className="bubble">Wie gefällt dir die neue Farbe?</div>
+              </div>
+            </div>
+            <div className="msg own first last">
+              <div className="msg-col">
+                <div className="bubble">Sieht gut aus!</div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
       <section className="settings-section">
         <h3 className="settings-heading" id="settings-theme">
@@ -321,6 +354,32 @@ function AppearancePage() {
             )
           })}
         </div>
+      </section>
+      <section className="settings-section">
+        <h3 className="settings-heading" id="settings-layout">
+          Ansicht
+        </h3>
+        <div className="choice-list settings-choices" role="radiogroup" aria-labelledby="settings-layout">
+          {LAYOUTS.map((l) => (
+            <button key={l.layout} role="radio" aria-checked={layout === l.layout} className="choice" onClick={() => setLayout(l.layout)}>
+              <span className={`radio${layout === l.layout ? ' on' : ''}`} aria-hidden />
+              <span className="settings-text">
+                <span>{l.label}</span>
+                {l.sub && <span className="person-sub wrap">{l.sub}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="settings-section">
+        <h3 className="settings-heading">Chatliste</h3>
+        <button className="settings-row" role="switch" aria-checked={splitChats} onClick={() => setSplitChats(!splitChats)}>
+          <span className="settings-text">
+            <span>Gruppen und Direktchats trennen</span>
+            <span className="person-sub wrap">Eigene Abschnitte statt „Chats“</span>
+          </span>
+          <span className={`switch${splitChats ? ' on' : ''}`} aria-hidden />
+        </button>
       </section>
     </>
   )

@@ -1174,8 +1174,8 @@ a.file-row:hover .file-name {
   cursor: pointer;
 }
 /* A mention (docs/mentions.md): the text colour at 12 % behind the name. The 2 px at the
-   sides take no room, so the text stands where it stood without the mark. */
-.mention {
+   sides take no room, so the text stands where it stood without the mark. Not the „@“ badge in the chat list. */
+.mention:not(.badge) {
   padding: 0 2px;
   margin: 0 -2px;
   border-radius: 4px;
@@ -3993,4 +3993,221 @@ a.settings-row:focus-visible {
 .about-license {
   margin-top: 20px;
   font-size: 13px;
+}
+
+/* ---------- compact view (docs/compact-view.md) ----------
+   One-line chat list; in the chat every message on the left with a head per run (avatar,
+   name, time). Own messages render as `.other` there, so no own colours apply. Only tokens. */
+:root[data-layout='compact'] {
+  --compact-line: color-mix(in srgb, var(--text) 14%, transparent);
+  --compact-hover: color-mix(in srgb, var(--fill) 60%, transparent);
+}
+
+/* The chat list: 34 px rows, name only; time and preview stay for screen readers. */
+[data-layout='compact'] .room:not(.hit) {
+  height: 34px;
+  gap: 8px;
+  margin: 1px 0;
+  padding: 0 10px 0 12px;
+  border-radius: 6px;
+}
+[data-layout='compact'] .room:not(.hit) .room-body {
+  flex-direction: row;
+  align-items: center;
+}
+[data-layout='compact'] .room:not(.hit) .room-top {
+  flex: 1;
+  min-width: 0;
+}
+[data-layout='compact'] .room:not(.hit) .room-bottom {
+  align-items: center;
+}
+[data-layout='compact'] .room:not(.hit) .room-time,
+[data-layout='compact'] .room:not(.hit) .room-preview {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+[data-layout='compact'] .room:not(.hit) .room-name {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+[data-layout='compact'] .room:not(.hit).unread .room-name,
+[data-layout='compact'] .room:not(.hit).active .room-name {
+  font-weight: 600;
+  color: var(--text);
+}
+[data-layout='compact'] .room:not(.hit) .room-indicators {
+  margin: 0 0 0 8px;
+}
+
+/* The chat: rows across the full width, hover behind the whole row. */
+[data-layout='compact'] .msg {
+  position: relative;
+  align-items: flex-start;
+  margin: 0 -16px;
+  padding: 2px 20px 2px 20px;
+}
+[data-layout='compact'] .msg.first {
+  padding-top: 8px;
+}
+[data-layout='compact'] .msg:hover {
+  background: var(--compact-hover);
+}
+[data-layout='compact'] .msg-avatar,
+[data-layout='compact'] .msg.reacted .msg-avatar {
+  width: 36px;
+  min-width: 36px;
+  margin: 2px 10px 0 0;
+}
+[data-layout='compact'] .msg-hover-time {
+  display: block;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0;
+}
+[data-layout='compact'] .msg:hover .msg-hover-time {
+  opacity: 1;
+}
+[data-layout='compact'] .msg-col,
+[data-layout='compact'] .msg:not(.first) .msg-col,
+[data-layout='compact'] .msg:not(.last) .msg-col,
+[data-layout='compact'] .msg.reacted .msg-col {
+  flex: 1;
+  max-width: none;
+  margin: 0;
+  align-items: stretch;
+}
+[data-layout='compact'] .msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+[data-layout='compact'] .msg-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: -0.08px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-layout='compact'] .msg-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+[data-layout='compact'] .bubble,
+[data-layout='compact'] .msg.other .bubble {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+}
+[data-layout='compact'] .bubble.jumbo {
+  font-size: 32px;
+}
+[data-layout='compact'] .meta,
+[data-layout='compact'] .bubble.jumbo .meta {
+  float: none;
+  display: inline-flex;
+  vertical-align: baseline;
+  margin: 0 0 0 8px;
+}
+[data-layout='compact'] .meta:empty {
+  display: none;
+}
+
+/* Photo below the text, at most 360 wide; the time is in the head. */
+[data-layout='compact'] .bubble.media {
+  width: auto;
+  overflow: visible;
+}
+[data-layout='compact'] .bubble.media > .quote {
+  margin: 2px 0 4px;
+}
+[data-layout='compact'] .bubble.media > .text {
+  padding: 4px 0 0;
+}
+[data-layout='compact'] .chat-image {
+  width: min(360px, 100%);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Quote: a thin bar on the left, name and text muted. */
+[data-layout='compact'] .quote,
+[data-layout='compact'] .msg.other .quote {
+  border-left: 3px solid var(--compact-line);
+  border-radius: 0;
+  padding: 0 0 0 10px;
+  margin: 2px 0 4px;
+  background: none;
+  color: var(--text-muted);
+}
+
+/* File, location, contact and voice message as a card. */
+[data-layout='compact'] .file-row,
+[data-layout='compact'] .voice-msg {
+  width: fit-content;
+  max-width: min(420px, 100%);
+  margin: 4px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--compact-line);
+  border-radius: 10px;
+}
+[data-layout='compact'] .voice-msg {
+  width: 240px;
+}
+[data-layout='compact'] .voice-msg .voice-play {
+  background: var(--fill);
+}
+
+/* Reactions below the message, on the left, no overlap. */
+[data-layout='compact'] .reactions,
+[data-layout='compact'] .msg.other .reactions {
+  align-self: flex-start;
+  margin: 4px 0 2px;
+  padding: 0;
+}
+
+/* Hover actions: a small floating bar at the top right of the row. */
+[data-layout='compact'] .msg-actions {
+  position: absolute;
+  top: -12px;
+  right: 20px;
+  z-index: 2;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--compact-line);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+  pointer-events: none;
+}
+[data-layout='compact'] .msg:hover .msg-actions,
+[data-layout='compact'] .msg-actions:focus-within {
+  pointer-events: auto;
+}
+[data-layout='compact'] .msg.first .msg-actions {
+  top: -6px;
+}
+[data-layout='compact'] .msg-action {
+  border-radius: 6px;
+}
+[data-layout='compact'] .appearance-preview .msg {
+  margin: 0;
+  padding: 4px 0;
+}
+[data-layout='compact'] .appearance-preview .msg:hover {
+  background: none;
 }

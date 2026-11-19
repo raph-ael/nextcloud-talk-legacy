@@ -25,6 +25,7 @@ import { colorFor, dayLabel, fullTime, isJumboEmoji, locationLink, messageTime, 
 import { Markdown, marked, plain, type Marks } from './Markdown'
 import type { BubbleMentions } from './Mentions'
 import { Avatar } from './Avatar'
+import { isCompact, useAppearance } from '../appearance'
 import { ChatImage, FileRow, isImageAttachment, LocationRow } from './ChatMedia'
 import { Composer } from './Composer'
 import { VoiceMessage } from './Voice'
@@ -90,8 +91,10 @@ const NEWER_AHEAD = 400
 /** Where a message stands that the chat jumps to: in the upper third (docs/search.md). */
 const JUMP_AT = 0.2
 
-/** The bubble lights up for about 1.5 s and fades (docs/search.md „Aufleuchten“). */
-function flash(bubble: HTMLElement): void {
+/** The bubble lights up for about 1.5 s and fades (docs/search.md „Aufleuchten“); in the
+ *  compact view the whole row (docs/compact-view.md). */
+function flash(el: HTMLElement): void {
+  const bubble = (isCompact() && el.closest<HTMLElement>('.msg')) || el
   const color = getComputedStyle(bubble).getPropertyValue('--search-mark').trim() || 'rgb(255 214 10 / 0.45)'
   const on = `inset 0 0 0 999px ${color}`
   for (const a of bubble.getAnimations()) if (a.id === 'flash') a.cancel()
@@ -208,6 +211,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const viewHeight = useRef(0)
 
   const isGroup = room.roomType !== 1 && room.roomType !== 6
+  const compact = useAppearance().layout === 'compact'
   // A window into the history (docs/search.md): newer messages follow below the list.
   const inWindow = !!chat?.hasNewer
   const windowRef = useRef(inWindow)
@@ -667,6 +671,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 prev={messages[i - 1]}
                 next={messages[i + 1]}
                 isGroup={isGroup}
+                compact={compact}
                 unread={m.id === lineAt ? unreadCount : 0}
                 read={m.isOwn && !m.status && m.id <= lastCommonRead}
                 canReply={!room.readOnly}
@@ -772,6 +777,8 @@ interface RowProps {
   prev?: UiMessage
   next?: UiMessage
   isGroup: boolean
+  /** The compact view (docs/compact-view.md): all on the left, a head per run. */
+  compact: boolean
   /** Above this message: the unread line with this count (0: none). */
   unread: number
   read: boolean
@@ -806,6 +813,7 @@ const MessageRow = memo(function MessageRow({
   prev,
   next,
   isGroup,
+  compact,
   unread,
   read,
   canReply,
@@ -858,12 +866,15 @@ const MessageRow = memo(function MessageRow({
   const location = deleted ? null : msg.location
   const jumbo = msg.kind === 'text' && !msg.replyTo && !attachment && !location && isJumboEmoji(msg.text)
   const reactions = Object.entries(msg.reactions)
-  const showAuthor = isGroup && !own && first
+  const showAuthor = isGroup && !own && first && !compact
   const hasText = !deleted && !location && msg.text.trim() !== ''
-  const showMeta = last || !!msg.status
+  // Compact: the time is in the head; the line keeps „bearbeitet“, the status and the ticks.
+  const showMeta = compact ? !!msg.status || msg.edited || (own && last) : last || !!msg.status
   // Time on the photo when nothing follows it inside the bubble.
-  const metaOnImage = !!image && !hasText
-  const cls = ['msg', own ? 'own' : 'other', first ? 'first' : '', last ? 'last' : '', reactions.length ? 'reacted' : '']
+  const metaOnImage = !!image && !hasText && !compact
+  // Compact: own messages look like all others (no own colours, all on the left).
+  const side = own && !compact ? 'own' : 'other'
+  const cls = ['msg', side, first ? 'first' : '', last ? 'last' : '', reactions.length ? 'reacted' : '']
     .filter(Boolean)
     .join(' ')
   const bubbleCls = [
@@ -878,13 +889,20 @@ const MessageRow = memo(function MessageRow({
     .filter(Boolean)
     .join(' ')
 
-  const meta = showMeta && (
-    <span className={`meta${msg.status === 'failed' ? ' error' : ''}${metaOnImage ? ' on-image' : ''}`}>
-      {msg.edited && 'bearbeitet · '}
-      {statusText(msg) ?? messageTime(msg.timestamp)}
-      {own && !msg.status && <Ticks read={read} />}
-    </span>
-  )
+  const meta =
+    showMeta &&
+    (compact ? (
+      <span className={`meta${msg.status === 'failed' ? ' error' : ''}`}>
+        {[msg.edited && 'bearbeitet', statusText(msg)].filter(Boolean).join(' · ')}
+        {own && last && !msg.status && <Ticks read={read} />}
+      </span>
+    ) : (
+      <span className={`meta${msg.status === 'failed' ? ' error' : ''}${metaOnImage ? ' on-image' : ''}`}>
+        {msg.edited && 'bearbeitet · '}
+        {statusText(msg) ?? messageTime(msg.timestamp)}
+        {own && !msg.status && <Ticks read={read} />}
+      </span>
+    ))
 
   // Signal: a voice message shows its time in the player's footer row.
   const metaInVoice = !!attachment && !image && isAudioAttachment(msg) && !hasText && !deleted
@@ -898,10 +916,33 @@ const MessageRow = memo(function MessageRow({
       {line}
       {day}
       <div className={cls} data-ts={msg.timestamp}>
-        {isGroup && !own && (
-          <div className="msg-avatar">{last && <Avatar name={msg.author} userId={msg.actorType === 'users' ? msg.actorId : undefined} size={28} />}</div>
+        {compact ? (
+          <div className="msg-avatar">
+            {first ? (
+              <Avatar name={msg.author} userId={msg.actorType === 'users' ? msg.actorId : undefined} size={36} />
+            ) : (
+              <span className="msg-hover-time" aria-hidden>
+                {messageTime(msg.timestamp)}
+              </span>
+            )}
+          </div>
+        ) : (
+          isGroup &&
+          !own && (
+            <div className="msg-avatar">
+              {last && <Avatar name={msg.author} userId={msg.actorType === 'users' ? msg.actorId : undefined} size={28} />}
+            </div>
+          )
         )}
         <div className="msg-col">
+          {compact && first && (
+            <div className="msg-head">
+              <span className="msg-name">{msg.author}</span>
+              <span className="msg-time" title={fullTime(msg.timestamp)}>
+                {messageTime(msg.timestamp)}
+              </span>
+            </div>
+          )}
           <div
             className={bubbleCls}
             data-id={msg.id}
@@ -941,6 +982,7 @@ const MessageRow = memo(function MessageRow({
                 {metaOnImage && meta}
               </ChatImage>
             )}
+            {compact && image && !hasText && meta && <div className="text">{meta}</div>}
             {(!image || hasText) && (
               <div className="text">
                 {attachment &&

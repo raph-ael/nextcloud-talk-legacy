@@ -220,7 +220,7 @@ export interface SectionView {
   /** For `toggleSection`; row keys are section id + token (a chat may be in several). */
   id: string
   /** `archived` only in a search: archived chats whose name matches. No category behind it. */
-  kind: 'favorites' | 'custom' | 'other' | 'archived'
+  kind: 'favorites' | 'custom' | 'other' | 'groups' | 'direct' | 'archived'
   /** Empty when it is the only section: then no header. */
   title: string
   collapsed: boolean
@@ -579,7 +579,7 @@ export type AppEvent =
   /** The window entered or left fullscreen (our button, green button, F11, window menu). */
   | { type: 'windowFullscreen'; on: boolean }
   /** „Darstellung“ changed (also from another place, e.g. a second window in future). */
-  | { type: 'appearanceChanged'; theme: Theme; accent: string }
+  | ({ type: 'appearanceChanged' } & Appearance)
   /** The tray check mark „Beim Schließen im Hintergrund weiterlaufen“ changed. */
   | { type: 'closeToTrayChanged'; on: boolean }
   /** „Einstellungen …“ in the macOS app menu. */
@@ -592,7 +592,14 @@ export interface Appearance {
   theme: Theme
   /** Accent id (desktop/src/renderer/src/accents.ts). */
   accent: string
+  /** „Ansicht“ (docs/compact-view.md). */
+  layout: Layout
+  /** „Gruppen und Direktchats trennen“ (docs/categories.md). */
+  splitChats: boolean
 }
+
+/** „Blasen“ or „Kompakt“ (docs/compact-view.md). */
+export type Layout = 'bubbles' | 'compact'
 
 /** „Über Wolkenfunk“. */
 export interface AppInfo {
@@ -740,7 +747,8 @@ export interface TalkApi {
 
   // --- categories (docs/categories.md); changes resolve to a German error text or null ---
   /** The chat list in sections; again on `roomsChanged`, a new search text or another open chat. */
-  roomSections(query: string, activeToken: string | null): Promise<SectionView[]>
+  /** `split`: „Gruppen“ and „Direktchats“ instead of „Chats“ (the device setting). */
+  roomSections(query: string, activeToken: string | null, split: boolean): Promise<SectionView[]>
   /** Opens or closes a section (saved on the server; the list follows via `roomsChanged`). */
   toggleSection(id: string): Promise<string | null>
   /** The server keeps categories: offer "Kategorien verwalten". */
@@ -790,6 +798,9 @@ export interface TalkApi {
   appearance(): Promise<Appearance>
   /** Applies at once everywhere; the main process answers with `appearanceChanged`. */
   setAppearance(theme: Theme, accent: string): Promise<void>
+  /** Both answer with `appearanceChanged` too. */
+  setLayout(layout: Layout): Promise<void>
+  setSplitChats(on: boolean): Promise<void>
   closeToTray(): Promise<boolean>
   setCloseToTray(on: boolean): Promise<void>
   /** „Beim Anmelden starten“ (docs/notifications.md); null where there is no such switch (Flatpak). */

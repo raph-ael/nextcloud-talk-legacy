@@ -44,6 +44,8 @@ import {
   type VoiceDraft,
   type RecordingStatus,
   type Theme,
+  type Appearance,
+  type Layout,
 } from '@shared/core'
 import { ACCENTS, DEFAULT_ACCENT } from '../renderer/src/accents'
 
@@ -85,7 +87,7 @@ interface NativeSession {
   existingDirect(userId: string): string | null
   deleteMessage(token: string, messageId: number): Promise<string | null>
   reactions(token: string, messageId: number): Promise<unknown>
-  roomSections(query: string, activeToken: string | null): unknown
+  roomSections(query: string, activeToken: string | null, split?: boolean): unknown
   toggleSection(id: string): Promise<string | null>
   categoriesSupported(): boolean
   categories(): unknown
@@ -207,17 +209,31 @@ interface Settings {
   accent: string
   /** „Beim Anmelden starten“ (docs/notifications.md). */
   openAtLogin: boolean
+  /** „Ansicht“: bubbles or the compact view (docs/compact-view.md). */
+  layout: Layout
+  /** „Gruppen und Direktchats trennen“ (docs/categories.md). */
+  splitChats: boolean
 }
 
 const THEMES: readonly Theme[] = ['system', 'light', 'dark']
+const LAYOUTS: readonly Layout[] = ['bubbles', 'compact']
 
 function loadSettings(): Settings {
-  const defaults: Settings = { closeToTray: true, theme: 'system', accent: DEFAULT_ACCENT, openAtLogin: false }
+  const defaults: Settings = {
+    closeToTray: true,
+    theme: 'system',
+    accent: DEFAULT_ACCENT,
+    openAtLogin: false,
+    layout: 'bubbles',
+    splitChats: true,
+  }
   try {
     const stored = { ...defaults, ...(JSON.parse(readFileSync(settingsFile, 'utf8')) as Partial<Settings>) }
     if (!THEMES.includes(stored.theme)) stored.theme = 'system'
     if (!ACCENTS.some((a) => a.id === stored.accent)) stored.accent = DEFAULT_ACCENT
     stored.openAtLogin = stored.openAtLogin === true
+    if (!LAYOUTS.includes(stored.layout)) stored.layout = 'bubbles'
+    stored.splitChats = stored.splitChats !== false
     return stored
   } catch {
     return defaults
@@ -1304,13 +1320,32 @@ function windowBackground(): string {
   return nativeTheme.shouldUseDarkColors ? '#121212' : '#ffffff'
 }
 
+function appearance(): Appearance {
+  return { theme: settings.theme, accent: settings.accent, layout: settings.layout, splitChats: settings.splitChats }
+}
+
+function appearanceChanged(): void {
+  saveSettings()
+  send({ type: 'appearanceChanged', ...appearance() } satisfies AppEvent)
+}
+
 function setAppearance(theme: Theme, accent: string): void {
   if (!THEMES.includes(theme) || !ACCENTS.some((a) => a.id === accent)) return
   settings.theme = theme
   settings.accent = accent
-  saveSettings()
   applyTheme()
-  send({ type: 'appearanceChanged', theme, accent } satisfies AppEvent)
+  appearanceChanged()
+}
+
+function setLayout(layout: Layout): void {
+  if (!LAYOUTS.includes(layout)) return
+  settings.layout = layout
+  appearanceChanged()
+}
+
+function setSplitChats(on: boolean): void {
+  settings.splitChats = on === true
+  appearanceChanged()
 }
 
 /** Opens the settings in the window (⌘, in the macOS app menu). */
@@ -1562,7 +1597,9 @@ function registerIpc(): void {
 
   // Groups (docs/groups.md) and categories (docs/categories.md): changes resolve to a
   // German error text or null.
-  handle('talk:roomSections', (r, query: string, activeToken: string | null) => (r ? r.session.roomSections(query, activeToken) : []))
+  handle('talk:roomSections', (r, query: string, activeToken: string | null, split: boolean) =>
+    r ? r.session.roomSections(query, activeToken, split === true) : [],
+  )
   handle('talk:toggleSection', (r, id: string) => (r ? r.session.toggleSection(id) : NOT_SIGNED_IN))
   handle('talk:categoriesSupported', (r) => r?.session.categoriesSupported() ?? false)
   handle('talk:categories', (r) => (r ? r.session.categories() : []))
@@ -1612,8 +1649,10 @@ function registerIpc(): void {
   handle('talk:markRoomRead', (r, token: string) => (r ? r.session.markRoomRead(token) : NOT_SIGNED_IN))
 
   // Settings (docs/settings.md): device settings in settings.json.
-  ipcMain.handle('talk:appearance', () => ({ theme: settings.theme, accent: settings.accent }))
+  ipcMain.handle('talk:appearance', () => appearance())
   ipcMain.handle('talk:setAppearance', (_e, theme: Theme, accent: string) => setAppearance(theme, accent))
+  ipcMain.handle('talk:setLayout', (_e, layout: Layout) => setLayout(layout))
+  ipcMain.handle('talk:setSplitChats', (_e, on: boolean) => setSplitChats(on))
   ipcMain.handle('talk:closeToTray', () => settings.closeToTray)
   ipcMain.handle('talk:setCloseToTray', (_e, on: boolean) => setCloseToTray(!!on))
   ipcMain.handle('talk:openAtLogin', () => {

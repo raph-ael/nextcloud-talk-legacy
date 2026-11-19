@@ -3,6 +3,7 @@
 
 import { useSyncExternalStore } from 'react'
 import { toast } from './call/store'
+import { onAppearance, splitChats } from './appearance'
 import type {
   AccountInfo,
   AccountRow,
@@ -463,6 +464,14 @@ function roomsChanged(rooms: RoomView[]): void {
 
 let sectionsSeq = 0
 
+// „Gruppen und Direktchats trennen“ switched (here or from the main process): new sections.
+let splitShown = splitChats()
+onAppearance(() => {
+  if (splitChats() === splitShown) return
+  splitShown = splitChats()
+  void refreshSections()
+})
+
 /**
  * Asks the core for the sections again: on `roomsChanged`, a new search text and when
  * another chat opens. Only the newest answer counts.
@@ -471,7 +480,8 @@ export async function refreshSections(): Promise<void> {
   const seq = ++sectionsSeq
   // With the mark „in {Chat}“ the text searches that chat, not the names: the whole list
   // stays behind the hits (Alt+↑/↓).
-  const sections = await window.talk.roomSections(state.scope ? '' : state.query, state.activeToken).catch(() => null)
+  const query = state.scope ? '' : state.query
+  const sections = await window.talk.roomSections(query, state.activeToken, splitChats()).catch(() => null)
   if (sections && seq === sectionsSeq && state.session === 'ready') set({ sections })
 }
 

@@ -23,6 +23,7 @@ import {
 import { listTime } from '../format'
 import { toast } from '../call/store'
 import { Avatar } from './Avatar'
+import { useAppearance } from '../appearance'
 import { RecordingBanners } from '../call/RecordingBanners'
 import { NewMessage } from './NewMessage'
 import { OwnAvatar } from './AccountMenu'
@@ -407,6 +408,8 @@ const RoomItem = memo(function RoomItem({
   now: number
   onMenu: (token: string, x: number, y: number) => void
 }) {
+  // Compact view (docs/compact-view.md): one line; time and preview stay for screen readers.
+  const compact = useAppearance().layout === 'compact'
   const unread = room.unreadMessages > 0
   const muted = room.notificationLevel === 3
   // „Nur Erwähnungen“ and „Aus“: the number in grey, unless we were mentioned.
@@ -443,7 +446,7 @@ const RoomItem = memo(function RoomItem({
         }
       }}
     >
-      <Avatar name={room.name} token={room.token} version={room.avatarVersion} />
+      <Avatar name={room.name} token={room.token} version={room.avatarVersion} size={compact ? 22 : undefined} />
       <div className="room-body">
         <div className="room-top">
           <span className="room-title">
