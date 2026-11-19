@@ -6,7 +6,6 @@ import android.window.OnBackInvokedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -347,16 +346,17 @@ fun CountBadge(count: Int, modifier: Modifier = Modifier) {
 
 /**
  * Round button „@“ above „Zum Ende springen“ while mentions of the user are unseen; from two
- * on with their number. [lifted]: the other button is there, this one stands 8 above it.
+ * on with their number. It stands 16 above the other button, whose badge reaches over its
+ * edge, and keeps that place while the other one is away.
  */
 @Composable
-fun MentionJump(count: Int, lifted: Boolean, onClick: () -> Unit, modifier: Modifier) {
+fun MentionJump(count: Int, onClick: () -> Unit, modifier: Modifier) {
     val colors = LocalTalkColors.current
-    val bottom by animateDpAsState(if (lifted) 62.dp else 14.dp, tween(150), label = "mention")
     val label = if (count > 1) "Zur Erwähnung springen, $count Erwähnungen" else "Zur Erwähnung springen"
     AnimatedVisibility(
         visible = count > 0,
-        modifier = modifier.padding(end = 14.dp, bottom = bottom),
+        // 14 below „Zum Ende springen“, its 40, and 16 between the two.
+        modifier = modifier.padding(end = 14.dp, bottom = 70.dp),
         enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.6f),
         exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.6f),
     ) {

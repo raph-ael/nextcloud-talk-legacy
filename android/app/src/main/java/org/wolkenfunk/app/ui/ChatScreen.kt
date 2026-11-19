@@ -528,7 +528,6 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                 // Above it the way to the oldest unseen mention; not in the search.
                 MentionJump(
                     count = if (searchText == null) mentionIds.size else 0,
-                    lifted = toEnd,
                     onClick = { mentionIds.firstOrNull()?.let { sessions.jumpTo(room.token, it) } },
                     Modifier.align(Alignment.BottomEnd),
                 )
