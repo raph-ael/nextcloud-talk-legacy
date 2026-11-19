@@ -25,6 +25,8 @@
   --badge-quiet: #6b6b6b;
   /* Search words in a bubble and the flash of a message jumped to (docs/search.md). */
   --search-mark: rgb(255 214 10 / 0.45);
+  /* A mention of the user in a foreign bubble: this much of the accent (docs/mentions.md). */
+  --mention-self: 22%;
   --radius: 18px;
   --radius-tight: 4px;
   color-scheme: light dark;
@@ -50,6 +52,7 @@
     --danger: #ff6b61;
     --badge-quiet: #5e5e5e;
     --search-mark: rgb(255 214 10 / 0.35);
+    --mention-self: 32%;
   }
 }
 
@@ -1170,6 +1173,27 @@ a.file-row:hover .file-name {
 .quote.jumps {
   cursor: pointer;
 }
+/* A mention (docs/mentions.md): the text colour at 12 % behind the name. The 2 px at the
+   sides take no room, so the text stands where it stood without the mark. */
+.mention {
+  padding: 0 2px;
+  margin: 0 -2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.bubble .mention {
+  font-weight: 600;
+}
+.bubble .mention.self {
+  background: color-mix(in srgb, var(--accent) var(--mention-self), transparent);
+}
+.bubble .mention.person {
+  cursor: pointer;
+}
+.bubble .mention.person:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
 /* Search words of the search in this chat: behind the text, whose colour stays. */
 mark.search-mark {
   background: var(--search-mark);
@@ -1523,6 +1547,13 @@ button.who-row:focus-visible {
   text-align: center;
   box-shadow: 0 0 0 2px var(--bg);
 }
+/* The „@“ button: 8 px above „Zum Ende springen“ (docs/mentions.md). */
+.jump.mention-jump {
+  bottom: 56px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+}
 @media (prefers-reduced-motion: reduce) {
   .jump,
   .jump.shown {
@@ -1650,24 +1681,109 @@ button.who-row:focus-visible {
 .icon-button.active {
   color: var(--accent);
 }
-.composer-input {
+/* The pill: the input field, behind it the layer with the marks of the mentions. */
+.composer-field {
+  position: relative;
   flex: 1;
   min-width: 0;
-  min-height: 34px;
-  max-height: 72px;
   margin: 0 6px;
-  padding: 6px 12px;
-  resize: none;
-  border: 1px solid transparent;
   border-radius: 18px;
   background: var(--bubble-other);
-  color: var(--text);
+}
+.composer-input,
+.composer-backdrop {
+  padding: 6px 12px;
+  border: 1px solid transparent;
   font: inherit;
   font-size: 14px;
   line-height: 20px;
   letter-spacing: -0.08px;
+}
+.composer-input {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  max-height: 72px;
+  margin: 0;
+  resize: none;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text);
   outline: none;
   user-select: text;
+}
+/* Same text, same breaks as the field (docs/mentions.md „Im Eingabefeld“); only the marks show. */
+.composer-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+.composer-backdrop .mention {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+/* The suggestions after an „@“, above the field like the emoji panel. */
+.mention-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(320px, 100%);
+  max-height: 272px;
+  padding: 4px 0;
+  overflow-y: auto;
+  border-radius: 10px;
+  background: var(--floating);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.2);
+}
+.mention-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+.mention-row.chosen {
+  background: var(--fill-pressed);
+}
+.mention-row-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fill-pressed);
+  color: var(--text-muted);
+}
+.mention-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mention-row-name,
+.mention-row-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mention-row-name {
+  font-size: 14px;
+  line-height: 18px;
+}
+.mention-row-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
 }
 .send {
   width: 32px;

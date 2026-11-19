@@ -36,6 +36,7 @@ import {
   type CoreEvent,
   type PendingMessage,
   type RecordingNotice,
+  type MentionPick,
   type ReplyPreview,
   type RoomView,
   type StagedFile,
@@ -78,8 +79,10 @@ interface NativeSession {
   searchMessagesEverywhere(query: string, token: string | null, limit: number): Promise<unknown>
   markRead(token: string, messageId: number): Promise<void>
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
-  editSource(token: string, messageId: number): Promise<string | null>
-  editMessage(token: string, messageId: number, text: string): Promise<string | null>
+  editSource(token: string, messageId: number): Promise<unknown>
+  editMessage(token: string, messageId: number, text: string, mentions: MentionPick[]): Promise<string | null>
+  mentionCandidates(token: string, query: string, limit: number): Promise<unknown>
+  existingDirect(userId: string): string | null
   deleteMessage(token: string, messageId: number): Promise<string | null>
   reactions(token: string, messageId: number): Promise<unknown>
   roomSections(query: string, activeToken: string | null): unknown
@@ -112,7 +115,7 @@ interface NativeSession {
   leaveGroup(token: string): Promise<string | null>
   deleteGroup(token: string): Promise<string | null>
   avatar(token: string, dark: boolean): Promise<{ data: Buffer; contentType: string }>
-  enqueueText(token: string, text: string, replyTo: ReplyPreview | null, referenceId: string): PendingMessage
+  enqueueText(token: string, text: string, mentions: MentionPick[], replyTo: ReplyPreview | null, referenceId: string): PendingMessage
   enqueueFile(
     token: string,
     localPath: string,
@@ -121,6 +124,7 @@ interface NativeSession {
     width: number,
     height: number,
     caption: string,
+    mentions: MentionPick[],
     replyTo: ReplyPreview | null,
     referenceId: string,
   ): PendingMessage
@@ -1471,14 +1475,28 @@ function registerIpc(): void {
     need(r).session.searchMessagesEverywhere(query, token, limit),
   )
   handle('talk:refreshRooms', (r) => r?.session.refreshRooms().catch(() => undefined))
-  handle('talk:enqueueText', (r, token: string, text: string, replyTo: ReplyPreview | null) =>
-    need(r).session.enqueueText(token, text, replyTo, core.newReferenceId()),
+  handle('talk:enqueueText', (r, token: string, text: string, mentions: MentionPick[], replyTo: ReplyPreview | null) =>
+    need(r).session.enqueueText(token, text, mentions, replyTo, core.newReferenceId()),
   )
-  handle('talk:enqueueFile', (r, token: string, file: StagedFile, caption: string, replyTo: ReplyPreview | null) => {
-    const rt = need(r)
-    if (!inside(join(rt.dir, 'staging'), file.path)) throw new Error('not a staged file')
-    return rt.session.enqueueFile(token, file.path, file.name, file.mime, file.width, file.height, caption, replyTo, core.newReferenceId())
-  })
+  handle(
+    'talk:enqueueFile',
+    (r, token: string, file: StagedFile, caption: string, mentions: MentionPick[], replyTo: ReplyPreview | null) => {
+      const rt = need(r)
+      if (!inside(join(rt.dir, 'staging'), file.path)) throw new Error('not a staged file')
+      return rt.session.enqueueFile(
+        token,
+        file.path,
+        file.name,
+        file.mime,
+        file.width,
+        file.height,
+        caption,
+        mentions,
+        replyTo,
+        core.newReferenceId(),
+      )
+    },
+  )
   handle('talk:pending', (r, token: string) => r?.session.pending(token) ?? [])
   handle('talk:retrySend', (r, referenceId: string) => {
     r?.notifiedFailures.delete(referenceId)
@@ -1526,9 +1544,14 @@ function registerIpc(): void {
   })
   handle('talk:markRead', (r, token: string, messageId: number) => r?.session.markRead(token, messageId))
   handle('talk:editSource', (r, token: string, messageId: number) => (r ? r.session.editSource(token, messageId) : null))
-  handle('talk:editMessage', (r, token: string, messageId: number, text: string) =>
-    r ? r.session.editMessage(token, messageId, text) : NOT_SIGNED_IN,
+  handle('talk:editMessage', (r, token: string, messageId: number, text: string, mentions: MentionPick[]) =>
+    r ? r.session.editMessage(token, messageId, text, mentions) : NOT_SIGNED_IN,
   )
+  // docs/mentions.md: answers from memory; without a session or a list there is nobody.
+  handle('talk:mentionCandidates', (r, token: string, query: string, limit: number) =>
+    r ? r.session.mentionCandidates(token, query, limit).catch(() => []) : [],
+  )
+  handle('talk:existingDirect', (r, userId: string) => r?.session.existingDirect(userId) ?? null)
   handle('talk:deleteMessage', (r, token: string, messageId: number) =>
     r ? r.session.deleteMessage(token, messageId) : NOT_SIGNED_IN,
   )

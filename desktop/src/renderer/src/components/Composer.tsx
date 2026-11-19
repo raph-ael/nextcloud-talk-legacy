@@ -3,15 +3,19 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
   type KeyboardEvent,
   type MutableRefObject,
 } from 'react'
-import { withAttachment } from '@shared/core'
-import { sendFiles, sendMessage, type UiMessage } from '../store'
+import { withAttachment, type MentionCandidate, type MentionPick } from '@shared/core'
+import { sendFiles, sendMessage, useStore, type UiMessage } from '../store'
+import { fieldMentions, mentionTrigger, type MentionTrigger } from '../format'
+import { MentionBackdrop, MentionList, mentionRowId } from './Mentions'
 import { toast } from '../call/store'
 import type { Editing } from './Chat'
 import { dropDraft, releaseDraft, stage, type Draft } from '../media'
@@ -41,7 +45,13 @@ const EmojiPicker = lazy(() => import('./EmojiPicker').then((m) => ({ default: m
  * switching chats and accounts.
  */
 const textDrafts = new Map<string, string>()
+/** The mentions picked for the text of a draft (docs/mentions.md „Entwurf“). */
+const pickDrafts = new Map<string, MentionPick[]>()
 const fileDrafts = new Map<string, Draft[]>()
+
+const NO_PICKS: MentionPick[] = []
+/** As many suggestions are asked for (docs/mentions.md „Abfrage“). */
+const MENTION_ROWS = 50
 
 interface Props {
   token: string
@@ -69,6 +79,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   // The chat remounts for another account (its key), so the key holds for this composer.
   const [key] = useState(() => draftKey(token))
   const [text, setText] = useState(() => textDrafts.get(key) ?? '')
+  // The mentions picked for `text`; where they stand follows from the text alone.
+  const [picks, setPicks] = useState<MentionPick[]>(() => pickDrafts.get(key) ?? NO_PICKS)
   const [files, setFiles] = useState<Draft[]>(() => fileDrafts.get(key) ?? [])
   const [staging, setStaging] = useState(0)
   const [error, setError] = useState('')
@@ -77,6 +89,18 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   const editingRef = useRef(editing)
   editingRef.current = editing
   const input = useRef<HTMLTextAreaElement | null>(null)
+  const backdrop = useRef<HTMLDivElement>(null)
+  // The suggestions after an „@“ (docs/mentions.md „Vorschlagsliste“).
+  const [focused, setFocused] = useState(false)
+  /** Where the caret stands; null with a selection. */
+  const [caret, setCaret] = useState<number | null>(null)
+  const [rows, setRows] = useState<MentionCandidate[]>([])
+  const [chosen, setChosen] = useState(0)
+  /** Esc closed the list for this „@“ and this search text. */
+  const [dismissed, setDismissed] = useState<MentionTrigger | null>(null)
+  const asked = useRef(0)
+  const listId = useId()
+  const room = useStore((s) => s.rooms.find((r) => r.token === token))
   const picker = useRef<HTMLInputElement>(null)
   const emojiButton = useRef<HTMLButtonElement>(null)
   const recording = useVoice((s) => recordingFor(s, token))
@@ -85,6 +109,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
 
   useEffect(() => {
     setText(textDrafts.get(key) ?? '')
+    setPicks(pickDrafts.get(key) ?? NO_PICKS)
     setFiles(fileDrafts.get(key) ?? [])
     setError('')
     input.current?.focus()
@@ -118,12 +143,14 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     setSaving(false)
     if (!editing) {
       setText(textDrafts.get(key) ?? '')
+      setPicks(pickDrafts.get(key) ?? NO_PICKS)
       input.current?.focus()
       return
     }
     void stopToDraft()
     setEmoji(false)
     setText(editing.source)
+    setPicks(editing.mentions)
     const end = editing.source.length
     requestAnimationFrame(() => {
       const el = input.current
@@ -152,6 +179,19 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     if (replyTo) input.current?.focus()
   }, [replyTo])
 
+  const ranges = useMemo(() => fieldMentions(text, picks), [text, picks])
+  const marked = ranges.length > 0
+
+  /** The layer with the marks lies exactly behind the text: as wide, and scrolled alike. */
+  function syncBackdrop() {
+    const el = input.current
+    const layer = backdrop.current
+    if (!el || !layer) return
+    // A scrollbar narrows the text.
+    layer.style.width = `${el.clientWidth}px`
+    layer.scrollTop = el.scrollTop
+  }
+
   // Auto-grow up to the CSS max-height, then scroll (like Signal).
   useLayoutEffect(() => {
     const el = input.current
@@ -160,7 +200,16 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     const height = el.scrollHeight + el.offsetHeight - el.clientHeight
     el.style.height = `${height}px`
     el.style.overflowY = height > el.offsetHeight ? 'auto' : 'hidden'
-  }, [text])
+    syncBackdrop()
+  }, [text, marked])
+  // Another width breaks the lines anew.
+  useEffect(() => {
+    const el = input.current
+    if (!el) return
+    const observer = new ResizeObserver(syncBackdrop)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   function updateText(v: string) {
     setText(v)
@@ -168,6 +217,84 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     if (editing) return
     if (v) textDrafts.set(key, v)
     else textDrafts.delete(key)
+  }
+
+  function updatePicks(list: MentionPick[]) {
+    setPicks(list)
+    if (editing) return
+    if (list.length) pickDrafts.set(key, list)
+    else pickDrafts.delete(key)
+  }
+
+  function readCaret() {
+    const el = input.current
+    if (el) setCaret(el.selectionStart === el.selectionEnd ? el.selectionStart : null)
+  }
+  // The caret moves without the text changing (arrow keys, a click).
+  useEffect(() => {
+    const onSelection = () => document.activeElement === input.current && readCaret()
+    document.addEventListener('selectionchange', onSelection)
+    return () => document.removeEventListener('selectionchange', onSelection)
+  }, [])
+
+  // Also without the focus: Esc holds for its search text when the focus comes back.
+  const trigger = useMemo(
+    () => (caret != null && !saving ? mentionTrigger(text, caret, picks) : null),
+    [caret, saving, text, picks],
+  )
+  const at = trigger?.at
+  const query = trigger?.query
+  // Asked on every change, without waiting: the core answers from memory. An answer that
+  // was overtaken is dropped; the rows before stay until the next ones are there.
+  useEffect(() => {
+    const seq = ++asked.current
+    if (query == null) {
+      setRows([])
+      setDismissed(null)
+      return
+    }
+    // Esc holds until the search text changes.
+    setDismissed((d) => (d && d.at === at && d.query === query ? d : null))
+    window.talk.mentionCandidates(token, query, MENTION_ROWS).then(
+      (list) => {
+        if (seq !== asked.current) return
+        setRows(list)
+        setChosen(0)
+      },
+      () => seq === asked.current && setRows([]),
+    )
+  }, [token, at, query])
+  const suggesting = focused && !!trigger && !dismissed && rows.length > 0
+  const chosenRow = rows[Math.min(chosen, rows.length - 1)]
+
+  /**
+   * Replaces a part of the text through the editor, so undo knows about it; the caret
+   * stands at `caretAt` afterwards.
+   */
+  function replaceRange(from: number, to: number, insert: string, caretAt: number) {
+    const el = input.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(from, to)
+    const done = insert ? document.execCommand('insertText', false, insert) : document.execCommand('delete')
+    if (done) {
+      el.setSelectionRange(caretAt, caretAt)
+      readCaret()
+      return
+    }
+    updateText(text.slice(0, from) + insert + text.slice(to))
+    setCaret(caretAt)
+    requestAnimationFrame(() => el.setSelectionRange(caretAt, caretAt))
+  }
+
+  /** Takes a row of the list: „@Name “ replaces what was typed from the „@“ to the caret. */
+  function acceptMention(row: MentionCandidate) {
+    if (!trigger || caret == null) return
+    // An older pick with the same name gives way.
+    updatePicks([...picks.filter((p) => p.label !== row.label), { label: row.label, mentionId: row.mentionId }])
+    // No second space when one follows already; the caret goes behind it.
+    const spaced = text[caret] === ' '
+    replaceRange(trigger.at, caret, `@${row.label}${spaced ? '' : ' '}`, trigger.at + row.label.length + 2)
   }
 
   function updateFiles(f: (list: Draft[]) => Draft[]) {
@@ -210,7 +337,9 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     if (!canSend) return
     const value = text.trim()
     const queued = files
+    const mentions = picks
     updateText('')
+    updatePicks(NO_PICKS)
     updateFiles(() => [])
     setEmoji(false)
     if (queued.length > 0) {
@@ -218,10 +347,11 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
         token,
         queued.map((d) => d.file),
         value,
+        mentions,
         replyTo,
       ).finally(() => queued.forEach(releaseDraft))
     } else {
-      void sendMessage(token, value, replyTo)
+      void sendMessage(token, value, mentions, replyTo)
     }
     onSent()
   }
@@ -232,7 +362,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   async function save() {
     if (!editing || !canSave) return
     setSaving(true)
-    const error = await window.talk.editMessage(token, editing.msg.id, text.trim()).catch(() => 'Nachricht nicht geändert')
+    const error = await window.talk.editMessage(token, editing.msg.id, text.trim(), picks).catch(() => 'Nachricht nicht geändert')
     // Another message is being edited by now: its mode is not ours to end.
     if (editingRef.current !== editing) return
     setSaving(false)
@@ -244,6 +374,37 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    const bare = !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey
+    // The keys of the suggestions come before every other rule of the field.
+    if (suggesting && bare && !e.nativeEvent.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const step = e.key === 'ArrowDown' ? 1 : rows.length - 1
+        setChosen((i) => (Math.min(i, rows.length - 1) + step) % rows.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        acceptMention(chosenRow)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setDismissed(trigger)
+        return
+      }
+    }
+    // Deleting backwards right behind a mention removes it as a whole.
+    if (e.key === 'Backspace' && bare && !saving) {
+      const el = e.currentTarget
+      const hit = el.selectionStart === el.selectionEnd ? ranges.find(([, to]) => to === el.selectionStart) : undefined
+      if (hit) {
+        e.preventDefault()
+        replaceRange(hit[0], hit[1], '', hit[0])
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       if (editing) void save()
@@ -382,21 +543,51 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
             </Suspense>
           )}
         </div>
-        <textarea
-          ref={(el) => {
-            input.current = el
-            if (typeof ref === 'function') ref(el)
-            else if (ref) ref.current = el
-          }}
-          className="composer-input"
-          rows={1}
-          placeholder={files.length && !editing ? 'Bildunterschrift hinzufügen' : 'Nachricht'}
-          value={text}
-          readOnly={saving}
-          onChange={(e) => updateText(e.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-        />
+        <div className="composer-field">
+          {suggesting && (
+            <MentionList
+              id={listId}
+              rows={rows}
+              chosen={Math.min(chosen, rows.length - 1)}
+              token={token}
+              roomName={room?.name ?? ''}
+              avatarVersion={room?.avatarVersion ?? ''}
+              onChoose={setChosen}
+              onAccept={acceptMention}
+            />
+          )}
+          {marked && (
+            <div className="composer-backdrop" ref={backdrop} aria-hidden="true">
+              <MentionBackdrop text={text} ranges={ranges} />
+            </div>
+          )}
+          <textarea
+            ref={(el) => {
+              input.current = el
+              if (typeof ref === 'function') ref(el)
+              else if (ref) ref.current = el
+            }}
+            className="composer-input"
+            rows={1}
+            placeholder={files.length && !editing ? 'Bildunterschrift hinzufügen' : 'Nachricht'}
+            value={text}
+            readOnly={saving}
+            aria-controls={suggesting ? listId : undefined}
+            aria-activedescendant={suggesting ? mentionRowId(listId, Math.min(chosen, rows.length - 1)) : undefined}
+            onChange={(e) => {
+              updateText(e.target.value)
+              readCaret()
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onScroll={syncBackdrop}
+            onFocus={() => {
+              setFocused(true)
+              readCaret()
+            }}
+            onBlur={() => setFocused(false)}
+          />
+        </div>
         {!editing && (
         <div className="composer-cell">
           <button className="icon-button" aria-label="Datei anhängen" title="Datei anhängen" onClick={() => picker.current?.click()}>

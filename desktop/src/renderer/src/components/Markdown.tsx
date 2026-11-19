@@ -3,13 +3,36 @@
 // Produces React elements only – no HTML injection possible.
 
 import { Fragment, type ReactNode } from 'react'
-import { splitMarks } from '../format'
+import { splitMarks, splitMentions } from '../format'
+import { Mention, type BubbleMentions } from './Mentions'
 
 /** Search words of the chat's search, folded (docs/search.md „Hervorhebung“). */
 export type Marks = string[] | null | undefined
+/** The mentions of the message (docs/mentions.md „In der Nachricht“). */
+export type Mentions = BubbleMentions | null | undefined
 
-/** `text` with the search words marked. */
-export function marked(text: string, marks: Marks, key: string | number = 0): ReactNode {
+/**
+ * `text` with the search words marked and, with `mentions`, the mentions drawn. A search
+ * word on a mention lies on top of it.
+ */
+export function marked(text: string, marks: Marks, key: string | number = 0, mentions?: Mentions): ReactNode {
+  if (mentions?.list.length && text.includes('@')) {
+    const parts = splitMentions(text, mentions.list)
+    if (parts.some((p) => p.mention))
+      return parts.map((p, i) =>
+        p.mention ? (
+          <Mention key={`${key}/@${i}`} mention={p.mention} ctx={mentions}>
+            {searchMarked(p.text, marks, `${key}/@${i}`)}
+          </Mention>
+        ) : (
+          <Fragment key={`${key}/@${i}`}>{searchMarked(p.text, marks, `${key}/@${i}`)}</Fragment>
+        ),
+      )
+  }
+  return searchMarked(text, marks, key)
+}
+
+function searchMarked(text: string, marks: Marks, key: string | number): ReactNode {
   if (!marks?.length) return text
   const parts = splitMarks(text, marks)
   if (parts.length === 1 && !parts[0].hit) return text
@@ -27,11 +50,12 @@ export function marked(text: string, marks: Marks, key: string | number = 0): Re
 const INLINE =
   /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)|(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))|(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g
 
-function inline(text: string, key = 0, marks?: Marks): ReactNode[] {
+// Mentions are drawn in the text and inside its formats, not in code and not in a link.
+function inline(text: string, key = 0, marks?: Marks, mentions?: Mentions): ReactNode[] {
   const out: ReactNode[] = []
   let last = 0
   const plainText = (t: string, at: number) => {
-    const node = marked(t, marks, `${key}-t${at}`)
+    const node = marked(t, marks, `${key}-t${at}`, mentions)
     if (Array.isArray(node)) out.push(...node)
     else out.push(node)
   }
@@ -40,9 +64,9 @@ function inline(text: string, key = 0, marks?: Marks): ReactNode[] {
     const [tok] = m
     const k = `${key}-${m.index}`
     if (m[1]) out.push(<code key={k}>{marked(tok.slice(1, -1), marks)}</code>)
-    else if (m[2]) out.push(<strong key={k}>{inline(tok.slice(2, -2), m.index, marks)}</strong>)
-    else if (m[3]) out.push(<s key={k}>{inline(tok.slice(2, -2), m.index, marks)}</s>)
-    else if (m[4]) out.push(<em key={k}>{inline(tok.slice(1, -1), m.index, marks)}</em>)
+    else if (m[2]) out.push(<strong key={k}>{inline(tok.slice(2, -2), m.index, marks, mentions)}</strong>)
+    else if (m[3]) out.push(<s key={k}>{inline(tok.slice(2, -2), m.index, marks, mentions)}</s>)
+    else if (m[4]) out.push(<em key={k}>{inline(tok.slice(1, -1), m.index, marks, mentions)}</em>)
     else if (m[5]) {
       const close = tok.indexOf('](')
       out.push(
@@ -112,28 +136,28 @@ function parse(src: string): Block[] {
   return blocks.filter((b) => b.kind !== 'p' || b.lines.length > 0)
 }
 
-const lines = (ls: string[], marks?: Marks) =>
+const lines = (ls: string[], marks?: Marks, mentions?: Mentions) =>
   ls.map((l, i) => (
     <Fragment key={i}>
       {i > 0 && <br />}
-      {inline(l, i, marks)}
+      {inline(l, i, marks, mentions)}
     </Fragment>
   ))
 
-export function Markdown({ text, marks }: { text: string; marks?: Marks }) {
+export function Markdown({ text, marks, mentions }: { text: string; marks?: Marks; mentions?: Mentions }) {
   const blocks = parse(text)
   // Plain single-paragraph messages stay inline so the timestamp can float beside them.
-  if (blocks.length === 1 && blocks[0].kind === 'p') return <>{lines(blocks[0].lines, marks)}</>
+  if (blocks.length === 1 && blocks[0].kind === 'p') return <>{lines(blocks[0].lines, marks, mentions)}</>
   return (
     <div className="md">
       {blocks.map((b, i) => {
         switch (b.kind) {
           case 'p':
-            return <p key={i}>{lines(b.lines, marks)}</p>
+            return <p key={i}>{lines(b.lines, marks, mentions)}</p>
           case 'h':
             return (
               <p key={i} className="md-h">
-                {inline(b.text, 0, marks)}
+                {inline(b.text, 0, marks, mentions)}
               </p>
             )
           case 'ul':
@@ -142,13 +166,13 @@ export function Markdown({ text, marks }: { text: string; marks?: Marks }) {
             return (
               <List key={i}>
                 {b.items.map((it, j) => (
-                  <li key={j}>{inline(it, j, marks)}</li>
+                  <li key={j}>{inline(it, j, marks, mentions)}</li>
                 ))}
               </List>
             )
           }
           case 'quote':
-            return <blockquote key={i}>{lines(b.lines, marks)}</blockquote>
+            return <blockquote key={i}>{lines(b.lines, marks, mentions)}</blockquote>
           case 'code':
             return <pre key={i}>{marked(b.text, marks)}</pre>
           case 'hr':

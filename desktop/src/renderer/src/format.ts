@@ -1,4 +1,4 @@
-import type { GeoLocation } from '@shared/core'
+import type { GeoLocation, MentionPick, MentionView } from '@shared/core'
 
 const time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' })
 const weekday = new Intl.DateTimeFormat('de-DE', { weekday: 'short' })
@@ -169,5 +169,89 @@ export function splitMarks(text: string, words: string[] | null | undefined): Ar
   }
   flush()
   if (pos < text.length) out.push({ text: text.slice(pos), hit: false })
+  return out
+}
+
+// --- mentions (docs/mentions.md) -------------------------------------------------------------
+
+/** A letter or a digit, as the core counts them: a name does not end before one. */
+const WORD_CHAR = /[\p{Alphabetic}\p{N}]/u
+/** A mention stands at the start of the text or after one of these. */
+const BEFORE_MENTION = /[\s\-.'@]/
+/** The server reads a mention only with these characters in its id (as in the core). */
+const WIRE_ID = /^[A-Za-z0-9_\-@.' /:]+$/
+
+function endsName(text: string, at: number): boolean {
+  const next = text.codePointAt(at)
+  return next == null || !WORD_CHAR.test(String.fromCodePoint(next))
+}
+
+const byLength = (a: string, b: string) => [...b].length - [...a].length
+
+/**
+ * Where the picks stand as mentions in the text of the input field, as [from, to) with the
+ * „@“. The rule of the core (docs/mentions.md „Im Eingabefeld“): `@{label}` after the start,
+ * white space or one of `-.'@`, and no letter or digit after it; the longest name counts.
+ */
+export function fieldMentions(text: string, picks: MentionPick[]): Array<[number, number]> {
+  if (picks.length === 0 || !text.includes('@')) return []
+  const labels = [...new Set(picks.filter((p) => p.label && WIRE_ID.test(p.mentionId)).map((p) => p.label))].sort(byLength)
+  const out: Array<[number, number]> = []
+  let end = -1
+  for (let i = text.indexOf('@'); i >= 0; i = text.indexOf('@', i + 1)) {
+    // Right behind a mention none starts (the server sees its closing quote there).
+    if (i < end || i === end || (i > 0 && !BEFORE_MENTION.test(text[i - 1]))) continue
+    const label = labels.find((l) => text.startsWith(l, i + 1) && endsName(text, i + 1 + l.length))
+    if (label == null) continue
+    end = i + 1 + label.length
+    out.push([i, end])
+  }
+  return out
+}
+
+/** The text being typed after an „@“: the place of the „@“ and what follows up to the caret. */
+export interface MentionTrigger {
+  at: number
+  query: string
+}
+
+/** Longest search text after the „@“. */
+const MENTION_QUERY_MAX = 40
+
+/**
+ * The suggestions' search text (docs/mentions.md „Vorschlagsliste“): from the nearest „@“
+ * before the caret that stands at the start or after white space. None across a line break,
+ * beyond 40 characters, or when a finished mention starts at that „@“.
+ */
+export function mentionTrigger(text: string, caret: number, picks: MentionPick[]): MentionTrigger | null {
+  for (let i = caret - 1; i >= 0; i--) {
+    const ch = text[i]
+    if (ch === '\n') return null
+    if (ch !== '@' || (i > 0 && !/\s/.test(text[i - 1]))) continue
+    const query = text.slice(i + 1, caret)
+    if ([...query].length > MENTION_QUERY_MAX) return null
+    return fieldMentions(text, picks).some(([from]) => from === i) ? null : { at: i, query }
+  }
+  return null
+}
+
+/**
+ * Splits the text of a bubble at its mentions (docs/mentions.md „In der Nachricht“): every
+ * `label` („@Lena Brandt“) that no letter or digit follows, the longest name first.
+ */
+export function splitMentions(text: string, mentions: MentionView[]): Array<{ text: string; mention?: MentionView }> {
+  if (mentions.length === 0 || !text.includes('@')) return [{ text }]
+  const known = [...mentions].filter((m) => m.label.length > 1).sort((a, b) => byLength(a.label, b.label))
+  const out: Array<{ text: string; mention?: MentionView }> = []
+  let pos = 0
+  for (let i = text.indexOf('@'); i >= 0; i = text.indexOf('@', i + 1)) {
+    if (i < pos) continue
+    const m = known.find((k) => text.startsWith(k.label, i) && endsName(text, i + k.label.length))
+    if (!m) continue
+    if (i > pos) out.push({ text: text.slice(pos, i) })
+    pos = i + m.label.length
+    out.push({ text: text.slice(i, pos), mention: m })
+  }
+  if (pos < text.length) out.push({ text: text.slice(pos) })
   return out
 }

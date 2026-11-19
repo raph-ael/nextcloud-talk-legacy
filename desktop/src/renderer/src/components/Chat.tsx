@@ -1,17 +1,20 @@
 import { forwardRef, Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { locationName, withAttachment, type RoomView, type SendError } from '@shared/core'
+import { locationName, withAttachment, type MentionPick, type MentionView, type RoomView, type SendError } from '@shared/core'
 import {
   discard,
   focusSearch,
   loadNewer,
   loadOlder,
   markVisibleRead,
+  mentionsSeen,
   onBeforeAppend,
   openGroupInfo,
+  openRoom,
   retry,
   countsAsUnread,
   setChatAtBottom,
   showEnd,
+  showMention,
   showMessage,
   shownConnection,
   useStore,
@@ -20,6 +23,7 @@ import {
 import { isGroupRoom } from './GroupInfo'
 import { colorFor, dayLabel, fullTime, isJumboEmoji, locationLink, messageTime, sameDay, searchWords, splitLinks } from '../format'
 import { Markdown, marked, plain, type Marks } from './Markdown'
+import type { BubbleMentions } from './Mentions'
 import { Avatar } from './Avatar'
 import { ChatImage, FileRow, isImageAttachment, LocationRow } from './ChatMedia'
 import { Composer } from './Composer'
@@ -53,6 +57,25 @@ function JumpButton({ shown, unread, onJump }: { shown: boolean; unread: number;
         <path fill="currentColor" d="M12 16.5l-6-6 1.4-1.4 4.6 4.6 4.6-4.6L18 10.5z" />
       </svg>
       {unread > 0 && <span className="jump-badge">{unread > 99 ? '99+' : unread}</span>}
+    </button>
+  )
+}
+
+/** The „@“ button above „Zum Ende springen“: to the oldest mention not seen yet (docs/mentions.md). */
+function MentionButton({ count, onJump }: { count: number; onJump: () => void }) {
+  const shown = count > 0
+  const label = count > 1 ? `Zur Erwähnung springen, ${count} Erwähnungen` : 'Zur Erwähnung springen'
+  return (
+    <button
+      className={`jump mention-jump${shown ? ' shown' : ''}`}
+      onClick={onJump}
+      aria-label={label}
+      title={label}
+      aria-hidden={!shown}
+      tabIndex={shown ? 0 : -1}
+    >
+      <span aria-hidden="true">@</span>
+      {count > 1 && <span className="jump-badge">{count > 99 ? '99+' : count}</span>}
     </button>
   )
 }
@@ -141,10 +164,11 @@ function deleteText(m: UiMessage): string {
   return m.attachment ? `${first} Die Datei selbst bleibt erhalten.` : first
 }
 
-/** A message being edited, with the text for the input field (`editSource`). */
+/** A message being edited, with text and mentions for the input field (`editSource`). */
 export interface Editing {
   msg: UiMessage
   source: string
+  mentions: MentionPick[]
 }
 
 export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function Chat({ room }, composerRef) {
@@ -153,6 +177,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   const [editing, setEditing] = useState<Editing | null>(null)
   const [deleting, setDeleting] = useState<UiMessage | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  // A mention of somebody without a chat yet: asks before it creates one.
+  const [starting, setStarting] = useState<MentionView | null>(null)
+  const [startBusy, setStartBusy] = useState(false)
   const [menu, setMenu] = useState<{ msg: UiMessage; x: number; y: number } | null>(null)
   const [viewer, setViewer] = useState<UiMessage | null>(null)
   const [reacting, setReacting] = useState<{
@@ -220,8 +247,13 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
 
   const startEdit = useCallback(
     async (m: UiMessage) => {
-      const source = await window.talk.editSource(room.token, m.id).catch(() => null)
-      setEditing({ msg: m, source: source ?? m.text })
+      const draft = await window.talk.editSource(room.token, m.id).catch(() => null)
+      // Without it the shown text counts, and its mentions as picks (docs/mentions.md „Bearbeiten“).
+      setEditing({
+        msg: m,
+        source: draft?.text ?? m.text,
+        mentions: draft?.mentions ?? (m.mentions ?? []).map((v) => ({ label: v.label.replace(/^@/, ''), mentionId: v.id })),
+      })
     },
     [room.token],
   )
@@ -250,6 +282,44 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     setDeleteBusy(false)
     setDeleting(null)
     if (error) toast(error)
+  }
+
+  // A click on a mention (docs/mentions.md „Antippen“): the chat with that person.
+  const openMention = useCallback(async (m: MentionView) => {
+    const token = await window.talk.existingDirect(m.id).catch(() => null)
+    if (token) void openRoom(token)
+    else setStarting(m)
+  }, [])
+
+  async function startChat(m: MentionView) {
+    setStartBusy(true)
+    const res = await window.talk.openDirect(m.id).catch(() => ({ token: null, error: 'Keine Verbindung' }))
+    setStartBusy(false)
+    setStarting(null)
+    if (res.token) void openRoom(res.token)
+    else toast(res.error ?? 'Chat konnte nicht geöffnet werden')
+  }
+
+  // Mentions of the user not seen yet (docs/mentions.md „„@“-Knopf im Chat“).
+  const unseen = chat?.mentions
+  const unseenRef = useRef(unseen)
+  unseenRef.current = unseen
+  /** A mention is seen once at least half of its bubble was in sight. */
+  function seeMentions() {
+    const el = scroller.current
+    const ids = unseenRef.current
+    if (!el || !ids?.length || !placed.current) return
+    if (!document.hasFocus() || document.visibilityState !== 'visible') return
+    const view = el.getBoundingClientRect()
+    const seen = ids.filter((id) => {
+      const bubble = el.querySelector<HTMLElement>(`.bubble[data-id="${id}"]`)
+      if (!bubble) return false
+      const r = bubble.getBoundingClientRect()
+      const inSight = Math.min(r.bottom, view.bottom) - Math.max(r.top, view.top)
+      // A bubble higher than the list is seen when it fills half of it.
+      return inSight >= Math.min(r.height, view.height) / 2
+    })
+    if (seen.length > 0) mentionsSeen(room.token, seen)
   }
 
   function updateAtBottom(value: boolean) {
@@ -308,6 +378,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     updateAtBottom(atEnd(el))
     setShowJump(el.scrollTop < -el.clientHeight / 2)
     flash(bubble)
+    mentionsSeen(room.token, [jump.id])
     if (windowRef.current && el.scrollTop > -NEWER_AHEAD) void loadNewer(room.token)
   }, [jump, chat, room.token])
 
@@ -342,7 +413,10 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     if (placed.current && atBottomRef.current) markVisibleRead(room.token)
   }, [room.token, messages.length, atBottom, room.unreadMessages])
   useEffect(() => {
-    const onFocus = () => placed.current && atBottomRef.current && markVisibleRead(room.token)
+    const onFocus = () => {
+      if (placed.current && atBottomRef.current) markVisibleRead(room.token)
+      seeMentions()
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [room.token])
@@ -400,6 +474,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     if (bottom) markVisibleRead(room.token)
   }, [chat, unreadLine, lineCovered, room.token, reopened, inWindow, jump])
 
+  // After every placing above: what stands in sight now is seen.
+  useLayoutEffect(seeMentions, [chat, room.token])
+
   useEffect(() => () => window.clearTimeout(datePillTimer.current), [])
 
   /** Floating date of the topmost visible message while scrolling, never at the end. */
@@ -430,6 +507,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     else if (!grew || bottom) showDatePill(el, bottom)
     if (el.scrollHeight - el.clientHeight + el.scrollTop < 400) void loadOlder(room.token)
     if (windowRef.current && el.scrollTop > -NEWER_AHEAD) void loadNewer(room.token)
+    seeMentions()
   }
 
   // The end stays the end when the input area grows (reply or edit bar, a longer text): the
@@ -600,6 +678,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
                 onMenu={openMenu}
                 onOpenImage={setViewer}
                 onJump={jumpTo}
+                onMention={openMention}
                 marks={marks}
               />
             ))}
@@ -609,6 +688,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
         <div className={`date-pill${datePill.shown ? ' shown' : ''}`} aria-hidden="true">
           {datePill.label}
         </div>
+        <MentionButton count={unseen?.length ?? 0} onJump={() => void showMention(room.token)} />
         <JumpButton
           shown={showJump || inWindow}
           unread={inWindow ? Math.max(room.unreadMessages, heldCount) : room.unreadMessages}
@@ -672,6 +752,15 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           onConfirm={() => void confirmDelete(deleting)}
         />
       )}
+      {starting && (
+        <ConfirmDialog
+          title={`Chat mit ${starting.label.replace(/^@/, '')} beginnen?`}
+          confirm="Chat öffnen"
+          busy={startBusy}
+          onCancel={() => setStarting(null)}
+          onConfirm={() => void startChat(starting)}
+        />
+      )}
       {whoReacted !== null && <WhoReacted token={room.token} messageId={whoReacted} onClose={closeWhoReacted} />}
       {viewer && <ImageViewer msg={viewer} onClose={closeViewer} />}
     </section>
@@ -696,6 +785,8 @@ interface RowProps {
   onOpenImage: (m: UiMessage) => void
   /** A click on the quote: to the quoted message. */
   onJump: (id: number) => void
+  /** A click on a mention of another person. */
+  onMention: (m: MentionView) => void
   /** Search words to mark in text and caption. */
   marks: Marks
 }
@@ -726,8 +817,14 @@ const MessageRow = memo(function MessageRow({
   onMenu,
   onOpenImage,
   onJump,
+  onMention,
   marks,
 }: RowProps) {
+  // docs/mentions.md „In der Nachricht“: in the text and the caption, also while it waits.
+  const mentions = useMemo<BubbleMentions | null>(
+    () => (msg.mentions?.length ? { list: msg.mentions, foreign: !msg.isOwn, onOpen: onMention } : null),
+    [msg.mentions, msg.isOwn, onMention],
+  )
   const showDay = !prev || !sameDay(prev.timestamp, msg.timestamp)
   const line = unread > 0 && (
     <div className="unread-line" role="separator" aria-label={unreadText(unread)}>
@@ -857,7 +954,7 @@ const MessageRow = memo(function MessageRow({
                 {deleted ? (
                   <em>Diese Nachricht wurde gelöscht.</em>
                 ) : location ? null : msg.markdown ? (
-                  <Markdown text={msg.text} marks={marks} />
+                  <Markdown text={msg.text} marks={marks} mentions={mentions} />
                 ) : (
                   splitLinks(msg.text).map((part, i) =>
                     part.href ? (
@@ -865,7 +962,7 @@ const MessageRow = memo(function MessageRow({
                         {marked(part.text, marks, i)}
                       </a>
                     ) : (
-                      <Fragment key={i}>{marked(part.text, marks, i)}</Fragment>
+                      <Fragment key={i}>{marked(part.text, marks, i, mentions)}</Fragment>
                     ),
                   )
                 )}

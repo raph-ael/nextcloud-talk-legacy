@@ -110,6 +110,43 @@ export interface ReplyPreview {
   location?: GeoLocation | null
 }
 
+/** A mention the user picked in the input field (docs/mentions.md). `label` has no „@“. */
+export interface MentionPick {
+  label: string
+  /** What the server reads: `lena`, `group/garten`, `all` … */
+  mentionId: string
+}
+
+export type MentionKind = 'user' | 'group' | 'team' | 'guest' | 'email' | 'federated' | 'all'
+
+/** A mention in a message: `label` stands like this in `MessageView.text` („@Lena Brandt“). */
+export interface MentionView {
+  label: string
+  kind: MentionKind
+  /** The user id for `user`, else the mention id. */
+  id: string
+  /** The user's own name, or everybody. */
+  isSelf: boolean
+}
+
+/** One row of the suggestions after an „@“. */
+export interface MentionCandidate {
+  mentionId: string
+  /** The name without „@“. */
+  label: string
+  kind: MentionKind
+  /** For `user`: whose picture the row shows. */
+  userId: string | null
+  /** Second line: „Gruppe“, „Team“, „Gast“, „Alle im Chat“, the id for a name that is there twice. */
+  subline: string
+}
+
+/** A message's text for the input field, with its mentions. */
+export interface EditDraft {
+  text: string
+  mentions: MentionPick[]
+}
+
 export interface MessageView {
   id: number
   token: string
@@ -138,6 +175,10 @@ export interface MessageView {
   editable: boolean
   /** Unix seconds; `null`: no limit. */
   editUntil: number | null
+  /** The mentions in `text`, in its order (docs/mentions.md). */
+  mentions: MentionView[]
+  /** A foreign message that mentions the user (their name or everybody). */
+  mentionsMe: boolean
 }
 
 /** One person's reaction, for the "who reacted" list. */
@@ -216,6 +257,8 @@ export interface ChatPage {
   hasNewer: boolean
   /** For `loadNewer`; like `oldestId` it counts hidden messages too. */
   newestId: number | null
+  /** Mentions of the user after the read marker; only from `cachedChat` and `openChat`. */
+  unreadMentions: number[]
 }
 
 /** A window into the history, or why there is none (German, for a toast). */
@@ -631,9 +674,15 @@ export interface TalkApi {
   searchMessagesEverywhere(query: string, token: string | null, limit: number): Promise<SearchResults>
   refreshRooms(): Promise<void>
   /** Queues a text message in the persistent outbox (delivered in the background). */
-  enqueueText(token: string, text: string, replyTo: ReplyPreview | null): Promise<PendingMessage>
-  /** Queues a staged file; the outbox takes it over. */
-  enqueueFile(token: string, file: StagedFile, caption: string, replyTo: ReplyPreview | null): Promise<PendingMessage>
+  enqueueText(token: string, text: string, mentions: MentionPick[], replyTo: ReplyPreview | null): Promise<PendingMessage>
+  /** Queues a staged file; the outbox takes it over. `mentions` belong to the caption. */
+  enqueueFile(
+    token: string,
+    file: StagedFile,
+    caption: string,
+    mentions: MentionPick[],
+    replyTo: ReplyPreview | null,
+  ): Promise<PendingMessage>
   pending(token: string): Promise<PendingMessage[]>
   retrySend(referenceId: string): Promise<void>
   discard(referenceId: string): Promise<void>
@@ -670,10 +719,20 @@ export interface TalkApi {
    * error text to show, or `null` on success.
    */
   setReaction(token: string, messageId: number, emoji: string | null): Promise<string | null>
-  /** The text of a message for the input field when editing it; `null`: start from `MessageView.text`. */
-  editSource(token: string, messageId: number): Promise<string | null>
+  /**
+   * Text and mentions of a message for the input field when editing it; `null`: start from
+   * `MessageView.text` and `MessageView.mentions`.
+   */
+  editSource(token: string, messageId: number): Promise<EditDraft | null>
   /** Edits an own message. Resolves to a German error text to show, or `null` (docs/chat.md). */
-  editMessage(token: string, messageId: number, text: string): Promise<string | null>
+  editMessage(token: string, messageId: number, text: string, mentions: MentionPick[]): Promise<string | null>
+  /**
+   * Who can be mentioned in a chat, for what was typed after the „@“ (docs/mentions.md):
+   * answers from memory, so it is asked on every keystroke. Empty in a one-to-one chat.
+   */
+  mentionCandidates(token: string, query: string, limit: number): Promise<MentionCandidate[]>
+  /** The one-to-one chat with a person when there is one already; creates nothing. */
+  existingDirect(userId: string): Promise<string | null>
   /** Deletes a message for everybody. Resolves to a German error text to show, or `null`. */
   deleteMessage(token: string, messageId: number): Promise<string | null>
   /** Who reacted: own first, then newest first. */

@@ -9,6 +9,7 @@ import type {
   AroundResult,
   ChatPage,
   ConnectionState,
+  MentionPick,
   MessageView,
   PendingMessage,
   PendingState,
@@ -54,6 +55,13 @@ export interface ChatState {
   held: MessageView[]
   /** Counts the times the list was replaced: an answer for the list before is dropped. */
   view: number
+  /**
+   * Mentions of the user not seen yet, ascending (docs/mentions.md „„@“-Knopf im Chat“);
+   * only while the chat is open.
+   */
+  mentions: number[]
+  /** Seen since the chat opened: a later page does not bring them back. */
+  mentionsSeen: number[]
 }
 
 /** Where the open chat should stand: at a message, or (`id` null) at its end. */
@@ -226,6 +234,8 @@ function emptyChat(): ChatState {
     loadingNewer: false,
     held: [],
     view: 0,
+    mentions: [],
+    mentionsSeen: [],
   }
 }
 
@@ -296,6 +306,30 @@ function appendHeld(messages: UiMessage[], held: MessageView[]): UiMessage[] {
   return newer.length > 0 ? merge(messages, newer) : messages
 }
 
+/** The chat with more mentions the user has not seen yet. */
+function withMentions(c: ChatState, ids: number[] | undefined): ChatState {
+  const fresh = (ids ?? []).filter((id) => !c.mentions.includes(id) && !c.mentionsSeen.includes(id))
+  return fresh.length > 0 ? { ...c, mentions: [...c.mentions, ...fresh].sort((a, b) => a - b) } : c
+}
+
+/** The bubbles of these mentions were in sight (or are gone): the „@“ button drops them. */
+export function mentionsSeen(token: string, ids: number[]): void {
+  if (!state.chats[token]?.mentions.some((id) => ids.includes(id))) return
+  setChat(token, (c) => ({
+    ...c,
+    mentions: c.mentions.filter((id) => !ids.includes(id)),
+    mentionsSeen: [...c.mentionsSeen, ...ids],
+  }))
+}
+
+/** The „@“ button: to the oldest mention not seen yet. */
+export async function showMention(token: string): Promise<void> {
+  const id = state.chats[token]?.mentions[0]
+  if (id == null) return
+  // The message is gone: the button would lead nowhere for good.
+  if ((await showMessage(token, id)) === false) mentionsSeen(token, [id])
+}
+
 // --- event handling ---------------------------------------------------------------
 
 export function handleEvent(e: TalkEvent): void {
@@ -333,19 +367,28 @@ export function handleEvent(e: TalkEvent): void {
       if (state.chats[e.token]) {
         countUnread(e.token, e.messages)
         // In a window they would leave a hole: kept and counted until its end is reached.
+        // Only the open chat keeps the list for its „@“ button.
+        const mentioning = state.activeToken === e.token ? e.messages.filter((m) => m.mentionsMe).map((m) => m.id) : []
         setChat(e.token, (c) =>
-          c.hasNewer ? { ...c, held: hold(c.held, e.messages) } : { ...c, messages: merge(c.messages, e.messages) },
+          withMentions(
+            c.hasNewer ? { ...c, held: hold(c.held, e.messages) } : { ...c, messages: merge(c.messages, e.messages) },
+            mentioning,
+          ),
         )
       }
       refreshHits()
       break
     case 'messagesUpdated':
-      if (state.chats[e.token])
+      if (state.chats[e.token]) {
+        const deleted = e.messages.filter((m) => m.kind === 'deleted').map((m) => m.id)
         setChat(e.token, (c) => ({
           ...c,
           messages: updateOnly(c.messages, e.messages),
           held: updateOnly(c.held, e.messages),
+          // A deleted message mentions nobody any more.
+          mentions: deleted.length > 0 ? c.mentions.filter((id) => !deleted.includes(id)) : c.mentions,
         }))
+      }
       refreshHits()
       break
     case 'readStatus':
@@ -724,7 +767,8 @@ export async function openRoom(token: string, at?: number): Promise<void> {
     jump: null,
   })
   void refreshSections()
-  setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status), synced: false }))
+  // The list of unseen mentions starts anew with every opening.
+  setChat(token, (c) => ({ ...c, loading: !c.messages.some((m) => !m.status), synced: false, mentions: [], mentionsSeen: [] }))
   await loadEnd(token)
 }
 
@@ -739,38 +783,46 @@ async function loadEnd(token: string): Promise<void> {
     if (state.activeToken === token && cached.messages.length > 0) {
       setChat(token, (c) => {
         // A jump was quicker: the window stays.
-        if (c.hasNewer) return c
+        if (c.hasNewer) return withMentions(c, cached.unreadMentions)
         // The cache went on while the chat was closed (the history loads in the background):
         // what an earlier visit left here does not reach it, and merging would leave a hole.
         const apart = !joins(c.messages, cached)
         const older = apart || (cached.oldestId != null && (c.oldestId == null || cached.oldestId < c.oldestId))
-        return {
-          ...c,
-          messages: merge(apart ? c.messages.filter((m) => m.status) : c.messages, cached.messages),
-          hasMore: older ? cached.hasMore : c.hasMore,
-          oldestId: older ? cached.oldestId : c.oldestId,
-          lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
-          loading: false,
-        }
+        return withMentions(
+          {
+            ...c,
+            messages: merge(apart ? c.messages.filter((m) => m.status) : c.messages, cached.messages),
+            hasMore: older ? cached.hasMore : c.hasMore,
+            oldestId: older ? cached.oldestId : c.oldestId,
+            lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
+            loading: false,
+          },
+          cached.unreadMentions,
+        )
       })
     }
     const page: ChatPage = await window.talk.openChat(token)
     const room = state.rooms.find((r) => r.token === token)
     const lastCommonRead = Math.max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
+    // Left meanwhile: the mentions belong to the chat that is open.
+    const mentions = state.activeToken === token ? page.unreadMentions : []
     setChat(token, (c) =>
-      c.hasNewer
-        ? { ...c, lastCommonRead, loading: false, synced: true }
-        : {
-            ...c,
-            // Outdated cache, or more new messages than one page: drop what was shown, else a hole
-            // would stay between it and the new page (unsent messages stay).
-            messages: merge(page.reset || !joins(c.messages, page) ? c.messages.filter((m) => m.status) : c.messages, page.messages),
-            hasMore: page.hasMore,
-            oldestId: page.oldestId,
-            lastCommonRead,
-            loading: false,
-            synced: true,
-          },
+      withMentions(
+        c.hasNewer
+          ? { ...c, lastCommonRead, loading: false, synced: true }
+          : {
+              ...c,
+              // Outdated cache, or more new messages than one page: drop what was shown, else a hole
+              // would stay between it and the new page (unsent messages stay).
+              messages: merge(page.reset || !joins(c.messages, page) ? c.messages.filter((m) => m.status) : c.messages, page.messages),
+              hasMore: page.hasMore,
+              oldestId: page.oldestId,
+              lastCommonRead,
+              loading: false,
+              synced: true,
+            },
+        mentions,
+      ),
     )
   } catch {
     setChat(token, (c) => ({ ...c, loading: false, synced: true }))
@@ -820,7 +872,7 @@ async function openAt(token: string, id: number): Promise<void> {
     const page = await opening
     setChat(token, (c) => {
       const base = {
-        ...c,
+        ...withMentions(c, state.activeToken === token ? page.unreadMentions : []),
         lastCommonRead: Math.max(c.lastCommonRead, page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0),
         synced: true,
       }
@@ -865,25 +917,37 @@ function windowed(c: ChatState, page: ChatPage, pending?: PendingMessage[]): Cha
 /**
  * Shows a message (a search hit, a quoted message; docs/search.md „Chat an einer Nachricht
  * öffnen“): scrolls to it when it is loaded, else the list becomes a window around it.
+ * True when it shows, false when there is no such message; null when nothing can be said
+ * (no connection, another request was quicker).
  */
-export async function showMessage(token: string, id: number): Promise<void> {
-  if (state.activeToken !== token) return openRoom(token, id)
+export async function showMessage(token: string, id: number): Promise<boolean | null> {
+  if (state.activeToken !== token) {
+    await openRoom(token, id)
+    return null
+  }
   if (state.groupInfo || state.categories) set({ groupInfo: null, categories: false })
   const ask = ++jumpAsk
   if (state.chats[token]?.messages.some((m) => !m.status && m.id === id)) {
     set({ jump: { token, id, seq: ++jumpSeq } })
-    return
+    return true
   }
   const around = await window.talk.messagesAround(token, id).catch(() => ({ error: 'Keine Verbindung' }))
-  if (state.activeToken !== token || ask !== jumpAsk) return
+  if (state.activeToken !== token || ask !== jumpAsk) return null
   // The chat stays as it is.
-  if ('error' in around) toast(around.error)
-  else if (!around.messages.some((m) => m.id === id)) toast('Nachricht nicht gefunden')
-  else
-    set({
-      chats: { ...state.chats, [token]: windowed(state.chats[token] ?? emptyChat(), around) },
-      jump: { token, id, seq: ++jumpSeq },
-    })
+  if ('error' in around) {
+    toast(around.error)
+    // Without a connection the message may well be there.
+    return around.error === 'Nachricht nicht gefunden' ? false : null
+  }
+  if (!around.messages.some((m) => m.id === id)) {
+    toast('Nachricht nicht gefunden')
+    return false
+  }
+  set({
+    chats: { ...state.chats, [token]: windowed(state.chats[token] ?? emptyChat(), around) },
+    jump: { token, id, seq: ++jumpSeq },
+  })
+  return true
 }
 
 /**
@@ -1004,20 +1068,26 @@ export function showQueued(token: string, p: PendingMessage): void {
 }
 
 /** Queues the message in the outbox: it is delivered reliably, also after a restart. */
-export async function sendMessage(token: string, text: string, replyTo: UiMessage | null): Promise<void> {
-  showQueued(token, await window.talk.enqueueText(token, text, toReply(replyTo)))
+export async function sendMessage(
+  token: string,
+  text: string,
+  mentions: MentionPick[],
+  replyTo: UiMessage | null,
+): Promise<void> {
+  showQueued(token, await window.talk.enqueueText(token, text, mentions, toReply(replyTo)))
 }
 
-/** Queues staged files; the caption goes with the last one (shown below the pictures). */
+/** Queues staged files; the caption and its mentions go with the last one (shown below the pictures). */
 export async function sendFiles(
   token: string,
   files: StagedFile[],
   caption: string,
+  mentions: MentionPick[],
   replyTo: UiMessage | null,
 ): Promise<void> {
   for (const [i, f] of files.entries()) {
     const last = i === files.length - 1
-    const p = await window.talk.enqueueFile(token, f, last ? caption : '', i === 0 ? toReply(replyTo) : null)
+    const p = await window.talk.enqueueFile(token, f, last ? caption : '', last ? mentions : [], i === 0 ? toReply(replyTo) : null)
     showQueued(token, p)
   }
 }
