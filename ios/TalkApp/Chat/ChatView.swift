@@ -45,6 +45,11 @@ struct ChatView: View {
     /// The row lit up after a jump (docs/search.md "Aufleuchten").
     @State private var flashKey: String?
     @State private var flashOff: Task<Void, Never>?
+    /// docs/mentions.md: the suggestions are up (back closes them first), and the person a
+    /// tapped mention means while "Chat mit … beginnen?" asks.
+    @State private var suggesting = false
+    @State private var closeSuggestions = 0
+    @State private var startChat: MentionView?
     @AppStorage("keyboard_height") private var keyboardHeight: Double = 300
 
     var body: some View {
@@ -89,6 +94,7 @@ struct ChatView: View {
                 focus: store.focus?.token == token ? store.focus : nil,
                 flashKey: flashKey,
                 marks: searching ? SearchText.words(searchText) : [],
+                mentions: chat?.mentions ?? [],
                 scrollToBottom: scrollTick,
                 actions: MessageListActions(
                     onReply: { replyTo = $0 },
@@ -99,6 +105,8 @@ struct ChatView: View {
                     onNearTop: { store.loadOlder(token) },
                     onNearBottom: { store.loadNewer(token) },
                     onQuote: { store.jump(token, to: $0) },
+                    onMention: openMention,
+                    onSeen: { store.mentionsSeen(token, $0) },
                     onBottomChanged: { bottom in
                         atBottom = bottom
                         store.setChatAtBottom(token, bottom)
@@ -130,19 +138,33 @@ struct ChatView: View {
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: pillShown)
             .overlay(alignment: .bottomTrailing) {
-                // In a window it is always there and leads back to the end (docs/search.md).
-                if showJump || window {
-                    let unread = Int(room?.unreadMessages ?? 0)
-                    JumpToBottomButton(unread: window ? max(unread, chat?.heldUnread ?? 0) : unread) {
-                        store.showEnd(token)
-                        scrollTick += 1
-                    }
-                        .padding(.trailing, 14)
-                        .padding(.bottom, 14)
+                // docs/mentions.md "„@“-Knopf im Chat": 16 above "Zum Ende springen", in a fixed
+                // place also while that one is away; not while searching.
+                VStack(spacing: 16) {
+                    if let mentions = chat?.mentions, let oldest = mentions.first, !searching {
+                        MentionJumpButton(count: mentions.count) {
+                            store.jump(token, to: oldest)
+                            store.mentionsSeen(token, [oldest])
+                        }
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                    }
+                    // In a window it is always there and leads back to the end (docs/search.md).
+                    if showJump || window {
+                        let unread = Int(room?.unreadMessages ?? 0)
+                        JumpToBottomButton(unread: window ? max(unread, chat?.heldUnread ?? 0) : unread) {
+                            store.showEnd(token)
+                            scrollTick += 1
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                    } else {
+                        Color.clear.frame(width: 40, height: 40).allowsHitTesting(false)
+                    }
                 }
+                .padding(.trailing, 14)
+                .padding(.bottom, 14)
             }
             .animation(.easeOut(duration: 0.15), value: showJump || window)
+            .animation(.easeOut(duration: 0.15), value: chat?.mentions.isEmpty ?? true)
             bottomBar(room: room, searching: searching)
         }
         .background(Talk.background)
@@ -151,16 +173,25 @@ struct ChatView: View {
         // The back gesture first ends editing (docs/chat.md "Pro Plattform"): the system back
         // button is swapped for one that cancels, and a swipe from the edge does the same.
         // The search closes the same way (docs/search.md "Kopf"): back first shows the header again.
-        .navigationBarBackButtonHidden(editing != nil || searching)
+        // The suggestions after an "@" close first (docs/mentions.md "Android und iOS").
+        .navigationBarBackButtonHidden(editing != nil || searching || suggesting)
         .simultaneousGesture(
             DragGesture(minimumDistance: 20).onEnded { g in
-                if editing != nil || searching, g.startLocation.x < Self.edgeWidth, g.translation.width > 60,
+                if editing != nil || searching || suggesting, g.startLocation.x < Self.edgeWidth, g.translation.width > 60,
                    abs(g.translation.height) < g.translation.width {
-                    if editing != nil { editing = nil } else { closeSearch() }
+                    back()
                 }
             },
-            including: editing != nil || searching ? .all : .subviews
+            including: editing != nil || searching || suggesting ? .all : .subviews
         )
+        .alert(
+            startChat.map { "Chat mit \(MentionMarks.name($0)) beginnen?" } ?? "",
+            isPresented: Binding(get: { startChat != nil }, set: { if !$0 { startChat = nil } }),
+            presenting: startChat
+        ) { m in
+            Button("Abbrechen", role: .cancel) {}
+            Button("Chat öffnen") { Task { await store.openDirectFromMention(m.id) } }
+        }
         .onChange(of: editedGone) { _, gone in if gone { editing = nil } }
         .onChange(of: store.activeToken) { _, t in
             if t != token {
@@ -286,8 +317,10 @@ struct ChatView: View {
                     replyTo: $replyTo,
                     editing: $editing,
                     panelOpen: $panelOpen,
-                    onSend: { text in
-                        store.send(token, text: text, replyTo: replyTo)
+                    suggesting: $suggesting,
+                    closeSuggestions: closeSuggestions,
+                    onSend: { text, mentions in
+                        store.send(token, text: text, mentions: mentions, replyTo: replyTo)
                         replyTo = nil
                         scrollTick += 1
                     },
@@ -361,15 +394,15 @@ struct ChatView: View {
                     }
                     .accessibilityIdentifier("chat-search-field")
             }
-        } else if editing != nil {
+        } else if editing != nil || suggesting {
             ToolbarItem(placement: .topBarLeading) {
-                Button { editing = nil } label: {
+                Button { back() } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Talk.onSurface)
                 }
                 .accessibilityLabel("Zurück")
-                .accessibilityIdentifier("edit-back")
+                .accessibilityIdentifier(editing != nil ? "edit-back" : "mention-back")
             }
         }
         if !searching { ToolbarItem(placement: .principal) {
@@ -427,6 +460,28 @@ struct ChatView: View {
             .accessibilityLabel(room?.hasCall == true ? "Anruf beitreten" : "Anrufen")
             .accessibilityIdentifier("call-button")
         } }
+    }
+
+    /// Back while something is open in the chat: the suggestions first, then editing, then the search.
+    private func back() {
+        if suggesting {
+            closeSuggestions += 1
+        } else if editing != nil {
+            editing = nil
+        } else {
+            closeSearch()
+        }
+    }
+
+    /// docs/mentions.md "Antippen": the chat with that person at once, or first the question
+    /// when there is none yet (a stray tap creates no empty chat).
+    private func openMention(_ m: MentionView) {
+        guard MentionMarks.tappable(m) else { return }
+        if let direct = store.existingDirect(m.id) {
+            store.openFromMention(direct)
+        } else {
+            startChat = m
+        }
     }
 
     // MARK: Search in the chat (docs/search.md)
@@ -534,15 +589,20 @@ struct ChatView: View {
 
     private func startEdit(_ msg: MessageView) {
         Task {
-            let source = await store.editSource(token, msg.id) ?? msg.text
-            editing = EditTarget(msg: msg, source: source)
+            // Without a source: the shown text, each mention of the message a pick (docs/mentions.md).
+            let source = await store.editSource(token, msg.id)
+            editing = EditTarget(
+                msg: msg,
+                source: source?.text ?? msg.text,
+                mentions: source?.mentions ?? msg.mentions.map { MentionPick(label: MentionMarks.name($0), mentionId: $0.id) }
+            )
         }
     }
 
     /// On an error the mode stays open with the text, and the toast says why.
-    private func saveEdit(_ text: String) async {
+    private func saveEdit(_ text: String, _ mentions: [MentionPick]) async {
         guard let e = editing else { return }
-        if let error = await store.editMessage(token, e.msg.id, text) {
+        if let error = await store.editMessage(token, e.msg.id, text, mentions) {
             Toast.show(error)
         } else if editing?.msg.id == e.msg.id {
             editing = nil

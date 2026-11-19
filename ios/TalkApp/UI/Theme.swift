@@ -38,6 +38,17 @@ enum Talk {
         UIColor(hex: 0xFFD60A).withAlphaComponent($0.userInterfaceStyle == .dark ? 0.35 : 0.45)
     })
 
+    /// Where somebody else mentions the user (docs/mentions.md "Farben"): the accent at
+    /// 22 % in light, 32 % in dark.
+    @MainActor static var mentionSelf: Color {
+        let a = Appearance.shared.accent
+        return Color(UIColor { tc in
+            tc.userInterfaceStyle == .dark
+                ? UIColor(hex: a.dark.accent).withAlphaComponent(0.32)
+                : UIColor(hex: a.light.accent).withAlphaComponent(0.22)
+        })
+    }
+
     static let uiBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x121212) : .white }
 
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {

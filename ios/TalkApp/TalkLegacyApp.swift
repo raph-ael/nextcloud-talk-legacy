@@ -84,16 +84,25 @@ struct RootView: View {
         Binding(
             get: {
                 guard let token = store.activeToken else { return store.listPath }
-                return store.groupInfoOpen ? [.chat(token), .groupInfo(token)] : [.chat(token)]
+                // Opened from a mention: the chat it came from lies below (docs/mentions.md).
+                let below: [Route] = store.chatBack.map { [.chat($0)] } ?? []
+                return below + (store.groupInfoOpen ? [.chat(token), .groupInfo(token)] : [.chat(token)])
             },
             set: { new in
-                guard case .chat(let token)? = new.first else {
+                var token: String?
+                var info = false
+                for route in new {
+                    if case .chat(let t) = route { token = t }
+                    if case .groupInfo = route { info = true } else { info = false }
+                }
+                guard let token else {
                     store.closeRoom()
                     store.listPath = new
                     return
                 }
-                store.openRoom(token)
-                store.showGroupInfo(new.count > 1)
+                // Back from a chat opened from a mention: the chat below opens again.
+                if token != store.activeToken { store.openRoom(token) }
+                store.showGroupInfo(info)
             }
         )
     }

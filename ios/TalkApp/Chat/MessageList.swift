@@ -26,6 +26,10 @@ struct MessageListActions {
     var onNearBottom: () -> Void = {}
     /// A quote was tapped: jump to the quoted message.
     var onQuote: (Int64) -> Void = { _ in }
+    /// A mention of a person was tapped (docs/mentions.md "Antippen").
+    var onMention: (MentionView) -> Void = { _ in }
+    /// Messages of `MessageList.mentions` that were on screen at least half.
+    var onSeen: ([Int64]) -> Void = { _ in }
     /// The newest message became visible (true) or was scrolled away from (false).
     var onBottomChanged: (Bool) -> Void
     /// The list moved more than half its height away from the newest message (true) or came
@@ -73,6 +77,8 @@ struct MessageList: UIViewRepresentable {
     var flashKey: String?
     /// Search words laid on the bubbles.
     var marks: [[Unicode.Scalar]] = []
+    /// Unseen mentions of the user: reported through `onSeen` once on screen at least half.
+    var mentions: [Int64] = []
     /// Changes whenever the chat wants to jump to the newest message (own send).
     let scrollToBottom: Int
     let actions: MessageListActions
@@ -185,7 +191,8 @@ struct MessageList: UIViewRepresentable {
                         unread: parent.unreadKey == m.key ? parent.unreadCount : nil,
                         onRetry: actions.onRetry, onOpenImage: actions.onOpenImage,
                         onShowReactions: actions.onShowReactions,
-                        marks: parent.marks, flash: parent.flashKey == m.key, onQuote: actions.onQuote
+                        marks: parent.marks, flash: parent.flashKey == m.key, onQuote: actions.onQuote,
+                        onMention: actions.onMention
                     )
                     .scaleEffect(x: 1, y: -1)
                 }
@@ -204,10 +211,12 @@ struct MessageList: UIViewRepresentable {
                 || old!.unreadKey != new.unreadKey || old!.unreadCount != new.unreadCount
                 || old!.flashKey != new.flashKey || old!.marks != new.marks
             let newestBefore = rows.first?.key
-            // A window: rows added below the screen must not push it up (flipped, they sit at
-            // the start of the content). The lowest visible row keeps its place on screen.
+            // A window, or scrolled up by the user: rows added below the screen must not push
+            // it up (flipped, they sit at the start of the content). The lowest visible row
+            // keeps its place on screen. Not while scrolling to the newest message.
             let windowed = (old?.window ?? false) || new.window
-            let anchor = changed && windowed && opened ? visibleAnchor() : nil
+            let scrolledUp = !atBottom && !toNewest && new.scrollToBottom == lastScrollRequest
+            let anchor = changed && (windowed || scrolledUp) && opened ? visibleAnchor() : nil
             rows = newRows
             index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.key, $0) })
             if changed {
@@ -240,6 +249,10 @@ struct MessageList: UIViewRepresentable {
                         self.report()
                     }
                 }
+            }
+            if opened, changed || old?.mentions != new.mentions, !new.mentions.isEmpty {
+                // After the layout of the new rows.
+                DispatchQueue.main.async { [weak self] in self?.checkSeen() }
             }
             if !opened, !openQueued, new.openAt != .wait {
                 // After this view update: scrolling reports to SwiftUI state ("Zum Ende springen").
@@ -285,6 +298,22 @@ struct MessageList: UIViewRepresentable {
             let far = view.contentOffset.y > view.bounds.height / 2
             if far != farFromBottom { parent?.actions.onFarChanged(far) }
             farFromBottom = far
+            checkSeen()
+        }
+
+        /// Unseen mentions whose row is on screen at least half (docs/mentions.md "Gesehen");
+        /// only once the list stands where it opened.
+        private func checkSeen() {
+            guard opened, let view, let watch = parent?.mentions, !watch.isEmpty else { return }
+            let screen = view.bounds
+            var seen: [Int64] = []
+            for path in view.indexPathsForVisibleItems where path.item < rows.count {
+                let m = rows[path.item]
+                guard m.status == nil, watch.contains(m.msg.id),
+                      let f = view.layoutAttributesForItem(at: path)?.frame, f.height > 0 else { continue }
+                if f.intersection(screen).height >= min(f.height, screen.height) / 2 { seen.append(m.msg.id) }
+            }
+            if !seen.isEmpty { parent?.actions.onSeen(seen) }
         }
 
         /// The row's top at `top` × the height from the top of the screen, never past the
@@ -370,6 +399,7 @@ struct MessageList: UIViewRepresentable {
             // Roughly 40 messages before the top (~60 pt each).
             if remaining < 2400 { parent?.actions.onNearTop() }
             if parent?.window == true, opened, scrollView.contentOffset.y < 2400 { parent?.actions.onNearBottom() }
+            checkSeen()
             // The date pill follows the user's own scrolling only, never while at the bottom.
             if bottom {
                 if pillUp { parent?.actions.onScrollDate(nil) }

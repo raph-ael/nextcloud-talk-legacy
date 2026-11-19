@@ -30,6 +30,8 @@ struct MessageRow: View {
     var marks: [[Unicode.Scalar]] = []
     var flash = false
     var onQuote: (Int64) -> Void = { _ in }
+    /// A mention of a person was tapped (docs/mentions.md "Antippen").
+    var onMention: (MentionView) -> Void = { _ in }
 
     var body: some View {
         let msg = m.msg
@@ -56,7 +58,8 @@ struct MessageRow: View {
                 Bubble(
                     m: m, first: !continues(prev, m), last: !continues(m, next), isGroup: isGroup,
                     read: read, highlighted: highlighted, onRetry: onRetry, onOpenImage: onOpenImage,
-                    onShowReactions: onShowReactions, marks: marks, flash: flash, onQuote: onQuote
+                    onShowReactions: onShowReactions, marks: marks, flash: flash, onQuote: onQuote,
+                    onMention: onMention
                 )
             }
         }
@@ -104,6 +107,7 @@ struct Bubble: View {
     var marks: [[Unicode.Scalar]] = []
     var flash = false
     var onQuote: (Int64) -> Void = { _ in }
+    var onMention: (MentionView) -> Void = { _ in }
 
     var body: some View {
         let msg = m.msg
@@ -221,7 +225,11 @@ struct Bubble: View {
                     } else if jumbo {
                         Text(msg.text).font(.system(size: 44))
                     } else if !msg.text.isEmpty && place == nil {
-                        Text(SearchText.mark(Markdown.render(msg.text, markdown: msg.markdown), marks))
+                        // Mentions first, so a search hit on one wins (docs/mentions.md "Suche").
+                        let rendered = MentionMarks.mark(
+                            Markdown.render(msg.text, markdown: msg.markdown), msg.mentions, own: own, textColor: textColor
+                        )
+                        Text(SearchText.mark(rendered, marks))
                             .font(.system(size: 15))
                             .lineSpacing(3)
                             .foregroundStyle(textColor)
@@ -229,6 +237,12 @@ struct Bubble: View {
                             .padding(.horizontal, inset)
                             .padding(.top, image ? 6 : 0)
                             .fixedSize(horizontal: false, vertical: true)
+                            .environment(\.openURL, OpenURLAction { url in
+                                guard url.scheme == MentionMarks.scheme else { return .systemAction }
+                                if let mention = MentionMarks.mention(url, in: msg.mentions) { onMention(mention) }
+                                return .handled
+                            })
+                            .modifier(MentionActions(mentions: msg.mentions, onMention: onMention))
                     }
                     if showMeta && !metaOnImage && !metaInVoice {
                         MessageMeta(m: m, own: own, read: read, color: metaColor)
@@ -268,6 +282,26 @@ struct Bubble: View {
         }
         .padding(.top, first ? 8 : 2)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// VoiceOver: every mention of a person as an action "Chat mit {Name} öffnen".
+private struct MentionActions: ViewModifier {
+    let mentions: [MentionView]
+    let onMention: (MentionView) -> Void
+
+    func body(content: Content) -> some View {
+        var seen = Set<String>()
+        let people = mentions.filter { MentionMarks.tappable($0) && seen.insert($0.id).inserted }
+        if people.isEmpty {
+            content
+        } else {
+            content.accessibilityActions {
+                ForEach(people, id: \.id) { m in
+                    Button("Chat mit \(MentionMarks.name(m)) öffnen") { onMention(m) }
+                }
+            }
+        }
     }
 }
 

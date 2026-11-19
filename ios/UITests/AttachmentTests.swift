@@ -116,6 +116,10 @@ final class AttachmentTests: XCTestCase {
         sleep(2)
         shot("03-fixture")
 
+        // The new place is the newest message: back to the end first (the chat may be long
+        // enough that its row is no longer loaded up here).
+        let jump = app.buttons["jump-to-bottom"]
+        if jump.exists { jump.tap(); sleep(1) }
         reveal(bubble)
         bubble.press(forDuration: 0.8)
         XCTAssertTrue(app.buttons["menu:copy"].waitForExistence(timeout: 5), "no Kopieren")

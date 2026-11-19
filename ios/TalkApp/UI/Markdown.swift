@@ -13,6 +13,9 @@ enum Markdown {
     private static let quote = try! NSRegularExpression(pattern: "^\\s*>\\s?(.*)$")
     private static let rule = try! NSRegularExpression(pattern: "^\\s{0,3}([-*_])(\\s*\\1){2,}\\s*$")
 
+    /// The font of code blocks; mentions are not marked in it (docs/mentions.md "Finden").
+    static let codeFont = Font.system(size: 13, design: .monospaced)
+
     static func render(_ text: String, markdown: Bool) -> AttributedString {
         var out = AttributedString()
         if !markdown {
@@ -28,7 +31,7 @@ enum Markdown {
             }
             if inCode {
                 var code = AttributedString(raw)
-                code.font = .system(size: 13, design: .monospaced)
+                code.font = codeFont
                 out += code
             } else if let h = group(heading, raw) {
                 var part = AttributedString()

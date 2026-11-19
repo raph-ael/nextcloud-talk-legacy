@@ -5,21 +5,35 @@ import SwiftUI
 /// a locked recording replaces the whole row.
 /// Editing (docs/chat.md "Bearbeiten und Löschen"): the edit bar takes the reply bar's place,
 /// the field holds the message's text, send becomes a check mark; draft and reply stay put.
+/// Mentions (docs/mentions.md): an `@` brings up the suggestions above the row; the picks
+/// travel beside the text into the draft, the outbox and the edit.
 struct Composer: View {
     let token: String
     @Binding var replyTo: MessageView?
     @Binding var editing: EditTarget?
     @Binding var panelOpen: Bool
-    let onSend: (String) -> Void
+    /// The suggestions are up (back closes them first).
+    @Binding var suggesting: Bool
+    /// Bumps when back closes the suggestions for this `@`.
+    var closeSuggestions = 0
+    let onSend: (String, [MentionPick]) -> Void
     /// Saves the edited text; the caller ends the mode on success.
-    let onSaveEdit: (String) async -> Void
+    let onSaveEdit: (String, [MentionPick]) async -> Void
     let onOpenCamera: () -> Void
     let onVoiceSent: () -> Void
 
     @State private var text = ""
+    @State private var picks: [MentionPick] = []
+    @State private var selection = NSRange(location: 0, length: 0)
+    @State private var caretSerial = 0
     @State private var saving = false
     @State private var drag: CGSize = .zero
-    @FocusState private var focused: Bool
+    @State private var focused = false
+    @State private var trigger: MentionText.Trigger?
+    @State private var candidates: [MentionCandidate] = []
+    @State private var askSerial = 0
+    /// Closed with back for this `@` and search text: stays closed until the text changes.
+    @State private var closedFor: MentionText.Trigger?
 
     private var store: SessionStore { SessionStore.shared }
     private var voice: VoiceManager { store.voice }
@@ -47,21 +61,78 @@ struct Composer: View {
             }
         }
         .background(Talk.background)
-        .onAppear { if editing == nil { text = store.textDraft(token) } }
+        // Over the message list, which does not move (docs/mentions.md "Android und iOS").
+        .overlay(alignment: .top) {
+            if showList {
+                // Its bottom on the top edge of the row.
+                MentionSuggestions(candidates: candidates, token: token, onPick: accept)
+                    .offset(y: -MentionSuggestions.height(candidates.count))
+            }
+        }
+        .onAppear { if editing == nil { load(store.textDraft(token)) } }
         // The edited text never becomes the draft: the draft stays as it was and comes back.
-        .onChange(of: text) { _, t in if editing == nil { store.setTextDraft(token, t) } }
+        .onChange(of: TextDraft(text: text, mentions: picks)) { _, d in if editing == nil { store.setTextDraft(token, d) } }
         .onChange(of: editing) { _, e in
             saving = false
             if let e {
-                text = e.source
+                load(TextDraft(text: e.source, mentions: e.mentions))
                 panelOpen = false
                 Task { @MainActor in focused = true }
             } else {
-                text = store.textDraft(token)
+                load(store.textDraft(token))
             }
         }
         .onChange(of: focused) { _, f in if f { panelOpen = false } }
         .onChange(of: panelOpen) { _, open in if open { focused = false } }
+        .onChange(of: text) { ask() }
+        .onChange(of: selection) { ask() }
+        .onChange(of: showList) { _, up in suggesting = up }
+        .onChange(of: closeSuggestions) { closedFor = trigger }
+        .onDisappear { suggesting = false }
+    }
+
+    /// Visible while there are suggestions and the field has the focus, unless back closed
+    /// them for this search text.
+    private var showList: Bool {
+        !candidates.isEmpty && focused && trigger != nil && trigger != closedFor
+    }
+
+    /// Text and picks into the field, the caret at the end.
+    private func load(_ d: TextDraft) {
+        text = d.text
+        picks = d.mentions
+        selection = NSRange(location: (d.text as NSString).length, length: 0)
+        caretSerial += 1
+    }
+
+    /// On every change of text or caret, without waiting; answers for an older state are dropped.
+    private func ask() {
+        let t = MentionText.trigger(text, selection, picks)
+        trigger = t
+        askSerial += 1
+        guard let t else {
+            candidates = []
+            return
+        }
+        let serial = askSerial
+        Task {
+            let found = await store.mentionCandidates(token, t.query)
+            guard serial == askSerial else { return }
+            candidates = found
+        }
+    }
+
+    /// "Übernehmen" (docs/mentions.md): `@{label} ` in place of the search text, the pick joins.
+    private func accept(_ c: MentionCandidate) {
+        guard let t = trigger else { return }
+        let (new, caret) = MentionText.accept(text, t, caret: selection.location, label: c.label)
+        picks = MentionText.adding(MentionPick(label: c.label, mentionId: c.mentionId), to: picks)
+        text = new
+        selection = NSRange(location: caret, length: 0)
+        caretSerial += 1
+        // Closed for this "@" as after back, until the search text changes: "Lena " would
+        // bring it up again when there is also "Lena Brandt" (docs/mentions.md "Übernehmen").
+        closedFor = MentionText.trigger(new, selection, picks)
     }
 
     private func sent() {
@@ -141,15 +212,8 @@ struct Composer: View {
     }
 
     private var field: some View {
-        TextField("Nachricht", text: $text, axis: .vertical)
-            .lineLimit(1...5)
-            .font(.system(size: 16))
-            .textInputAutocapitalization(.sentences)
-            .focused($focused)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+        ComposerField(text: $text, selection: $selection, focused: $focused, picks: picks, caretSerial: caretSerial)
             .background(Talk.surfaceVariant, in: RoundedRectangle(cornerRadius: 20))
-            .accessibilityIdentifier("composer")
     }
 
     /// Check mark: off while saving, while empty and while unchanged (both trimmed).
@@ -159,7 +223,7 @@ struct Composer: View {
         return Button {
             saving = true
             Task {
-                await onSaveEdit(t)
+                await onSaveEdit(t, picks)
                 saving = false
             }
         } label: {
@@ -189,15 +253,16 @@ struct Composer: View {
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        onSend(t)
-        text = ""
+        onSend(t, picks)
+        load(TextDraft())
     }
 }
 
-/// The message being edited and the text the field starts with (`editSource()`).
+/// The message being edited, the text the field starts with and its mentions (`editSource()`).
 struct EditTarget: Equatable {
     let msg: MessageView
     let source: String
+    let mentions: [MentionPick]
 }
 
 /// Like the reply bar: pencil and "Nachricht bearbeiten" in the accent colour, the old text

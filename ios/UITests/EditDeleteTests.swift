@@ -219,20 +219,22 @@ final class EditDeleteTests: XCTestCase {
         XCTAssertTrue(quote.waitForExistence(timeout: 90), "quote not updated")
         shot("quote-updated")
 
-        // 6. Mention: the field holds the server's notation, and after saving it still does.
+        // 6. Mention: the field shows the name (docs/mentions.md "Bearbeiten"), after saving too.
         let mention = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Hallo' AND label ENDSWITH %@", " \(n)")).firstMatch
         menu(on: mention, "mention")
         app.buttons["menu:edit"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["edit-bar"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "keyboard did not open with the mode")
-        XCTAssertTrue((composer.value as? String ?? "").contains("@\""), "mention not in the server's notation")
+        let shown = composer.value as? String ?? ""
+        XCTAssertTrue(shown.contains("@") && !shown.contains("@\""), "mention not shown by name")
         composer.typeText(" ok")
         app.buttons["save-edit"].tap()
         gone(app.descendants(matching: .any)["edit-bar"].firstMatch, "edit mode ends")
         let mentionEdited = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Hallo' AND label ENDSWITH %@", " \(n) ok")).firstMatch
         menu(on: mentionEdited, "mention edited")
         app.buttons["menu:edit"].tap()
-        XCTAssertTrue((composer.value as? String ?? "").contains("@\""), "mention lost after saving")
+        let again = composer.value as? String ?? ""
+        XCTAssertTrue(again.contains("@") && !again.contains("@\""), "mention lost after saving")
         app.buttons["edit-cancel"].tap()
 
         // 10. Photo: "Bearbeiten" sets the caption (voice message: in the 1:1 below).

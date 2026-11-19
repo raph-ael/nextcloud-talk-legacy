@@ -39,9 +39,21 @@ struct ChatState: Equatable {
     var openAt: Int64?
     /// The window to open with is on its way; the chat's own page stays hidden.
     var opening = false
+    /// Messages that mention the user and were not seen yet, ascending: the "@" button
+    /// (docs/mentions.md "„@“-Knopf im Chat").
+    var mentions: [Int64] = []
+    /// Seen once, never back into `mentions` while the chat is open.
+    var seenMentions: Set<Int64> = []
 
     /// New messages from others that came while the list is a window ("Zum Ende springen").
     var heldUnread: Int { held.filter { !$0.isOwn && $0.kind != .system }.count }
+}
+
+/// What the input field of a chat holds while it is not sent: the text and the mentions
+/// picked for it (docs/mentions.md "Entwurf").
+struct TextDraft: Equatable {
+    var text = ""
+    var mentions: [MentionPick] = []
 }
 
 /// Scroll the open chat to a message and light it up (search hit, quote).
@@ -155,6 +167,9 @@ final class SessionStore {
     @ObservationIgnored private var chatAtBottom = true
     /// The group settings of the active chat are pushed on top of it (docs/groups.md).
     private(set) var groupInfoOpen = false
+    /// The open chat came from a tapped mention in this chat: back leads there
+    /// (docs/mentions.md "Antippen").
+    private(set) var chatBack: String?
     /// Pages pushed on the conversation list while no chat is open: the settings
     /// (docs/settings.md) and group settings opened from the chat menu. Opening a chat
     /// replaces them.
@@ -182,7 +197,7 @@ final class SessionStore {
     /// of the call (`CallController`).
     @ObservationIgnored let callMedia = WebRTCMediaEngine()
     /// Unsent text per account and conversation while the app runs (`textDraft`).
-    @ObservationIgnored private var textDrafts: [String: String] = [:]
+    @ObservationIgnored private var textDrafts: [String: TextDraft] = [:]
     @ObservationIgnored private let noMedia = MediaCache(session: nil)
 
     @ObservationIgnored private(set) lazy var voice = VoiceManager(store: self)
@@ -704,7 +719,7 @@ final class SessionStore {
             Log.push.error("reply: account \(account ?? "-", privacy: .public) not running")
             return
         }
-        _ = rt.session.enqueueText(token: token, text: text, replyTo: nil, referenceId: newReferenceId())
+        _ = rt.session.enqueueText(token: token, text: text, mentions: [], replyTo: nil, referenceId: newReferenceId())
         BackgroundSender.shared.actionQueued(rt.session)
         Notifications.removeChats(account: rt.account.id, legacy: rt.account.dir == Self.legacyDir, tokens: [token])
     }
@@ -819,9 +834,9 @@ final class SessionStore {
         Notifications.setBadge(badges.values.reduce(0) { $0 + Int($1.messages) })
     }
 
-    func textDraft(_ token: String) -> String { textDrafts["\(activeId ?? "")/\(token)"] ?? "" }
+    func textDraft(_ token: String) -> TextDraft { textDrafts["\(activeId ?? "")/\(token)"] ?? TextDraft() }
 
-    func setTextDraft(_ token: String, _ text: String) { textDrafts["\(activeId ?? "")/\(token)"] = text }
+    func setTextDraft(_ token: String, _ draft: TextDraft) { textDrafts["\(activeId ?? "")/\(token)"] = draft }
 
     func refresh() async {
         try? await session?.refreshRooms()
@@ -882,6 +897,9 @@ final class SessionStore {
         case .messagesAdded(let token, let messages):
             guard active else { return }
             media.adoptLocalPreviews(messages)
+            if token == activeToken {
+                updateChat(token) { Self.addMentions(&$0, messages.filter(\.mentionsMe).map(\.id)) }
+            }
             if chats[token]?.hasNewer == true {
                 // A window: appended they would leave a gap. Kept for the end, counted in the button.
                 if token == activeToken { countUnreadInWindow(token, messages) }
@@ -899,6 +917,9 @@ final class SessionStore {
             updateChat(token) { c in
                 c.messages = c.messages.map { m in byId[m.msg.id].map { UiMessage(msg: $0) } ?? m }
                 c.held = c.held.map { byId[$0.id] ?? $0 }
+                let deleted = c.mentions.filter { byId[$0]?.kind == .deleted }
+                c.mentions.removeAll { deleted.contains($0) }
+                c.seenMentions.formUnion(deleted)
             }
         case .readStatus(let token, let lastCommonRead):
             guard active else { return }
@@ -1021,6 +1042,7 @@ final class SessionStore {
         if let previous = activeToken {
             voice.interrupt()
             s.closeChat(token: previous)
+            updateChat(previous) { $0.mentions = []; $0.seenMentions = [] }
         }
         // The snapshot comes first, always: the read marker moves as soon as anything is
         // marked read, and the list may not know the newest message yet. Nothing is read
@@ -1036,6 +1058,9 @@ final class SessionStore {
         // A window left open last time is no base for the cached end.
         var chat = chats[token].flatMap { $0.hasNewer ? nil : $0 } ?? ChatState()
         chat.held = []
+        // A chat starts with the unseen mentions behind the read marker (docs/mentions.md).
+        chat.mentions = cached.unreadMentions.sorted()
+        chat.seenMentions = []
         chat.openAt = messageId
         chat.opening = messageId != nil
         let messages = Self.merge(chat.messages, cached.messages)
@@ -1050,6 +1075,7 @@ final class SessionStore {
         chats[token] = chat
         activeToken = token
         groupInfoOpen = false
+        chatBack = nil
         listPath = []
         voice.loadDraft(token)
         if let id = activeId {
@@ -1066,6 +1092,7 @@ final class SessionStore {
                 let room = self.room(token)
                 updateChat(token) { c in
                     c.lastCommonRead = max(c.lastCommonRead, page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
+                    Self.addMentions(&c, page.unreadMentions)
                     // A window is shown (or on its way): the end comes back with "Zum Ende springen".
                     guard !c.hasNewer else { return }
                     // Outdated cache: drop what was shown (unsent messages stay).
@@ -1133,6 +1160,7 @@ final class SessionStore {
                 c.lastCommonRead = max(c.lastCommonRead, page.lastCommonRead ?? 0)
                 c.loading = false
                 c.opening = false
+                Self.addMentions(&c, page.unreadMentions)
             }
             setFocus(token, messageId)
         } catch {
@@ -1181,6 +1209,7 @@ final class SessionStore {
                 guard serial == aroundSerial, c.hasNewer, c.newestId == after else { return }
                 c.messages = Self.merge(c.messages, page.messages)
                 c.newestId = page.newestId ?? after
+                Self.addMentions(&c, page.unreadMentions)
                 if !page.hasNewer { Self.reachEnd(&c, pending) }
             }
             markVisibleRead(token)
@@ -1227,10 +1256,12 @@ final class SessionStore {
         guard let token = activeToken else { return }
         voice.interrupt()
         session?.closeChat(token: token)
+        updateChat(token) { $0.mentions = []; $0.seenMentions = [] }
         activeToken = nil
         unreadLine = nil
         chatAtBottom = true
         groupInfoOpen = false
+        chatBack = nil
         focus = nil
         aroundSerial += 1
     }
@@ -1318,6 +1349,7 @@ final class SessionStore {
                 c.hasMore = page.hasMore
                 c.oldestId = page.oldestId ?? c.oldestId
                 c.loadingOlder = false
+                Self.addMentions(&c, page.unreadMentions)
             }
             return true
         } catch {
@@ -1327,10 +1359,10 @@ final class SessionStore {
     }
 
     /// Queues a text message in the outbox; it shows up at once and is delivered reliably.
-    func send(_ token: String, text: String, replyTo: MessageView?) {
+    func send(_ token: String, text: String, mentions: [MentionPick], replyTo: MessageView?) {
         guard let s = session else { return }
         clearUnreadLine(token)
-        _ = s.enqueueText(token: token, text: text, replyTo: replyTo?.toReply, referenceId: newReferenceId())
+        _ = s.enqueueText(token: token, text: text, mentions: mentions, replyTo: replyTo?.toReply, referenceId: newReferenceId())
         BackgroundSender.shared.queued()
     }
 
@@ -1345,7 +1377,7 @@ final class SessionStore {
             _ = try s.enqueueFile(
                 token: token, localPath: image.url.path, name: image.name, mime: "image/jpeg",
                 width: Int64(image.width), height: Int64(image.height),
-                caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
+                caption: caption.trimmingCharacters(in: .whitespacesAndNewlines), mentions: [],
                 replyTo: replyTo?.toReply, referenceId: ref
             )
         } catch {
@@ -1378,7 +1410,7 @@ final class SessionStore {
                 _ = try s.enqueueFile(
                     token: token, localPath: st.path, name: f.name, mime: f.mime,
                     width: st.width, height: st.height,
-                    caption: i == files.count - 1 ? text : "",
+                    caption: i == files.count - 1 ? text : "", mentions: [],
                     replyTo: i == 0 ? replyTo?.toReply : nil, referenceId: ref
                 )
             } catch {
@@ -1472,17 +1504,65 @@ final class SessionStore {
 
     // MARK: - Edit and delete (docs/chat.md "Bearbeiten und Löschen")
 
-    /// The text for the input field when editing (mentions as the server wants them back);
-    /// nil: start from `MessageView.text`.
-    func editSource(_ token: String, _ messageId: Int64) async -> String? {
+    /// The text for the input field when editing, with the mentions in it (docs/mentions.md
+    /// "Bearbeiten"); nil: start from `MessageView.text` and `MessageView.mentions`.
+    func editSource(_ token: String, _ messageId: Int64) async -> EditDraft? {
         await session?.editSource(token: token, messageId: messageId)
     }
 
     /// Saves the new text. The new version comes as `MessagesUpdated` before this returns;
     /// the result is the error text to show, nil on success.
-    func editMessage(_ token: String, _ messageId: Int64, _ text: String) async -> String? {
+    func editMessage(_ token: String, _ messageId: Int64, _ text: String, _ mentions: [MentionPick]) async -> String? {
         guard let s = session else { return nil }
-        return await s.editMessage(token: token, messageId: messageId, text: text)
+        return await s.editMessage(token: token, messageId: messageId, text: text, mentions: mentions)
+    }
+
+    // MARK: - Mentions (docs/mentions.md)
+
+    /// Who can be mentioned for the text after the `@`; answers from memory after the first call.
+    func mentionCandidates(_ token: String, _ query: String) async -> [MentionCandidate] {
+        guard let s = session else { return [] }
+        return await s.mentionCandidates(token: token, query: query, limit: 50)
+    }
+
+    /// The 1:1 chat with a person, when there is one already.
+    func existingDirect(_ userId: String) -> String? {
+        session?.existingDirect(userId: userId)
+    }
+
+    /// A tapped mention leads into the 1:1 chat; back leads into the chat it came from.
+    func openFromMention(_ token: String) {
+        let from = activeToken
+        openRoom(token)
+        if let from, from != token { chatBack = from }
+    }
+
+    /// The 1:1 chat with a person, created after asking (docs/mentions.md "Antippen").
+    func openDirectFromMention(_ userId: String) async {
+        guard let s = session else { return }
+        let r = await s.openDirect(userId: userId)
+        guard let token = r.token else {
+            Toast.show(r.error ?? "Hat nicht geklappt")
+            return
+        }
+        openFromMention(token)
+    }
+
+    /// Seen at least half (or jumped to): out of the "@" button's list.
+    func mentionsSeen(_ token: String, _ ids: [Int64]) {
+        guard let chat = chats[token], chat.mentions.contains(where: { ids.contains($0) }) else { return }
+        updateChat(token) { c in
+            c.mentions.removeAll { ids.contains($0) }
+            c.seenMentions.formUnion(ids)
+        }
+    }
+
+    /// `unreadMentions` of every page and the new messages that mention the user, merged;
+    /// a seen one does not come back.
+    private static func addMentions(_ c: inout ChatState, _ ids: [Int64]) {
+        let fresh = ids.filter { !c.seenMentions.contains($0) }
+        guard !fresh.isEmpty else { return }
+        c.mentions = Array(Set(c.mentions).union(fresh)).sorted()
     }
 
     /// Deletes a message for everybody; the bubble follows via `MessagesUpdated`.
