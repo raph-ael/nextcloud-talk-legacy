@@ -108,7 +108,7 @@ Wurde der User erwähnt und hat die Stelle noch nicht gesehen, führt ein Knopf 
 | Quellen | `unreadMentions` der Seiten von `cachedChat` und `openChat` (zusammengeführt), dazu jede Nachricht aus `messagesAdded` mit `mentionsMe`. |
 | Gesehen | Eine id fällt heraus, sobald ihre Blase mindestens zur Hälfte sichtbar war, nach dem Sprung zu ihr, und wenn die Nachricht gelöscht wurde. Beim Verlassen des Chats ist die Liste leer. |
 | Knopf | Rund, Größe und Fläche wie „Zum Ende springen“, direkt darüber mit 8 Abstand. Zeichen „@“. Ab zwei Erwähnungen die Zahl im selben Schild wie der Zähler von „Zum Ende springen“. |
-| Sichtbar | Solange die Liste nicht leer ist. Nicht im Suchmodus. |
+| Sichtbar | Solange die Liste nicht leer ist. Auf Android und iOS nicht im Suchmodus (dort ersetzt die Suchleiste das Eingabefeld). Am Desktop gibt es keinen Suchmodus, der Knopf bleibt auch mit der Marke „in {Chat}“ sichtbar. |
 | Tippen | Springt zur ältesten id der Liste, mit demselben Sprung wie die Suche (docs/search.md „Chat an einer Nachricht öffnen“). Die Blase leuchtet auf. |
 | Lesemarke | Bleibt, wie sie ist: Sie bewegt sich nur am Ende des Chats. |
 
