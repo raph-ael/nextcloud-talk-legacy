@@ -71,6 +71,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.wolkenfunk.app.TalkApplication
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -116,9 +118,12 @@ fun RoomListScreen(
     val focus = remember { FocusRequester() }
 
     // Sections come from the core (filtered, collapsed ones reduced); recomputed on every
-    // RoomsChanged (roomsRev), new search text and another open chat.
-    val sections = remember(state.roomsRev, state.rooms, query, state.activeToken) {
-        sessions.roomSections(query.trim(), state.activeToken)
+    // RoomsChanged (roomsRev), new search text, another open chat and the setting
+    // „Gruppen und Direktchats trennen“.
+    val appearance = (LocalContext.current.applicationContext as TalkApplication).appearance
+    val split = appearance.state.collectAsStateWithLifecycle().value.splitChats
+    val sections = remember(state.roomsRev, state.rooms, query, state.activeToken, split) {
+        sessions.roomSections(query.trim(), state.activeToken, split)
     }
     // Relative times ("5 Min.") need a clock.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }

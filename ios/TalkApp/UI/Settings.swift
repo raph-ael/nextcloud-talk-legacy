@@ -155,6 +155,21 @@ struct AppearanceSettingsView: View {
             } header: {
                 SettingsHeader("Akzentfarbe")
             }
+
+            Section {
+                Toggle(isOn: $appearance.splitChats) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Gruppen und Direktchats trennen")
+                        Text("Eigene Abschnitte statt „Chats“")
+                            .font(.footnote)
+                            .foregroundStyle(Talk.muted)
+                    }
+                }
+                .accessibilityIdentifier("splitChats")
+                .listRowBackground(Talk.groupedRow)
+            } header: {
+                SettingsHeader("Chatliste")
+            }
         }
         .settingsList("Darstellung")
     }

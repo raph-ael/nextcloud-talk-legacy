@@ -2082,9 +2082,12 @@ class SessionManager(private val context: Context) {
 
     fun refresh() = scope.launch { runCatching { session?.refreshRooms() } }
 
-    /** The chat list in sections (docs/categories.md): filtered, collapsed ones already reduced. */
-    fun roomSections(query: String, activeToken: String?): List<SectionView> =
-        session?.roomSections(query, activeToken).orEmpty()
+    /**
+     * The chat list in sections (docs/categories.md): filtered, collapsed ones already reduced.
+     * `split`: „Gruppen“ and „Direktchats“ instead of „Chats“ (the device setting).
+     */
+    fun roomSections(query: String, activeToken: String?, split: Boolean): List<SectionView> =
+        session?.roomSections(query, activeToken, split).orEmpty()
 
     /** Opens or closes a section; the list follows via `RoomsChanged`, an error comes as a toast. */
     fun toggleSection(id: String) {

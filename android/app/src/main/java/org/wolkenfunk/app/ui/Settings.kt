@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -48,6 +49,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -275,6 +277,24 @@ private fun AppearancePage(onBack: () -> Unit) {
                     }
                 }
             }
+        }
+        SectionDivider()
+
+        SectionTitle("Chatliste", Modifier.semantics { heading() })
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 64.dp)
+                .toggleable(value = look.splitChats, role = Role.Switch) { store.setSplitChats(it) }
+                .padding(horizontal = 24.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Gruppen und Direktchats trennen", style = ListType.title)
+                Text("Eigene Abschnitte statt „Chats“", style = ListType.body, color = LocalTalkColors.current.muted)
+            }
+            Spacer(Modifier.width(16.dp))
+            Switch(checked = look.splitChats, onCheckedChange = null)
         }
     }
 }

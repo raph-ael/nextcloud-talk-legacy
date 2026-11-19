@@ -1583,12 +1583,14 @@ final class SessionStore {
 
     // MARK: - Sections (docs/categories.md)
 
-    /// "Favoriten", categories and "Chats" from the core, already filtered and with collapsed
-    /// sections reduced. Reads `roomsEvents` and `activeToken`, so a view using it redraws on
-    /// every `RoomsChanged` (also a toggle) and when another chat opens.
+    /// "Favoriten", categories and "Chats" (or "Gruppen" and "Direktchats") from the core,
+    /// already filtered and with collapsed sections reduced. Reads `roomsEvents`, `activeToken`
+    /// and the setting, so a view using it redraws on every `RoomsChanged` (also a toggle),
+    /// when another chat opens and when the setting changes.
     func sections(_ query: String) -> [SectionView] {
         _ = roomsEvents
-        return session?.roomSections(query: query, activeToken: activeToken) ?? []
+        let split = Appearance.shared.splitChats
+        return session?.roomSections(query: query, activeToken: activeToken, split: split) ?? []
     }
 
     /// Opens or closes a section; the core shows it at once and saves it on the server

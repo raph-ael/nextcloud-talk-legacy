@@ -164,6 +164,52 @@ final class SettingsMenuTests: XCTestCase {
         backToList()
     }
 
+    /// "Gruppen und Direktchats trennen" (docs/categories.md): on by default, "Chats" is split
+    /// into "Gruppen" and "Direktchats"; the switch in "Darstellung" brings "Chats" back at
+    /// once and is switched on again at the end.
+    func testSplitChats() {
+        func head(_ title: String) -> XCUIElement { app.buttons["section:\(title)"] }
+        func scroll(to e: XCUIElement) {
+            for _ in 0..<6 where !(e.exists && e.isHittable) {
+                app.swipeUp()
+                sleep(1)
+            }
+        }
+        let groups = head("Gruppen")
+        scroll(to: groups)
+        XCTAssertTrue(groups.waitForExistence(timeout: 5), "no section Gruppen")
+        scroll(to: head("Direktchats"))
+        XCTAssertTrue(head("Direktchats").exists, "no section Direktchats")
+        XCTAssertFalse(head("Chats").exists)
+        XCTAssertTrue(app.buttons["room:Sophie Neumann"].exists, "1:1 not under Direktchats")
+        shot("getrennt")
+
+        for _ in 0..<3 { app.swipeDown() }
+        openAppearance()
+        let toggle = app.switches["splitChats"].firstMatch
+        for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertEqual(toggle.value as? String, "1")
+        shot("schalter")
+        toggle.switches.firstMatch.tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+        backToList()
+
+        let chats = head("Chats")
+        scroll(to: chats)
+        XCTAssertTrue(chats.waitForExistence(timeout: 5), "Chats not back")
+        XCTAssertFalse(head("Gruppen").exists)
+        shot("zusammen")
+
+        for _ in 0..<3 { app.swipeDown() }
+        openAppearance()
+        for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
+        toggle.switches.firstMatch.tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        backToList()
+        scroll(to: groups)
+        XCTAssertTrue(groups.waitForExistence(timeout: 5))
+    }
+
     func testChatMenu() {
         XCUIDevice.shared.appearance = .light
         // Muted chat: crossed-out bell in the row label.
