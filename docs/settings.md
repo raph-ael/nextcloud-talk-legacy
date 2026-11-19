@@ -117,6 +117,8 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
 
 Die Einstellungen gelten nur für das Gerät. Sie gehören nicht zum Konto und bleiben beim Abmelden erhalten.
 
+Die Ausnahme ist die „Sortierung“: Sie gehört zum Konto und liegt auf dem Server (`docs/categories.md`, „Sortierung“). Die Plattform speichert dafür nichts selbst und liest den Wert über `sortOrder()` vom Kern.
+
 | Plattform | Ort | Schlüssel |
 |---|---|---|
 | Desktop | `settings.json` im Datenordner (Main-Prozess) | `theme`: `system`, `light` oder `dark`; `accent`: Farb-id; `layout`: `bubbles` oder `compact`; `splitChats`: `true`/`false` |

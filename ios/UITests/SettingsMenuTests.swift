@@ -210,6 +210,51 @@ final class SettingsMenuTests: XCTestCase {
         XCTAssertTrue(groups.waitForExistence(timeout: 5))
     }
 
+    /// A collapsed section is empty and its head says what is in it; "Sortierung" orders
+    /// every section by name (docs/categories.md).
+    func testSortAndCollapsedHead() {
+        func head(_ title: String) -> XCUIElement { app.buttons["section:\(title)"] }
+        func until(_ e: XCUIElement, _ format: String, _ arg: String) {
+            wait(for: [expectation(for: NSPredicate(format: format, arg), evaluatedWith: e)], timeout: 10)
+        }
+        let family = head("Familie & Freunde")
+        let lena = app.buttons["room:Lena Hoffmann"]
+        let hilde = app.buttons["room:Hilde Lange"]
+        XCTAssertTrue(family.waitForExistence(timeout: 5), "no section Familie & Freunde")
+        XCTAssertTrue(lena.exists && hilde.exists)
+        XCTAssertEqual(family.label, "Familie & Freunde, Kategorie")
+
+        family.tap()
+        until(family, "value == %@", "eingeklappt")
+        XCTAssertFalse(lena.exists, "a collapsed section shows no chat")
+        XCTAssertFalse(app.buttons["room:Familie"].exists, "also not the unread one")
+        XCTAssertTrue(family.label.hasPrefix("Familie & Freunde, Kategorie, 4 Chats"), family.label)
+        shot("eingeklappt")
+        family.tap()
+        until(family, "value == %@", "ausgeklappt")
+        XCTAssertTrue(lena.waitForExistence(timeout: 5))
+
+        // By activity Lena wrote last; by name Hilde comes first.
+        XCTAssertLessThan(lena.frame.minY, hilde.frame.minY)
+        func choose(_ label: String) {
+            openAppearance()
+            let option = app.buttons[label]
+            for _ in 0..<4 where !(option.exists && option.isHittable) { app.swipeUp() }
+            option.tap()
+            sleep(1)   // the core shows the change with the next `RoomsChanged`
+            XCTAssertTrue(option.isSelected, "\(label) not chosen")
+            shot("sortierung-\(label)")
+            backToList()
+        }
+        choose("Name (A–Z)")
+        XCTAssertTrue(hilde.waitForExistence(timeout: 5))
+        XCTAssertLessThan(hilde.frame.minY, lena.frame.minY, "not sorted by name")
+        shot("nach-name")
+        choose("Letzte Aktivität")
+        XCTAssertTrue(lena.waitForExistence(timeout: 5))
+        XCTAssertLessThan(lena.frame.minY, hilde.frame.minY, "not back to activity")
+    }
+
     func testChatMenu() {
         XCUIDevice.shared.appearance = .light
         // Muted chat: crossed-out bell in the row label.

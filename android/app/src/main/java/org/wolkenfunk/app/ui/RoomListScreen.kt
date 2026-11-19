@@ -84,6 +84,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -362,12 +363,19 @@ private fun SectionHeader(section: SectionView, onToggle: () -> Unit) {
         animationSpec = if (reduceMotion) snap() else tween(150),
         label = "chevron",
     )
-    val hidden = section.total.toInt() - section.rooms.size
+    val total = section.total.toInt()
+    val unread = section.unread.toInt()
     val label = buildString {
         append(section.title)
         if (section.kind == "custom") append(", Kategorie")
-        if (section.collapsed && hidden > 0) append(if (hidden == 1) ", 1 Chat ausgeblendet" else ", $hidden Chats ausgeblendet")
+        if (section.collapsed) {
+            append(if (total == 1) ", 1 Chat" else ", $total Chats")
+            if (unread > 0) append(if (unread == 1) ", 1 ungelesene Nachricht" else ", $unread ungelesene Nachrichten")
+            if (section.unreadMention) append(", Erwähnung")
+            if (section.hasCall) append(", laufender Anruf")
+        }
     }
+    val colors = LocalTalkColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -380,19 +388,35 @@ private fun SectionHeader(section: SectionView, onToggle: () -> Unit) {
             }
             .padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 8.dp),
     ) {
-        Text(
-            section.title,
-            style = ListType.section,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = LocalTalkColors.current.muted,
-            modifier = Modifier.padding(start = 4.dp).size(20.dp).rotate(angle),
-        )
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                section.title,
+                style = ListType.section,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colors.muted,
+                modifier = Modifier.padding(start = 4.dp).size(20.dp).rotate(angle),
+            )
+        }
+        // Collapsed means empty: what is new in it stands here, with the parts of a chat row.
+        if (section.collapsed && (section.hasCall || section.unreadMention || unread > 0)) {
+            Row(
+                Modifier.padding(start = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (section.hasCall) Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF2FB35A)))
+                if (section.unreadMention) Badge("@", colors.accent, top = 0.dp)
+                if (unread > 0) {
+                    Badge(if (unread > 99) "99+" else unread.toString(), if (section.unreadQuiet) mutedBadge() else colors.accent, top = 0.dp)
+                }
+            }
+        }
     }
 }
 
@@ -522,10 +546,10 @@ private fun RoomRow(room: RoomView, sessions: SessionManager, now: Long, onMenu:
 private fun mutedBadge(): Color = if (isDarkTheme()) Color(0xFF5C5C61) else LocalTalkColors.current.muted
 
 @Composable
-private fun Badge(text: String, color: Color) {
+private fun Badge(text: String, color: Color, top: Dp = 2.dp) {
     Box(
         Modifier
-            .padding(top = 2.dp)
+            .padding(top = top)
             .heightIn(min = 22.dp)
             .widthIn(min = 22.dp)
             .clip(RoundedCornerShape(11.dp))

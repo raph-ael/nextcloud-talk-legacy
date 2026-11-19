@@ -242,7 +242,8 @@ private struct RowPressStyle: ButtonStyle {
 }
 
 /// Section head: the title with a small muted chevron that points down while open. The
-/// whole head toggles the section (docs/categories.md); no counts, no lines.
+/// whole head toggles the section (docs/categories.md). Collapsed, the section is empty and
+/// the head shows what is new in it, with the parts of a chat row.
 private struct SectionTitle: View {
     let section: SectionView
     let onToggle: () -> Void
@@ -261,6 +262,13 @@ private struct SectionTitle: View {
                     .rotationEffect(.degrees(section.collapsed ? 0 : 90))
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: section.collapsed)
                 Spacer(minLength: 0)
+                if section.collapsed {
+                    if section.hasCall { Circle().fill(Talk.callDot).frame(width: 8, height: 8) }
+                    if section.unreadMention { Badge(text: "@", top: 0) }
+                    if section.unread > 0 {
+                        Badge(text: section.unread > 99 ? "99+" : "\(section.unread)", quiet: section.unreadQuiet, top: 0)
+                    }
+                }
             }
             .padding(.leading, 8)
             .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
@@ -277,8 +285,13 @@ private struct SectionTitle: View {
 
     private var label: String {
         var l = section.kind == "custom" ? "\(section.title), Kategorie" : section.title
-        let hidden = Int(section.total) - section.rooms.count
-        if section.collapsed && hidden > 0 { l += ", \(hidden) \(hidden == 1 ? "Chat" : "Chats") ausgeblendet" }
+        guard section.collapsed else { return l }
+        l += section.total == 1 ? ", 1 Chat" : ", \(section.total) Chats"
+        if section.unread > 0 {
+            l += section.unread == 1 ? ", 1 ungelesene Nachricht" : ", \(section.unread) ungelesene Nachrichten"
+        }
+        if section.unreadMention { l += ", Erwähnung" }
+        if section.hasCall { l += ", laufender Anruf" }
         return l
     }
 }
@@ -368,6 +381,8 @@ private struct Badge: View {
     let text: String
     /// Grey instead of the accent (muted chats).
     var quiet = false
+    /// A chat row aligns at the top and moves the badge down a little; a section head centres it.
+    var top: CGFloat = 2
 
     var body: some View {
         Text(text)
@@ -376,6 +391,6 @@ private struct Badge: View {
             .padding(.horizontal, 6)
             .frame(minWidth: 22, minHeight: 22)
             .background(quiet ? Talk.muted : Talk.accent, in: Capsule())
-            .padding(.top, 2)
+            .padding(.top, top)
     }
 }

@@ -8,7 +8,7 @@ enum SettingsPage: Hashable {
     @MainActor @ViewBuilder
     func view(store: SessionStore) -> some View {
         switch self {
-        case .appearance: AppearanceSettingsView()
+        case .appearance: AppearanceSettingsView(store: store)
         case .notifications: NotificationSettingsView(store: store)
         case .about: AboutView()
         }
@@ -130,6 +130,7 @@ struct SettingsView: View {
 
 /// "Darstellung": preview, design and accent colour; every change applies at once.
 struct AppearanceSettingsView: View {
+    let store: SessionStore
     @Bindable private var appearance = Appearance.shared
 
     var body: some View {
@@ -169,6 +170,18 @@ struct AppearanceSettingsView: View {
                 .listRowBackground(Talk.groupedRow)
             } header: {
                 SettingsHeader("Chatliste")
+            }
+
+            Section {
+                Picker("Sortierung", selection: Binding(get: { store.sortOrder }, set: { store.setSortOrder($0) })) {
+                    Text("Letzte Aktivität").tag("activity")
+                    Text("Name (A–Z)").tag("alphabetical")
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                .listRowBackground(Talk.groupedRow)
+            } header: {
+                SettingsHeader("Sortierung")
             }
         }
         .settingsList("Darstellung")

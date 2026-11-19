@@ -2083,11 +2083,22 @@ class SessionManager(private val context: Context) {
     fun refresh() = scope.launch { runCatching { session?.refreshRooms() } }
 
     /**
-     * The chat list in sections (docs/categories.md): filtered, collapsed ones already reduced.
+     * The chat list in sections (docs/categories.md): filtered, collapsed ones are empty.
      * `split`: „Gruppen“ and „Direktchats“ instead of „Chats“ (the device setting).
      */
     fun roomSections(query: String, activeToken: String?, split: Boolean): List<SectionView> =
         session?.roomSections(query, activeToken, split).orEmpty()
+
+    /** „Sortierung“ of the shown account (docs/categories.md); read again when `roomsRev` changes. */
+    fun sortOrder(): String = session?.sortOrder() ?: "activity"
+
+    /** `activity` or `alphabetical`; the list follows via `RoomsChanged`, an error comes as a toast. */
+    fun setSortOrder(order: String) {
+        val s = session ?: return
+        scope.launch {
+            s.setSortOrder(order)?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+        }
+    }
 
     /** Opens or closes a section; the list follows via `RoomsChanged`, an error comes as a toast. */
     fun toggleSection(id: String) {

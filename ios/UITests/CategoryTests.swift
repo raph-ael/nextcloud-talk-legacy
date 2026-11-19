@@ -32,8 +32,8 @@ final class CategoryTests: XCTestCase {
         wait(for: [x], timeout: timeout)
     }
 
-    /// Collapse hides the read 1:1, an unread message brings it back while still collapsed,
-    /// opening again shows it as before. The search ignores collapsing.
+    /// Collapse hides the 1:1, also once it is unread: then the head counts it. Opening
+    /// again shows the chat as before. The search ignores collapsing.
     func testCollapseCategory() {
         let head = app.buttons["section:Test iOS Kat"]
         XCTAssertTrue(head.waitForExistence(timeout: 30), "category header missing")
@@ -48,13 +48,13 @@ final class CategoryTests: XCTestCase {
         wait(head, "value == %@", "eingeklappt")
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: room)
         wait(for: [gone], timeout: 10)
-        XCTAssertEqual(head.label, "Test iOS Kat, Kategorie, 1 Chat ausgeblendet")
+        XCTAssertEqual(head.label, "Test iOS Kat, Kategorie, 1 Chat")
         shot("collapsed")
 
-        // Collapsed on the server: the script lets Bot B write, the unread chat shows up.
-        XCTAssertTrue(room.waitForExistence(timeout: 90), "unread chat not shown while collapsed")
+        // Collapsed on the server: the script lets Bot B write, the head counts the message.
+        wait(head, "label == %@", "Test iOS Kat, Kategorie, 1 Chat, 1 ungelesene Nachricht", timeout: 90)
         XCTAssertEqual(head.value as? String, "eingeklappt")
-        XCTAssertEqual(head.label, "Test iOS Kat, Kategorie")
+        XCTAssertFalse(room.exists, "a collapsed section shows no chat")
         shot("collapsed-unread")
 
         // The search shows everything that matches, collapsed or not.

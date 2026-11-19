@@ -109,7 +109,7 @@ fun SettingsScreen(sessions: SessionManager, state: UiState, onBack: () -> Unit,
     ) { p ->
         when (p) {
             null -> SettingsHome(sessions, state, onBack, onAddAccount, onOpen = { page = it })
-            SettingsPage.APPEARANCE -> AppearancePage { page = null }
+            SettingsPage.APPEARANCE -> AppearancePage(sessions, state.roomsRev) { page = null }
             SettingsPage.NOTIFICATIONS -> NotificationsPage(sessions) { page = null }
             SettingsPage.ABOUT -> AboutPage { page = null }
         }
@@ -225,7 +225,7 @@ private fun NavRow(icon: ImageVector, title: String, value: String? = null, onCl
 // --- Darstellung ---------------------------------------------------------------------
 
 @Composable
-private fun AppearancePage(onBack: () -> Unit) {
+private fun AppearancePage(sessions: SessionManager, roomsRev: Int, onBack: () -> Unit) {
     val store = (LocalContext.current.applicationContext as TalkApplication).appearance
     val look by store.state.collectAsStateWithLifecycle()
     val dark = isDarkTheme()
@@ -295,6 +295,28 @@ private fun AppearancePage(onBack: () -> Unit) {
             }
             Spacer(Modifier.width(16.dp))
             Switch(checked = look.splitChats, onCheckedChange = null)
+        }
+
+        // „Sortierung“ lies with the account on the server (docs/categories.md): every
+        // `RoomsChanged` may bring another value, also from another device.
+        val sortOrder = remember(roomsRev) { sessions.sortOrder() }
+        Column(Modifier.selectableGroup().semantics { contentDescription = "Sortierung" }) {
+            SectionTitle("Sortierung", Modifier.semantics { heading() })
+            listOf("activity" to "Letzte Aktivität", "alphabetical" to "Name (A–Z)").forEach { (order, label) ->
+                val selected = sortOrder == order
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .selectable(selected = selected, role = Role.RadioButton) { sessions.setSortOrder(order) }
+                        .padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = selected, onClick = null)
+                    Spacer(Modifier.width(24.dp))
+                    Text(label, style = ListType.title)
+                }
+            }
         }
     }
 }

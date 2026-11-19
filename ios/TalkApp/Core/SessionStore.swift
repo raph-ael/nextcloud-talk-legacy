@@ -1584,13 +1584,26 @@ final class SessionStore {
     // MARK: - Sections (docs/categories.md)
 
     /// "Favoriten", categories and "Chats" (or "Gruppen" and "Direktchats") from the core,
-    /// already filtered and with collapsed sections reduced. Reads `roomsEvents`, `activeToken`
-    /// and the setting, so a view using it redraws on every `RoomsChanged` (also a toggle),
-    /// when another chat opens and when the setting changes.
+    /// already filtered; collapsed sections are empty. Reads `roomsEvents` and the setting,
+    /// so a view using it redraws on every `RoomsChanged` (also a toggle) and when the
+    /// setting changes.
     func sections(_ query: String) -> [SectionView] {
         _ = roomsEvents
         let split = Appearance.shared.splitChats
         return session?.roomSections(query: query, activeToken: activeToken, split: split) ?? []
+    }
+
+    /// "Sortierung" (docs/categories.md): `activity` or `alphabetical`. It lies with the
+    /// account on the server; read with `roomsEvents`, another device may change it.
+    var sortOrder: String {
+        _ = roomsEvents
+        return session?.sortOrder() ?? "activity"
+    }
+
+    /// The core shows the new order at once and takes it back when saving fails (toast).
+    func setSortOrder(_ order: String) {
+        guard let s = session else { return }
+        Task { if let err = await s.setSortOrder(order: order) { Toast.show(err) } }
     }
 
     /// Opens or closes a section; the core shows it at once and saves it on the server
