@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::cache::Cache;
 use crate::call::{CallManager, CallView, MediaEngine, MediaReport, RecordingNotice, Recordings, RoomInfo};
+use crate::mentions::{EditDraft, MentionPick, MentionView};
 use crate::outbox::{Outbox, PendingMessage};
 use crate::search::Index;
 use crate::voice::VoiceStore;
@@ -273,6 +274,11 @@ pub struct MessageView {
     pub editable: bool,
     /// Unix seconds; `None`: no limit.
     pub edit_until: Option<i64>,
+    /// Who the text mentions, in its order; each stands in `text` as its `label`
+    /// (docs/mentions.md). Empty for system and deleted messages.
+    pub mentions: Vec<MentionView>,
+    /// Somebody else mentions the user here (their name or everybody).
+    pub mentions_me: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +324,9 @@ pub struct ChatPage {
     pub has_newer: bool,
     /// Pass to `load_newer`; like `oldest_id` it counts hidden messages too.
     pub newest_id: Option<i64>,
+    /// Messages behind the read marker that mention the user, oldest first: the "@"
+    /// button of the chat (docs/mentions.md). Only from `cached_chat` and `open_chat`.
+    pub unread_mentions: Vec<i64>,
 }
 
 #[derive(Default)]
@@ -378,6 +387,9 @@ pub struct Engine {
     /// Something changed that the index may be missing.
     pub(crate) search_wake: Arc<tokio::sync::Notify>,
     pub(crate) search_task: Mutex<Option<JoinHandle<()>>>,
+    /// Who can be mentioned, per chat, as the server said last (docs/mentions.md).
+    pub(crate) mention_lists: Mutex<HashMap<String, crate::mentions::MentionList>>,
+    pub(crate) mention_load: tokio::sync::Mutex<()>,
     pub(crate) voice: Arc<VoiceStore>,
     pub(crate) calls: CallManager,
     pub(crate) recordings: Recordings,
@@ -438,6 +450,8 @@ impl Engine {
             search: Index::open(data_dir.as_deref()),
             search_wake: Arc::default(),
             search_task: Mutex::default(),
+            mention_lists: Mutex::default(),
+            mention_load: tokio::sync::Mutex::new(()),
             cache,
             calls: CallManager::default(),
             recordings: Recordings::default(),
@@ -991,7 +1005,9 @@ impl Engine {
             return ChatPage::default();
         };
         let (messages, more) = self.cache.messages(token, None, PAGE_SIZE);
-        self.cached_page(messages, more || range.has_more, range.last_common_read)
+        let mut page = self.cached_page(messages, more || range.has_more, range.last_common_read);
+        page.unread_mentions = self.unread_mentions(token);
+        page
     }
 
     /// Brings a chat up to date and starts live updates for it. Returns its newest page.
@@ -1003,6 +1019,7 @@ impl Engine {
     pub async fn open_chat(self: &Arc<Self>, token: &str) -> Result<ChatPage> {
         // Opened right after a pause (from a notification): not on a dead connection.
         self.revive();
+        self.warm_mentions(token);
         let synced = if self.cache.enabled() {
             self.sync_chat(token).await
         } else {
@@ -1013,8 +1030,10 @@ impl Engine {
             })
         };
         match synced {
-            Ok((page, newest)) => {
+            Ok((mut page, newest)) => {
                 self.start_poll(token, newest);
+                self.cache.flush().await;
+                page.unread_mentions = self.unread_mentions(token);
                 Ok(page)
             }
             Err(Error::Unauthorized) => Err(Error::Unauthorized),
@@ -1442,19 +1461,23 @@ impl Engine {
 
     // --- edit and delete (docs/chat.md „Bearbeiten und Löschen“) ---------------------------------
 
-    /// The text of a message as it was written, for the input field: mentions in the
-    /// server's notation, so they are still mentions after saving. `None` when the
-    /// message is not cached (the platform then starts from `MessageView.text`).
-    pub async fn edit_source(&self, token: &str, message_id: i64) -> Option<String> {
+    /// The text of a message for the input field, with its mentions: handed back to
+    /// [`Self::edit_message`] they are still mentions after saving (docs/mentions.md).
+    /// `None` when the message is not cached (the platform then starts from
+    /// `MessageView.text` and `MessageView.mentions` is all it has).
+    pub async fn edit_source(&self, token: &str, message_id: i64) -> Option<EditDraft> {
         self.cache.flush().await;
-        self.cache.message(token, message_id).filter(|m| !m.is_deleted()).map(|m| m.source_text())
+        let m = self.cache.message(token, message_id).filter(|m| !m.is_deleted())?;
+        Some(EditDraft { text: m.caption_text(), mentions: m.mention_picks() })
     }
 
     /// Replaces the text of an own message (the caption of an own file). The new version
     /// arrives as `MessagesUpdated` before this returns; nothing shows before the server
     /// has it. See [`message_error_text`] for the error.
-    pub async fn edit_message(&self, token: &str, message_id: i64, text: &str) -> Result<()> {
-        let text = text.trim();
+    /// `mentions`: what the user picked from the suggestions, and what `edit_source` gave.
+    pub async fn edit_message(&self, token: &str, message_id: i64, text: &str, mentions: &[MentionPick]) -> Result<()> {
+        let text = crate::mentions::wire_text(text.trim(), mentions);
+        let text = text.as_str();
         // Pending messages have no id on the server yet.
         if message_id <= 0 {
             return Err(Error::NotFound);
@@ -1753,6 +1776,7 @@ impl Engine {
             reset: false,
             has_newer: false,
             newest_id: messages.iter().map(|m| m.id).max(),
+            unread_mentions: Vec::new(),
         }
     }
 
@@ -1774,6 +1798,7 @@ impl Engine {
             reset: false,
             has_newer: false,
             newest_id: messages.iter().map(|m| m.id).max(),
+            unread_mentions: Vec::new(),
         }
     }
 
@@ -1793,6 +1818,10 @@ impl Engine {
         let is_own = self.is_own(&m.actor_type, &m.actor_id);
         // On the server, and neither a system message nor deleted.
         let deletable = m.id > 0 && !deleted && !m.is_system();
+        let mentions = match deleted || m.is_system() {
+            true => Vec::new(),
+            false => m.mentions(&self.me.read().unwrap()),
+        };
         MessageView {
             id: m.id,
             token: m.token.clone(),
@@ -1837,6 +1866,8 @@ impl Engine {
                 && m.message_type == "comment"
                 && !m.message_parameters.contains_key("object"),
             edit_until: (!edit_unlimited).then_some(m.timestamp + EDIT_WINDOW_S),
+            mentions_me: !is_own && mentions.iter().any(|x| x.is_self),
+            mentions,
         }
     }
 
@@ -1909,6 +1940,7 @@ impl Engine {
         let members = messages.iter().any(|m| MEMBER_SYSTEM.contains(&m.system_message.as_str()));
         let room = members || messages.iter().any(|m| ROOM_SYSTEM.contains(&m.system_message.as_str()));
         if members {
+            self.mentions_stale(token);
             self.sink.emit(Event::ParticipantsChanged { token: token.to_string() });
         }
         let mut updates = parent_updates(&messages);

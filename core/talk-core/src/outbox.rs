@@ -30,6 +30,7 @@ use crate::client::{PutOutcome, remote_path};
 use crate::engine::{Engine, Event, MessageView, ReplyPreview};
 use crate::error::{Error, Result};
 use crate::contact::ContactCard;
+use crate::mentions::{MentionPick, pick_views, wire_text};
 use crate::models::{FileAttachment, GeoLocation};
 
 /// How long an item is retried before it is marked failed (Signal: one day).
@@ -103,8 +104,11 @@ pub struct OutboxItem {
     /// Unix seconds.
     pub created_at: i64,
     pub expires_at: i64,
-    /// Message text, or the caption of a file.
+    /// Message text, or the caption of a file, as the user sees it (`@Lena Brandt`).
     pub text: String,
+    /// Who the `@Name`s in `text` are (docs/mentions.md).
+    #[serde(default)]
+    pub mentions: Vec<MentionPick>,
     pub reply_to: Option<ReplyPreview>,
     pub file: Option<OutFile>,
     /// A place to share; `text` is then its name.
@@ -271,14 +275,17 @@ impl Outbox {
 impl Engine {
     /// Queues a text message. It shows up as pending at once (`OutboxChanged`) and is
     /// delivered in the background; the returned value is the pending bubble.
+    /// `mentions`: what the user picked from the suggestions; `@Name` in `text` stands
+    /// for each (docs/mentions.md).
     pub fn enqueue_text(
         self: &Arc<Self>,
         token: &str,
         text: &str,
+        mentions: Vec<MentionPick>,
         reply_to: Option<ReplyPreview>,
         reference_id: &str,
     ) -> PendingMessage {
-        self.enqueue(token, text, reply_to, None, None, reference_id)
+        self.enqueue(token, text, mentions, reply_to, None, None, reference_id)
     }
 
     /// Queues a place (WGS 84, degrees) with the name the chat shows for it. Talk has no
@@ -294,7 +301,7 @@ impl Engine {
     ) -> PendingMessage {
         let name: String = name.trim().chars().take(LOCATION_NAME_MAX).collect();
         let location = GeoLocation { latitude, longitude, name: name.clone() };
-        self.enqueue(token, &name, None, None, Some(location), reference_id)
+        self.enqueue(token, &name, Vec::new(), None, None, Some(location), reference_id)
     }
 
     /// Queues a file (with optional caption). The file at `local_path` is moved into the
@@ -309,11 +316,12 @@ impl Engine {
         width: i64,
         height: i64,
         caption: &str,
+        mentions: Vec<MentionPick>,
         reply_to: Option<ReplyPreview>,
         reference_id: &str,
     ) -> Result<PendingMessage> {
         self.enqueue_file_inner(
-            token, local_path, name, mime, width, height, caption, reply_to, reference_id, false,
+            token, local_path, name, mime, width, height, caption, mentions, reply_to, reference_id, false,
         )
     }
 
@@ -333,7 +341,7 @@ impl Engine {
             .and_then(|_| std::fs::write(&fresh, card.vcard()))
             .map_err(|e| Error::LocalFile(format!("{}: {e}", fresh.display())))?;
         self.enqueue_file_inner(
-            token, &fresh.to_string_lossy(), &name, "text/vcard", 0, 0, "", reply_to, reference_id, false,
+            token, &fresh.to_string_lossy(), &name, "text/vcard", 0, 0, "", Vec::new(), reply_to, reference_id, false,
         )
     }
 
@@ -347,6 +355,7 @@ impl Engine {
         width: i64,
         height: i64,
         caption: &str,
+        mentions: Vec<MentionPick>,
         reply_to: Option<ReplyPreview>,
         reference_id: &str,
         voice: bool,
@@ -372,13 +381,15 @@ impl Engine {
             remote: None,
             voice,
         };
-        Ok(self.enqueue(token, caption.trim(), reply_to, Some(file), None, reference_id))
+        Ok(self.enqueue(token, caption.trim(), mentions, reply_to, Some(file), None, reference_id))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn enqueue(
         self: &Arc<Self>,
         token: &str,
         text: &str,
+        mentions: Vec<MentionPick>,
         reply_to: Option<ReplyPreview>,
         file: Option<OutFile>,
         location: Option<GeoLocation>,
@@ -392,6 +403,7 @@ impl Engine {
             created_at: now,
             expires_at: now + LIFESPAN.as_secs() as i64,
             text: text.to_string(),
+            mentions,
             reply_to,
             file,
             location,
@@ -629,10 +641,12 @@ impl Engine {
         }
         self.outbox.update(r, |i| i.post_attempted = true);
         let reply = item.reply_to.as_ref().map(|p| p.id).filter(|id| *id > 0);
+        // Only now the names become what the server reads.
+        let text = wire_text(&item.text, &item.mentions);
         match (&item.file, &item.location) {
             (Some(f), _) => {
                 let remote = f.remote.as_deref().unwrap_or_default();
-                let caption = Some(item.text.as_str()).filter(|t| !t.is_empty());
+                let caption = Some(text.as_str()).filter(|t| !t.is_empty());
                 self.guard(self.client.share_to_room(&item.token, remote, r, caption, reply, f.voice).await)?;
                 self.delivered(r, None);
             }
@@ -641,7 +655,7 @@ impl Engine {
                 self.delivered(r, Some(msg));
             }
             (None, None) => {
-                let msg = self.guard(self.client.send_message(&item.token, &item.text, r, reply).await)?;
+                let msg = self.guard(self.client.send_message(&item.token, &text, r, reply).await)?;
                 self.delivered(r, Some(msg));
             }
         }
@@ -1034,6 +1048,8 @@ impl Engine {
                 deletable: false,
                 editable: false,
                 edit_until: None,
+                mentions: pick_views(&item.text, &item.mentions),
+                mentions_me: false,
             },
             state,
             progress,
@@ -1315,6 +1331,7 @@ mod tests {
             created_at: 1,
             expires_at: 2,
             text: "hi".into(),
+            mentions: Vec::new(),
             reply_to: None,
             file: local.map(|l| OutFile {
                 local: l,

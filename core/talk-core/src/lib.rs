@@ -7,6 +7,7 @@
 //! - [`engine`]: sync engine emitting UI-ready events (shared by all platforms)
 //!
 //! - `cache`: SQLite cache of rooms and messages, avatar/preview files
+//! - [`mentions`]: who can be mentioned, the server's notation for it
 //! - [`search`]: full-text index of the whole history, filled in the background
 //! - [`voice`]: voice messages (MP3 recording, drafts, downloads, waveforms)
 //! - [`call`]: audio calls over the HPB (signaling, call state machine; media via [`MediaEngine`])
@@ -26,6 +27,7 @@ pub mod engine;
 pub mod error;
 pub mod groups;
 pub mod login;
+pub mod mentions;
 pub mod models;
 pub mod notices;
 pub mod outbox;
@@ -52,6 +54,7 @@ pub use engine::{
 pub use categories::{CategoryOp, CategoryView, SectionView, category_error_text};
 pub use error::{Error, Result};
 pub use groups::{GroupOp, MemberView, UserView, group_error_text, square_photo};
+pub use mentions::{EditDraft, MentionCandidate, MentionPick, MentionView, wire_text};
 pub use notices::MessageNotice;
 pub use push::{ChatPushParts, PushMessage, PushRegistration};
 pub use outbox::{OutboxIdle, PendingMessage, PendingState, SendError};

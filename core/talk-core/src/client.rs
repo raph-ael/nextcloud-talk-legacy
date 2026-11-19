@@ -991,6 +991,16 @@ impl TalkClient {
         Ok(self.ocs::<Vec<UserHit>>(rb).await?.0)
     }
 
+    /// Who can be mentioned in a conversation and matches `search` (everybody when empty):
+    /// people, groups, teams, guests and, where allowed, everybody (`source: calls`).
+    /// The server sorts who wrote last first and ignores a limit.
+    pub async fn mention_suggestions(&self, token: &str, search: &str) -> Result<Vec<crate::mentions::MentionSuggestion>> {
+        let rb = self
+            .request(Method::GET, &format!("{SPREED}/v1/chat/{token}/mentions"))
+            .query(&[("search", search), ("includeStatus", "false")]);
+        Ok(self.ocs(rb).await?.0)
+    }
+
     /// Members of a conversation, typed (users, groups, guests …).
     pub async fn members(&self, token: &str) -> Result<Vec<crate::models::Participant>> {
         let rb = self.request(Method::GET, &format!("{SPREED}/v4/room/{token}/participants"));

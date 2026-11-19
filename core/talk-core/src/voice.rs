@@ -681,7 +681,7 @@ impl Engine {
             waveform: draft.waveform.clone(),
         };
         let pending =
-            self.enqueue_file_inner(token, &draft.path, &name, VOICE_MIME, 0, 0, "", reply_to, reference_id, true)?;
+            self.enqueue_file_inner(token, &draft.path, &name, VOICE_MIME, 0, 0, "", Vec::new(), reply_to, reference_id, true)?;
         self.voice.forget(&draft.id);
         if let Some(local) = &pending.local_path {
             self.remember_info(Path::new(local), info);
@@ -700,7 +700,7 @@ impl Engine {
         reference_id: &str,
     ) -> Result<PendingMessage> {
         let mime = if name.to_ascii_lowercase().ends_with(".wav") { "audio/wav" } else { VOICE_MIME };
-        self.enqueue_file_inner(token, local_path, name, mime, 0, 0, "", reply_to, reference_id, true)
+        self.enqueue_file_inner(token, local_path, name, mime, 0, 0, "", Vec::new(), reply_to, reference_id, true)
     }
 
     /// Delivered voice message: keep the local copy as the downloaded file, so playing

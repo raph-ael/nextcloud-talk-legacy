@@ -275,6 +275,8 @@ fn new_room(st: &mut State, kind: u8, name: &str, members: Vec<String>) -> Room 
         kind,
         name: name.into(),
         description: String::new(),
+        groups: Vec::new(),
+        teams: Vec::new(),
         members: members
             .into_iter()
             .enumerate()
@@ -623,7 +625,7 @@ pub async fn chat_post(AxState(app): S, Path(token): Path<String>, p: Params) ->
     if st.room(&token).is_none() {
         return not_found();
     }
-    let (text, params) = st.mentions(&text);
+    let (text, params) = st.mentions(st.room(&token), &text);
     let mut m = st.new_msg(&st.me.clone(), text);
     m.params = params;
     m.reference_id = p.str("referenceId").unwrap_or_default();
@@ -634,6 +636,36 @@ pub async fn chat_post(AxState(app): S, Path(token): Path<String>, p: Params) ->
     let r = st.room(&token).unwrap();
     let data = st.msg_json(r, r.msg(id).unwrap(), true);
     ocs_with_headers(StatusCode::CREATED, data, &chat_headers(None, r.common_read()))
+}
+
+/// `GET /chat/{token}/mentions`: who can be mentioned. Like Talk: the members, who wrote
+/// last first and the user themselves last, then groups and teams, then everybody
+/// (`source: calls`, labelled with the conversation's name; not in a one-to-one chat).
+/// `limit` is ignored, as on a real server.
+pub async fn chat_mentions(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {
+    let st = app.st.lock().unwrap();
+    let Some(r) = st.room(&token) else { return not_found() };
+    let q = p.str("search").unwrap_or_default().to_lowercase();
+    let fits = |label: &str, id: &str| label.to_lowercase().contains(&q) || id.to_lowercase().contains(&q);
+    let wrote = |person: &str| r.messages.iter().rev().find(|m| m.actor == person && m.system.is_empty()).map_or(0, |m| m.id);
+    let mut people: Vec<&str> = r.members.iter().map(|m| m.person.as_str()).collect();
+    people.sort_by_key(|person| (*person == st.me, std::cmp::Reverse(wrote(person))));
+    let mut out: Vec<Value> = people
+        .into_iter()
+        .filter(|person| fits(&st.name_of(person), person))
+        .map(|person| json!({ "id": person, "label": st.name_of(person), "source": "users", "mentionId": person }))
+        .collect();
+    for (list, source, prefix) in [(&r.groups, "groups", "group/"), (&r.teams, "teams", "team/")] {
+        for c in list.iter().filter(|c| fits(&c.name, &c.id)) {
+            let id = format!("{prefix}{}", c.id);
+            out.push(json!({ "id": id, "label": c.name, "source": source, "mentionId": id }));
+        }
+    }
+    if r.kind != 1 && (r.name.to_lowercase().contains(&q) || "all".starts_with(&q) || "here".starts_with(&q)) {
+        let details = format!("All {} participants", r.members.len());
+        out.push(json!({ "id": "all", "label": r.name, "source": "calls", "mentionId": "all", "details": details }));
+    }
+    ocs(Value::Array(out))
 }
 
 /// `POST /chat/{token}/share`: a rich object as a message. Like Talk it wants a name and,
@@ -708,7 +740,7 @@ pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
             m
         }
         None => {
-            let (text, params) = st.mentions(&text);
+            let (text, params) = st.mentions(st.room(&token), &text);
             let mut m = st.new_msg(&from, text);
             m.params = params;
             m
@@ -789,7 +821,7 @@ fn change_message(app: &App, token: &str, id: i64, actor: Option<String>, change
     }
     let system = match &change {
         Change::Edit(text) => {
-            let (text, mut params) = st.mentions(text.trim());
+            let (text, mut params) = st.mentions(st.room(token), text.trim());
             let m = st.room_mut(token).unwrap().messages.iter_mut().find(|m| m.id == id).unwrap();
             // The file and the author of a file message stay; the text is its caption.
             for key in ["actor", "file"] {

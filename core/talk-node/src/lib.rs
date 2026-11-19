@@ -40,6 +40,14 @@ fn cat_err(r: core::Result<()>, op: core::CategoryOp) -> Option<String> {
     r.err().map(|e| core::category_error_text(op, &e))
 }
 
+/// `MentionPick[]` from the renderer (`null`: none).
+fn mention_picks(v: Option<Value>) -> Result<Vec<core::MentionPick>> {
+    match v {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(v) => serde_json::from_value(v).map_err(|e| napi::Error::from_reason(format!("mentions: {e}"))),
+    }
+}
+
 fn reply_preview(v: Option<Value>) -> Result<Option<core::ReplyPreview>> {
     match v {
         None | Some(Value::Null) => Ok(None),
@@ -374,22 +382,48 @@ impl TalkSession {
     // --- edit and delete (docs/chat.md „Bearbeiten und Löschen“) ------------------------
 
     /// The text of a message for the input field when editing it (mentions as the server
-    /// wants them back). `null`: start from `MessageView.text`.
+    /// `EditDraft | null` (`{ text, mentions }`): the text of a message for the input
+    /// field, with its mentions (hand them back to `editMessage`). `null`: start from
+    /// `MessageView.text`.
+    #[napi(ts_return_type = "Promise<any>")]
+    pub async fn edit_source(&self, token: String, message_id: i64) -> Result<Value> {
+        json(&self.engine.edit_source(&token, message_id).await)
+    }
+
+    /// `MentionCandidate[]`: who can be mentioned in a chat, for what was typed after the
+    /// `@` (empty: everybody). The first call of a chat asks the server, later ones
+    /// answer from memory. Empty in a one-to-one chat (docs/mentions.md).
+    #[napi(ts_return_type = "Promise<any[]>")]
+    pub async fn mention_candidates(&self, token: String, query: String, limit: u32) -> Result<Value> {
+        json(&self.engine.mention_candidates(&token, &query, limit).await)
+    }
+
+    /// The token of the one-to-one chat with a person when there is one already;
+    /// `openDirect` creates it.
     #[napi]
-    pub async fn edit_source(&self, token: String, message_id: i64) -> Option<String> {
-        self.engine.edit_source(&token, message_id).await
+    pub fn existing_direct(&self, user_id: String) -> Option<String> {
+        self.engine.existing_direct(&user_id)
     }
 
     /// Replaces the text of an own message, or the caption of an own file. The new version
     /// arrives as `messagesUpdated` before this resolves: to a short German error text to
     /// show, or `null` on success.
+    /// `mentions`: `MentionPick[]`, what `editSource` gave and what the user picked since.
     #[napi]
-    pub async fn edit_message(&self, token: String, message_id: i64, text: String) -> Option<String> {
-        self.engine
-            .edit_message(&token, message_id, &text)
+    pub async fn edit_message(
+        &self,
+        token: String,
+        message_id: i64,
+        text: String,
+        #[napi(ts_arg_type = "any")] mentions: Option<Value>,
+    ) -> Result<Option<String>> {
+        let mentions = mention_picks(mentions)?;
+        Ok(self
+            .engine
+            .edit_message(&token, message_id, &text, &mentions)
             .await
             .err()
-            .map(|e| core::message_error_text(core::MessageOp::Edit, &e))
+            .map(|e| core::message_error_text(core::MessageOp::Edit, &e)))
     }
 
     /// Deletes a message for everybody. Resolves to a short German error text to show, or
@@ -605,11 +639,13 @@ impl TalkSession {
         &self,
         token: String,
         text: String,
+        #[napi(ts_arg_type = "any")] mentions: Option<Value>,
         #[napi(ts_arg_type = "any")] reply_to: Option<Value>,
         reference_id: String,
     ) -> Result<Value> {
         let reply = reply_preview(reply_to)?;
-        json(&self.engine.enqueue_text(&token, &text, reply, &reference_id))
+        let mentions = mention_picks(mentions)?;
+        json(&self.engine.enqueue_text(&token, &text, mentions, reply, &reference_id))
     }
 
     /// Queues a file. `localPath` is moved into the outbox; don't use it afterwards.
@@ -624,10 +660,12 @@ impl TalkSession {
         width: i64,
         height: i64,
         caption: String,
+        #[napi(ts_arg_type = "any")] mentions: Option<Value>,
         #[napi(ts_arg_type = "any")] reply_to: Option<Value>,
         reference_id: String,
     ) -> Result<Value> {
         let reply = reply_preview(reply_to)?;
+        let mentions = mention_picks(mentions)?;
         let p = self
             .engine
             .enqueue_file(
@@ -638,6 +676,7 @@ impl TalkSession {
                 width,
                 height,
                 &caption,
+                mentions,
                 reply,
                 &reference_id,
             )

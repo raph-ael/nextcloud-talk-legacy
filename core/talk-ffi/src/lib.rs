@@ -682,6 +682,80 @@ pub struct MessageView {
     pub editable: bool,
     /// Unix seconds; `None`: no limit.
     pub edit_until: Option<i64>,
+    /// Who the text mentions, in its order; each stands in `text` as its `label`
+    /// (docs/mentions.md).
+    pub mentions: Vec<MentionView>,
+    /// Somebody else mentions the user here (their name or everybody).
+    pub mentions_me: bool,
+}
+
+/// A mention the user picked from the suggestions: `@{label}` in the text stands for it.
+#[derive(uniffi::Record, Clone)]
+pub struct MentionPick {
+    /// The display name, without the `@`.
+    pub label: String,
+    pub mention_id: String,
+}
+
+impl From<MentionPick> for core::MentionPick {
+    fn from(p: MentionPick) -> Self {
+        Self { label: p.label, mention_id: p.mention_id }
+    }
+}
+
+impl From<core::MentionPick> for MentionPick {
+    fn from(p: core::MentionPick) -> Self {
+        Self { label: p.label, mention_id: p.mention_id }
+    }
+}
+
+fn picks(mentions: Vec<MentionPick>) -> Vec<core::MentionPick> {
+    mentions.into_iter().map(Into::into).collect()
+}
+
+/// A mention in a message; `label` ("@Lena Brandt") is how it stands in the text.
+#[derive(uniffi::Record, Clone)]
+pub struct MentionView {
+    pub label: String,
+    /// `user`, `group`, `team`, `guest`, `email`, `federated` or `all`.
+    pub kind: String,
+    /// The user id for `user`, else the mention id.
+    pub id: String,
+    /// It means the user of this app: their name, or everybody.
+    pub is_self: bool,
+}
+
+impl From<core::MentionView> for MentionView {
+    fn from(m: core::MentionView) -> Self {
+        Self { label: m.label, kind: m.kind.to_string(), id: m.id, is_self: m.is_self }
+    }
+}
+
+/// One row of the suggestions after an `@` (docs/mentions.md).
+#[derive(uniffi::Record, Clone)]
+pub struct MentionCandidate {
+    pub mention_id: String,
+    /// The display name, without the `@`.
+    pub label: String,
+    /// Like `MentionView.kind`.
+    pub kind: String,
+    /// For `user`: whose picture the row shows.
+    pub user_id: Option<String>,
+    /// Second line; empty for people.
+    pub subline: String,
+}
+
+impl From<core::MentionCandidate> for MentionCandidate {
+    fn from(c: core::MentionCandidate) -> Self {
+        Self { mention_id: c.mention_id, label: c.label, kind: c.kind.to_string(), user_id: c.user_id, subline: c.subline }
+    }
+}
+
+/// A message's text for the input field, with its mentions.
+#[derive(uniffi::Record)]
+pub struct EditDraft {
+    pub text: String,
+    pub mentions: Vec<MentionPick>,
 }
 
 impl From<core::MessageView> for MessageView {
@@ -719,6 +793,8 @@ impl From<core::MessageView> for MessageView {
             deletable: m.deletable,
             editable: m.editable,
             edit_until: m.edit_until,
+            mentions: m.mentions.into_iter().map(Into::into).collect(),
+            mentions_me: m.mentions_me,
         }
     }
 }
@@ -736,6 +812,9 @@ pub struct ChatPage {
     pub has_newer: bool,
     /// Pass to `load_newer`.
     pub newest_id: Option<i64>,
+    /// Messages behind the read marker that mention the user, oldest first: the "@"
+    /// button (docs/mentions.md). Only from `cached_chat` and `open_chat`.
+    pub unread_mentions: Vec<i64>,
 }
 
 /// A piece of a search snippet; `hit` marks a search word.
@@ -815,6 +894,7 @@ impl From<core::ChatPage> for ChatPage {
             reset: p.reset,
             has_newer: p.has_newer,
             newest_id: p.newest_id,
+            unread_mentions: p.unread_mentions,
         }
     }
 }
@@ -1161,18 +1241,39 @@ impl TalkSession {
             .map(|e| core::reaction_error_text(&e))
     }
 
-    /// The text of a message for the input field when editing it (mentions as the server
-    /// wants them back). `None`: start from `MessageView.text`.
-    pub async fn edit_source(&self, token: String, message_id: i64) -> Option<String> {
-        self.engine.edit_source(&token, message_id).await
+    /// The text of a message for the input field when editing it, with its mentions
+    /// (hand them back to `edit_message`). `None`: start from `MessageView.text`.
+    pub async fn edit_source(&self, token: String, message_id: i64) -> Option<EditDraft> {
+        let draft = self.engine.edit_source(&token, message_id).await?;
+        Some(EditDraft { text: draft.text, mentions: draft.mentions.into_iter().map(Into::into).collect() })
+    }
+
+    /// Who can be mentioned in a chat, for what was typed after the `@` (empty:
+    /// everybody). The first call of a chat asks the server, later ones answer from
+    /// memory. Empty in a one-to-one chat and without a match (docs/mentions.md).
+    pub async fn mention_candidates(&self, token: String, query: String, limit: u32) -> Vec<MentionCandidate> {
+        self.engine.mention_candidates(&token, &query, limit).await.into_iter().map(Into::into).collect()
+    }
+
+    /// The one-to-one chat with a person when there is one already; `open_direct`
+    /// creates it.
+    pub fn existing_direct(&self, user_id: String) -> Option<String> {
+        self.engine.existing_direct(&user_id)
     }
 
     /// Replaces the text of an own message, or the caption of an own file. The new version
     /// arrives as `MessagesUpdated` before this returns. Returns a short German error
     /// text to show, or `None` on success (docs/chat.md „Bearbeiten und Löschen“).
-    pub async fn edit_message(&self, token: String, message_id: i64, text: String) -> Option<String> {
+    /// `mentions`: what `edit_source` gave and what the user picked since.
+    pub async fn edit_message(
+        &self,
+        token: String,
+        message_id: i64,
+        text: String,
+        mentions: Vec<MentionPick>,
+    ) -> Option<String> {
         self.engine
-            .edit_message(&token, message_id, &text)
+            .edit_message(&token, message_id, &text, &picks(mentions))
             .await
             .err()
             .map(|e| core::message_error_text(core::MessageOp::Edit, &e))
@@ -1373,16 +1474,18 @@ impl TalkSession {
     // --- outbox: reliable sending ---------------------------------------------------
 
     /// Queues a text message; delivered in the background (retried, survives restarts).
-    /// The pending bubble also arrives as `OutboxChanged`.
+    /// The pending bubble also arrives as `OutboxChanged`. `mentions`: what the user
+    /// picked from the suggestions (docs/mentions.md).
     pub fn enqueue_text(
         &self,
         token: String,
         text: String,
+        mentions: Vec<MentionPick>,
         reply_to: Option<ReplyPreview>,
         reference_id: String,
     ) -> PendingMessage {
         self.engine
-            .enqueue_text(&token, &text, reply_to.map(Into::into), &reference_id)
+            .enqueue_text(&token, &text, picks(mentions), reply_to.map(Into::into), &reference_id)
             .into()
     }
 
@@ -1397,6 +1500,7 @@ impl TalkSession {
         width: i64,
         height: i64,
         caption: String,
+        mentions: Vec<MentionPick>,
         reply_to: Option<ReplyPreview>,
         reference_id: String,
     ) -> Result<PendingMessage, CoreError> {
@@ -1410,6 +1514,7 @@ impl TalkSession {
                 width,
                 height,
                 &caption,
+                picks(mentions),
                 reply_to.map(Into::into),
                 &reference_id,
             )?

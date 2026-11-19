@@ -143,6 +143,15 @@ enum Cmd {
         #[arg(long)]
         exclude: Option<String>,
     },
+    /// Who can be mentioned in a conversation, like the apps (docs/mentions.md)
+    Mentions {
+        token: String,
+        /// What was typed after the "@" (everybody without it)
+        query: Option<String>,
+        /// Send this text: every "@Name" of somebody who can be mentioned becomes a mention
+        #[arg(long)]
+        send: Option<String>,
+    },
     /// Groups like the apps (docs/groups.md)
     Group {
         #[command(subcommand)]
@@ -456,7 +465,7 @@ async fn main() -> Result<()> {
         let failed = match &cli.cmd {
             Cmd::Edit { id, text, .. } => {
                 eprintln!("vorher: {:?}", engine.edit_source(token, *id).await);
-                engine.edit_message(token, *id, text).await.err().map(|e| (talk_core::MessageOp::Edit, e))
+                engine.edit_message(token, *id, text, &[]).await.err().map(|e| (talk_core::MessageOp::Edit, e))
             }
             Cmd::DeleteMessage { id, .. } => {
                 engine.delete_message(token, *id).await.err().map(|e| (talk_core::MessageOp::Delete, e))
@@ -505,6 +514,37 @@ async fn main() -> Result<()> {
         eprintln!("{} Nutzer", list.len());
         return Ok(());
     }
+    if let Cmd::Mentions { token, query, send } = &cli.cmd {
+        let engine = Engine::new(client, Arc::new(talk_core_null_sink()), None);
+        engine.start().await?;
+        let t = Instant::now();
+        let list = engine.mention_candidates(token, query.as_deref().unwrap_or(""), 50).await;
+        let first = t.elapsed();
+        let t = Instant::now();
+        let again = engine.mention_candidates(token, query.as_deref().unwrap_or(""), 50).await.len();
+        for c in &list {
+            let subline = if c.subline.is_empty() { String::new() } else { format!(" · {}", c.subline) };
+            println!("{:<10} {:<32} @{}{subline}", c.kind, c.mention_id, c.label);
+        }
+        eprintln!("{} Vorschläge, zuerst {first:?}, danach {:?} ({again})", list.len(), t.elapsed());
+        if let Some(text) = send {
+            let all = engine.mention_candidates(token, "", 500).await;
+            let picks: Vec<talk_core::MentionPick> = all
+                .into_iter()
+                .map(|c| talk_core::MentionPick { label: c.label, mention_id: c.mention_id })
+                .collect();
+            let wire = talk_core::wire_text(text, &picks);
+            eprintln!("an den Server: {wire}");
+            let msg = engine.client().send_message(token, &wire, &new_reference_id(), None).await?;
+            let view = engine.view(&msg);
+            eprintln!("gesendet: id={} {:?}", msg.id, view.text);
+            for m in &view.mentions {
+                eprintln!("  {} ({}, {}){}", m.label, m.kind, m.id, if m.is_self { " – ich" } else { "" });
+            }
+        }
+        engine.shutdown();
+        return Ok(());
+    }
     if let Cmd::Group { op } = &cli.cmd {
         return group_cmd(client, op).await;
     }
@@ -551,7 +591,7 @@ async fn main() -> Result<()> {
         | Cmd::VoiceDraft { .. }
         | Cmd::AudioInfo { .. }
         | Cmd::Fetch { .. }
-        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Group { .. }
+        | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Mentions { .. } | Cmd::Group { .. }
         | Cmd::Edit { .. } | Cmd::DeleteMessage { .. } | Cmd::Changes { .. }
         | Cmd::Sections { .. } | Cmd::Category { .. } => {
             unreachable!()
@@ -1133,13 +1173,14 @@ async fn run_outbox(cli: &Cli, client: TalkClient) -> Result<()> {
                         0,
                         0,
                         &text,
+                        Vec::new(),
                         None,
                         &new_reference_id(),
                     )?;
                 }
             }
             None if !text.is_empty() => {
-                engine.enqueue_text(token, &text, None, &new_reference_id());
+                engine.enqueue_text(token, &text, Vec::new(), None, &new_reference_id());
             }
             None => bail!("--text oder --file angeben"),
         }

@@ -72,11 +72,21 @@ impl Msg {
         !HIDDEN.contains(&self.system.as_str())
     }
 
+    /// Mentions `user` by name.
     fn mentions(&self, user: &str) -> bool {
         self.params
             .values()
             .any(|p| p["type"] == "user" && p["id"] == user && p.get("mention-id").is_some())
     }
+}
+
+/// A group or team that can be mentioned in a conversation (not shown as a member).
+#[derive(Clone, Deserialize)]
+pub struct Circle {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub members: Vec<String>,
 }
 
 pub struct Member {
@@ -94,6 +104,9 @@ pub struct Room {
     pub name: String,
     pub description: String,
     pub members: Vec<Member>,
+    /// Groups and teams to mention (`@"group/id"`, `@"team/id"`).
+    pub groups: Vec<Circle>,
+    pub teams: Vec<Circle>,
     pub favorite: bool,
     pub archived: bool,
     pub notification_level: u8,
@@ -115,6 +128,18 @@ pub struct Room {
 impl Room {
     pub fn is_member(&self, person: &str) -> bool {
         self.members.iter().any(|m| m.person == person)
+    }
+
+    /// Like Talk's `unreadMention`: by name, everybody, or a group or team `user` is in.
+    pub fn mentions(&self, m: &Msg, user: &str) -> bool {
+        let within = |list: &[Circle], id: &Value| list.iter().any(|c| *id == c.id && c.members.iter().any(|p| p == user));
+        m.mentions(user)
+            || m.params.iter().filter(|(k, _)| k.starts_with("mention-")).any(|(_, p)| match p["type"].as_str() {
+                Some("call") => true,
+                Some("user-group") => within(&self.groups, &p["id"]),
+                Some("circle") => within(&self.teams, &p["id"]),
+                _ => false,
+            })
     }
 
     pub fn touch(&mut self) {
@@ -246,6 +271,11 @@ struct RoomFx {
     owner: Option<String>,
     #[serde(default)]
     members: Vec<String>,
+    /// To mention: `{ "id", "name", "members" }`; not shown among the members.
+    #[serde(default)]
+    groups: Vec<Circle>,
+    #[serde(default)]
+    teams: Vec<Circle>,
     #[serde(default)]
     favorite: bool,
     /// 0 server default, 1 always, 2 mentions only, 3 off ("Aus" in the chat list).
@@ -523,6 +553,8 @@ impl State {
             name,
             description: fx.description.clone(),
             members,
+            groups: fx.groups.clone(),
+            teams: fx.teams.clone(),
             favorite: fx.favorite,
             archived: fx.archived,
             notification_level: fx.notify,
@@ -631,7 +663,7 @@ impl State {
                 msg.text = "{object}".into();
             } else {
                 let text = m.text.clone().ok_or("Nachricht ohne text, file oder system")?;
-                let (text, params) = self.mentions(&text);
+                let (text, params) = self.mentions(Some(&room), &text);
                 msg.text = text;
                 msg.params = params;
             }
@@ -738,11 +770,13 @@ impl State {
         p
     }
 
-    /// `@id` or `@"id"` of a known person → `{mention-userN}` with its rich object parameter.
-    pub fn mentions(&self, text: &str) -> (String, Map<String, Value>) {
+    /// `@id` or `@"id"` → `{mention-…N}` with its rich object parameter: a known person,
+    /// and in a group `all`, `group/<id>` and `team/<id>` of that conversation.
+    pub fn mentions(&self, room: Option<&Room>, text: &str) -> (String, Map<String, Value>) {
         let mut params = Map::new();
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
+        let group = room.filter(|r| r.kind != 1);
         while let Some(pos) = rest.find('@') {
             out.push_str(&rest[..pos]);
             let after = &rest[pos + 1..];
@@ -751,14 +785,36 @@ impl State {
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
                 .unwrap_or(after.len());
             let id = quoted.unwrap_or_else(|| after[..len].trim_end_matches('.'));
-            match self.person(id) {
-                Some(p) if !id.is_empty() => {
-                    let key = format!("mention-user{}", params.len() + 1);
-                    params.insert(key.clone(), json!({ "type": "user", "id": p.id, "name": p.name, "mention-id": p.id }));
+            let circle = |list: &[Circle], prefix: &str| {
+                id.strip_prefix(prefix).and_then(|i| list.iter().find(|c| c.id == i)).cloned()
+            };
+            let found = if id.is_empty() {
+                None
+            } else if let Some(p) = self.person(id) {
+                Some(("mention-user", json!({ "type": "user", "id": p.id, "name": p.name, "mention-id": p.id })))
+            } else if let Some(r) = group.filter(|_| id == "all") {
+                let call = json!({ "type": "call", "id": r.token, "name": r.name, "call-type": "group", "mention-id": "all" });
+                Some(("mention-call", call))
+            } else if let Some(c) = group.and_then(|r| circle(&r.groups, "group/")) {
+                Some(("mention-group", json!({ "type": "user-group", "id": c.id, "name": c.name, "mention-id": id })))
+            } else if let Some(c) = group.and_then(|r| circle(&r.teams, "team/")) {
+                Some(("mention-team", json!({ "type": "circle", "id": c.id, "name": c.name, "link": "", "mention-id": id })))
+            } else {
+                None
+            };
+            match found {
+                Some((prefix, param)) => {
+                    // Like Talk: the same mention again shares its parameter.
+                    let known = params.iter().find(|(k, v)| k.starts_with(prefix) && **v == param).map(|(k, _)| k.clone());
+                    let key = known.unwrap_or_else(|| {
+                        let n = params.keys().filter(|k| k.starts_with(prefix)).count() + 1;
+                        format!("{prefix}{n}")
+                    });
+                    params.insert(key.clone(), param);
                     out.push_str(&format!("{{{key}}}"));
                     rest = &after[id.len() + if quoted.is_some() { 2 } else { 0 }..];
                 }
-                _ => {
+                None => {
                     out.push('@');
                     rest = after;
                 }
@@ -844,7 +900,8 @@ impl State {
             .iter()
             .filter(|m| m.id > r.last_read && m.actor != self.me && m.system.is_empty())
             .collect();
-        let mention = unread.iter().any(|m| m.mentions(&self.me));
+        let mention = unread.iter().any(|m| r.mentions(m, &self.me));
+        let mention_direct = unread.iter().any(|m| m.mentions(&self.me));
         let last = visible.last();
         let (name, display) = if r.kind == 1 {
             let other = r.members.iter().find(|m| m.person != self.me).map(|m| m.person.clone()).unwrap_or_default();
@@ -885,7 +942,7 @@ impl State {
             "canEnableSIP": false,
             "unreadMessages": unread.len(),
             "unreadMention": mention,
-            "unreadMentionDirect": mention,
+            "unreadMentionDirect": mention_direct,
             "lastReadMessage": r.last_read,
             "lastCommonReadMessage": r.common_read(),
             "lastMessage": last.map_or(json!([]), |m| self.msg_json(r, m, false)),
@@ -1024,8 +1081,19 @@ mod tests {
     #[test]
     fn mention_parsing() {
         let st = crate::tests::state();
-        let (text, params) = st.mentions("@mira schau mal, @niemand");
+        let (text, params) = st.mentions(None, "@mira schau mal, @niemand");
         assert_eq!(text, "{mention-user1} schau mal, @niemand");
         assert_eq!(params["mention-user1"]["id"], "mira");
+        // Everybody, groups and teams only where the conversation has them.
+        let (text, _) = st.mentions(None, "@all @\"group/helfer kreis\"");
+        assert_eq!(text, "@all @\"group/helfer kreis\"");
+        let fest = st.room("sommerfest").unwrap();
+        let (text, params) = st.mentions(Some(fest), "@all, @\"group/helfer kreis\" und @\"team/orga\": @lena, @\"lena\" @\"group/fremd\"");
+        assert_eq!(text, "{mention-call1}, {mention-group1} und {mention-team1}: {mention-user1}, {mention-user1} @\"group/fremd\"");
+        assert_eq!(params["mention-call1"]["mention-id"], "all");
+        assert_eq!(params["mention-group1"]["id"], "helfer kreis");
+        assert_eq!(params["mention-team1"]["type"], "circle");
+        let one = st.room("lena").unwrap();
+        assert_eq!(st.mentions(Some(one), "@all").0, "@all");
     }
 }

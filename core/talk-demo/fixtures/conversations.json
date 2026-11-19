@@ -1,5 +1,5 @@
 {
-  "_hinweis": "Demo-Inhalte (alles erfunden). Zeiten: \"at\": \"-2 18:30\" = vor 2 Tagen um 18:30 Ortszeit, \"-45m\" / \"-3h\" = so lange vor dem Serverstart. Pro Unterhaltung aufsteigend sortieren. \"from\": Personen-id aus people.json. \"@id\" im Text wird zur Erwähnung. \"unread\": die letzten N Nachrichten der anderen sind ungelesen. \"reply\": \"key\" einer früheren Nachricht. \"file\": Bild oder Sprachnachricht aus media/. \"system\": conversation_created | user_added (mit \"user\") oder eigener \"text\".",
+  "_hinweis": "Demo-Inhalte (alles erfunden). Zeiten: \"at\": \"-2 18:30\" = vor 2 Tagen um 18:30 Ortszeit, \"-45m\" / \"-3h\" = so lange vor dem Serverstart. Pro Unterhaltung aufsteigend sortieren. \"from\": Personen-id aus people.json. \"@id\" im Text wird zur Erwähnung, in Gruppen auch \"@all\", \"@\\\"group/id\\\"\" und \"@\\\"team/id\\\"\" (\"groups\"/\"teams\" der Unterhaltung: id, name, members). \"unread\": die letzten N Nachrichten der anderen sind ungelesen. \"reply\": \"key\" einer früheren Nachricht. \"file\": Bild oder Sprachnachricht aus media/. \"system\": conversation_created | user_added (mit \"user\") oder eigener \"text\".",
   "categories": [
     { "id": "3", "name": "Familie & Freunde", "rooms": ["familie", "hilde", "paul", "lena"] },
     { "id": "4", "name": "Arbeit", "rooms": ["website", "tobias", "sophie"] }
@@ -164,6 +164,8 @@
       "avatar": "avatars/sommerfest.png",
       "owner": "lena",
       "members": ["lena", "mira", "paul", "jonas", "tobias", "sophie"],
+      "groups": [{ "id": "helfer kreis", "name": "Helferkreis", "members": ["mira", "paul"] }],
+      "teams": [{ "id": "orga", "name": "Orga-Team", "members": ["lena", "jonas"] }],
       "messages": [
         { "at": "-12 18:00", "from": "lena", "system": "conversation_created" },
         { "at": "-12 18:02", "from": "lena", "text": "Wer hat Lust, ein kleines Nachbarschaftsfest zu organisieren? 🎈" },
@@ -171,6 +173,9 @@
         { "at": "-12 18:20", "from": "paul", "text": "Ich bringe Musik mit 🎶" },
         { "at": "-12 18:26", "from": "jonas", "location": { "lat": 52.5283, "lon": 13.4356, "name": "Volkspark Friedrichshain, Berlin" } },
         { "at": "-12 18:31", "from": "jonas", "file": { "asset": "media/kontakt.vcf", "name": "Karla Brandt.vcf" } },
+        { "at": "-11 09:15", "from": "lena", "text": "@all Der Getränkewagen kommt am Freitag um 16 Uhr." },
+        { "at": "-11 09:40", "from": "sophie", "text": "@\"group/helfer kreis\" wer bringt die Lichterketten mit?" },
+        { "at": "-11 10:05", "from": "jonas", "text": "@paul und @\"team/orga\": Wir brauchen noch zwei Pavillons." },
         { "at": "-10 12:00", "from": "lena", "text": "Danke euch allen, das war ein toller Tag!", "reactions": { "❤️": ["mira", "jonas", "paul", "tobias", "sophie"] } }
       ]
     },

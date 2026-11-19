@@ -606,7 +606,7 @@ async fn an_outage_and_its_end() {
     assert!(since.elapsed() > Duration::from_secs(3), "took {:?}", since.elapsed());
     assert_eq!(connections(&sink), [Online, Connecting, Offline]);
 
-    let pending = engine.enqueue_text("lena", "Bis gleich!", None, "ref-outage");
+    let pending = engine.enqueue_text("lena", "Bis gleich!", Vec::new(), None, "ref-outage");
     until("waiting", || engine.pending("lena").iter().any(|p| p.state == talk_core::PendingState::Waiting)).await;
     assert_eq!(pending.message.text, "Bis gleich!");
     // More failures change nothing, and a network report without a server does not flicker.
@@ -833,20 +833,20 @@ async fn editing_and_deleting_in_the_engine() {
     assert!(updates(&sink, reply.id).iter().all(|m| m.reply_to.is_some()), "a reaction keeps the quote");
 
     // Edit the quoted message: it changes, and the reply follows with the new quote.
-    assert_eq!(engine.edit_source("garten", first.id).await.as_deref(), Some("Erste Fassung"));
-    engine.edit_message("garten", first.id, "Zweite Fassung").await.unwrap();
+    assert_eq!(engine.edit_source("garten", first.id).await.unwrap().text, "Erste Fassung");
+    engine.edit_message("garten", first.id, "Zweite Fassung", &[]).await.unwrap();
     let new = updates(&sink, first.id).pop().unwrap();
     assert!(new.text == "Zweite Fassung" && new.edited && new.is_own);
     assert_eq!(updates(&sink, reply.id).pop().unwrap().reply_to.unwrap().text, "Zweite Fassung");
     // The same text again asks nobody.
     until("the edit over the live update", || updates(&sink, first.id).len() >= 2).await;
     let hidden = client(&server).history("garten", None, 50).await.unwrap().messages.len();
-    engine.edit_message("garten", first.id, " Zweite Fassung ").await.unwrap();
+    engine.edit_message("garten", first.id, " Zweite Fassung ", &[]).await.unwrap();
     assert_eq!(client(&server).history("garten", None, 50).await.unwrap().messages.len(), hidden);
 
     // Edit the reply: quote and own reaction stay, the chat list shows the new text.
     let told = updates(&sink, reply.id).len();
-    engine.edit_message("garten", reply.id, "Antwort an @lena").await.unwrap();
+    engine.edit_message("garten", reply.id, "Antwort an @lena", &[]).await.unwrap();
     let new = updates(&sink, reply.id).remove(told);
     assert_eq!(new.text, "Antwort an @Lena Hoffmann");
     assert_eq!(new.reply_to.as_ref().unwrap().text, "Zweite Fassung");
@@ -856,12 +856,15 @@ async fn editing_and_deleting_in_the_engine() {
     until("the edit of the reply over the live update", || updates(&sink, reply.id).len() > told + 1).await;
     let new = updates(&sink, reply.id).pop().unwrap();
     assert!(new.text == "Antwort an @Lena Hoffmann" && new.reply_to.is_some() && new.reactions_self.len() == 1);
-    assert_eq!(engine.edit_source("garten", reply.id).await.as_deref(), Some("Antwort an @\"lena\""));
+    // The input field gets the name, and beside it who that is.
+    let draft = engine.edit_source("garten", reply.id).await.unwrap();
+    assert_eq!(draft.text, "Antwort an @Lena Hoffmann");
+    assert_eq!(draft.mentions, [talk_core::MentionPick { label: "Lena Hoffmann".into(), mention_id: "lena".into() }]);
 
     // What the server refuses comes back as a text to show.
     let text = |r: talk_core::Result<()>, op| message_error_text(op, &r.unwrap_err());
     assert_eq!(
-        text(engine.edit_message("garten", old, "Zu spät").await, MessageOp::Edit),
+        text(engine.edit_message("garten", old, "Zu spät", &[]).await, MessageOp::Edit),
         "Nachrichten lassen sich nur 24 Stunden lang bearbeiten"
     );
     assert_eq!(text(engine.delete_message("garten", theirs).await, MessageOp::Delete), "Keine Berechtigung");
@@ -942,7 +945,7 @@ async fn editing_without_the_server() {
     // The server only stops once no request is under way: not with the chat's long poll.
     engine.close_chat("lena");
     server.stop().await;
-    let err = engine.edit_message("lena", own, "Neu").await.unwrap_err();
+    let err = engine.edit_message("lena", own, "Neu", &[]).await.unwrap_err();
     assert_eq!(message_error_text(MessageOp::Edit, &err), "Keine Verbindung – Nachricht nicht geändert");
     let err = engine.delete_message("lena", own).await.unwrap_err();
     assert_eq!(message_error_text(MessageOp::Delete, &err), "Keine Verbindung – Nachricht nicht gelöscht");
@@ -1332,7 +1335,7 @@ async fn a_file_of_the_same_name_and_size_is_not_taken_for_ours() {
         let path = dir.join(reference);
         std::fs::write(&path, content).unwrap();
         engine
-            .enqueue_file("sommerfest", &path.to_string_lossy(), "notiz.txt", "text/plain", 0, 0, "", None, reference)
+            .enqueue_file("sommerfest", &path.to_string_lossy(), "notiz.txt", "text/plain", 0, 0, "", Vec::new(), None, reference)
             .unwrap();
     };
     // Where the message with this reference points to, and what lies there.
@@ -1526,5 +1529,122 @@ async fn the_whole_history_is_searchable() {
     // Signing out forgets it.
     again.logout().await.unwrap();
     until("the index is empty", || again.search_status().messages == 0).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// docs/mentions.md: the suggestions of a chat, a mention on its way to the server and
+/// back into the bubble and the input field, and the list behind the "@" button.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mentions_from_the_suggestions_to_the_bubble() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account.clone(), Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let post = |form: Vec<(&'static str, &'static str)>| {
+        let url = format!("{server}/demo/incoming");
+        async move { assert!(reqwest::Client::new().post(url).form(&form).send().await.unwrap().status().is_success()) }
+    };
+    let labels = |list: &[talk_core::MentionCandidate]| list.iter().map(|c| c.label.clone()).collect::<Vec<_>>();
+    let kinds = |m: &MessageView| m.mentions.iter().map(|x| (x.label.clone(), x.kind, x.is_self)).collect::<Vec<_>>();
+
+    // Who can be mentioned: who wrote last first, not the user, then group and team,
+    // everybody last and under its own name.
+    let all = engine.mention_candidates("sommerfest", "", 50).await;
+    assert_eq!(
+        labels(&all),
+        ["Lena Hoffmann", "Jonas Richter", "Sophie Neumann", "Paul Lange", "Tobias Krüger", "Helferkreis", "Orga-Team", "Alle"]
+    );
+    assert_eq!(labels(&engine.mention_candidates("sommerfest", "KRÜ", 50).await), ["Tobias Krüger"]);
+    assert_eq!(labels(&engine.mention_candidates("sommerfest", "kru", 50).await), ["Tobias Krüger"]);
+    assert_eq!(labels(&engine.mention_candidates("sommerfest", "al", 50).await), ["Alle"]);
+    assert_eq!(labels(&engine.mention_candidates("sommerfest", "lange", 50).await), ["Paul Lange"]);
+    assert!(engine.mention_candidates("sommerfest", "Lena heute", 50).await.is_empty());
+    assert!(engine.mention_candidates("lena", "", 50).await.is_empty(), "nobody to mention in a one-to-one chat");
+    let pick = |label: &str| {
+        let c = all.iter().find(|c| c.label == label).unwrap();
+        talk_core::MentionPick { label: c.label.clone(), mention_id: c.mention_id.clone() }
+    };
+
+    // What is in the chat already: everybody means the user too, a group does not say so.
+    let page = engine.open_chat("sommerfest").await.unwrap();
+    let find = |start: &str| page.messages.iter().find(|m| m.text.starts_with(start)).unwrap().clone();
+    let everybody = find("@Alle Der Getränkewagen");
+    assert_eq!(kinds(&everybody), [("@Alle".to_string(), "all", true)]);
+    assert!(everybody.mentions_me);
+    let helpers = find("@Helferkreis wer bringt");
+    assert_eq!(kinds(&helpers), [("@Helferkreis".to_string(), "group", false)]);
+    assert!(!helpers.mentions_me);
+    let two = find("@Paul Lange und @Orga-Team:");
+    assert_eq!(kinds(&two), [("@Paul Lange".to_string(), "user", false), ("@Orga-Team".to_string(), "team", false)]);
+    assert_eq!(two.mentions[0].id, "paul");
+    assert!(page.unread_mentions.is_empty(), "all read");
+    assert!(page.messages.iter().filter(|m| m.kind == "system").all(|m| !m.text.contains('@') && m.mentions.is_empty()));
+
+    // Sending: the waiting bubble shows names, the server gets its notation.
+    let text = "@Paul Lange und @Helferkreis: @Alle bitte lesen.";
+    let picks = vec![pick("Paul Lange"), pick("Helferkreis"), pick("Alle")];
+    let pending = engine.enqueue_text("sommerfest", text, picks, None, "ref-mention");
+    assert_eq!(pending.message.text, text);
+    assert_eq!(
+        kinds(&pending.message),
+        [("@Paul Lange".to_string(), "user", false), ("@Helferkreis".to_string(), "group", false), ("@Alle".to_string(), "all", false)]
+    );
+    let sent = arrived(&sink, "@Paul Lange und @Helferkreis: @Alle bitte lesen.").await;
+    assert!(sent.is_own && !sent.mentions_me && sent.mentions.len() == 3 && sent.mentions[2].is_self);
+    let wire = client(&server).history("sommerfest", None, 3).await.unwrap().messages;
+    let wire = wire.iter().find(|m| m.id == sent.id).unwrap();
+    assert_eq!(wire.message, "{mention-user1} und {mention-group1}: {mention-call1} bitte lesen.");
+    assert_eq!(wire.source_text(), r#"@"paul" und @"group/helfer kreis": @"all" bitte lesen."#);
+
+    // Editing: the input field gets names and who they are; one more mention is added.
+    let draft = engine.edit_source("sommerfest", sent.id).await.unwrap();
+    assert_eq!(draft.text, text);
+    assert_eq!(draft.mentions, [pick("Paul Lange"), pick("Helferkreis"), pick("Alle")]);
+    let mut picks = draft.mentions.clone();
+    picks.push(pick("Lena Hoffmann"));
+    engine.edit_message("sommerfest", sent.id, "@Paul Lange, @Lena Hoffmann und @Helferkreis", &picks).await.unwrap();
+    let new = updates(&sink, sent.id).pop().unwrap();
+    assert_eq!(new.text, "@Paul Lange, @Lena Hoffmann und @Helferkreis");
+    assert_eq!(new.mentions.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["paul", "lena", "group/helfer kreis"]);
+    // Unchanged: nobody is asked.
+    until("the edit over the live update", || updates(&sink, sent.id).len() >= 2).await;
+    let hidden = client(&server).history("sommerfest", None, 50).await.unwrap().messages.len();
+    engine.edit_message("sommerfest", sent.id, &new.text, &picks).await.unwrap();
+    assert_eq!(client(&server).history("sommerfest", None, 50).await.unwrap().messages.len(), hidden);
+
+    // The "@" button. A group the user belongs to: the server only says "mentioned".
+    post(vec![("token", "sommerfest"), ("from", "sophie"), ("text", "@\"group/helfer kreis\" bitte Zeltheringe mitbringen")]).await;
+    let group = arrived(&sink, "@Helferkreis bitte Zeltheringe mitbringen").await;
+    assert!(!group.mentions_me);
+    engine.refresh_rooms(false).await.unwrap();
+    until("the group mention behind the read marker", || engine.cached_chat("sommerfest").unread_mentions == [group.id]).await;
+    // By name: only that one counts now.
+    post(vec![("token", "sommerfest"), ("from", "lena"), ("text", "@mira hast du den Schlüssel?")]).await;
+    post(vec![("token", "sommerfest"), ("from", "lena"), ("text", "@all bis morgen!")]).await;
+    let named = arrived(&sink, "@Mira Lange hast du den Schlüssel?").await;
+    let everybody = arrived(&sink, "@Alle bis morgen!").await;
+    assert!(named.mentions_me && named.mentions[0].is_self && everybody.mentions_me);
+    until("the mentions behind the read marker", || {
+        engine.cached_chat("sommerfest").unread_mentions == [named.id, everybody.id]
+    })
+    .await;
+    // Read: nothing left.
+    engine.mark_read("sommerfest", everybody.id).await.unwrap();
+    assert!(engine.cached_chat("sommerfest").unread_mentions.is_empty());
+
+    // A chat that was not open: its mention is found when it opens.
+    post(vec![("token", "familie"), ("from", "hilde"), ("text", "@mira kommst du am Sonntag?")]).await;
+    post(vec![("token", "familie"), ("from", "paul"), ("text", "Ich bringe Kuchen mit.")]).await;
+    let page = engine.open_chat("familie").await.unwrap();
+    let asked = page.messages.iter().find(|m| m.text == "@Mira Lange kommst du am Sonntag?").unwrap();
+    assert_eq!(page.unread_mentions, [asked.id]);
+
+    // Tapping a mention: the chat with that person, when there is one.
+    assert_eq!(engine.existing_direct("lena").as_deref(), Some("lena"));
+    assert_eq!(engine.existing_direct("jonas"), None);
+
+    engine.shutdown();
     let _ = std::fs::remove_dir_all(&dir);
 }

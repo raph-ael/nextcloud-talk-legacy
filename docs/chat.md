@@ -32,7 +32,7 @@ Ein runder, schwebender Knopf unten rechts in der Nachrichtenliste. Er erscheint
 
 **Fenster in den Verlauf:** Öffnet der Chat an einer alten Nachricht (Suchtreffer, Zitat), ist der Knopf immer da und führt zu den neuesten Nachrichten zurück (docs/search.md „Chat an einer Nachricht öffnen“).
 
-**Nicht im Umfang:** ein eigener Knopf für @-Erwähnungen. Zur ersten ungelesenen Nachricht springt der Chat schon beim Öffnen (siehe „Ungelesen-Linie“).
+**Erwähnungen:** Über dem Knopf steht bei ungesehenen Erwähnungen der „@“-Knopf (docs/mentions.md „„@“-Knopf im Chat“).
 
 ## Datum und Ungelesen-Linie (wie Signal)
 
@@ -234,8 +234,8 @@ Bei einer Datei endet nur die Freigabe für den Chat. Die Datei selbst bleibt be
   - **Löschen:** `deletable` und (`isOwn` mit `canChat` oder fremd mit `canDeleteOthers`).
   - **Bearbeiten:** `editable`, `canChat` und (`editUntil` leer oder jetzt < `editUntil`).
   - Beides nur für zugestellte Nachrichten. Im Postausgang bleibt „Löschen“ das lokale Verwerfen (`discard`), ohne Nachfrage.
-- `editSource(token, messageId) → Text | null`: der Text fürs Eingabefeld. Erwähnungen stehen darin so, wie der Server sie zurückhaben will (`@"id"`), sonst wären sie nach dem Speichern nur noch Text. Bei `null` nimmt die Plattform `MessageView.text`.
-- `editMessage(token, messageId, text)` und `deleteMessage(token, messageId)`:
+- `editSource(token, messageId) → { text, mentions } | null`: der Text fürs Eingabefeld und wer mit den Namen darin gemeint ist (docs/mentions.md „Im Eingabefeld“). Ohne die `mentions` wären Erwähnungen nach dem Speichern nur noch Text. Bei `null` nimmt die Plattform `MessageView.text` und `MessageView.mentions`.
+- `editMessage(token, messageId, text, mentions)` und `deleteMessage(token, messageId)`:
   - Das Ergebnis ist ein kurzer deutscher Fehlertext oder `null`. Die Plattform zeigt den Text als Hinweis (Toast).
   - Nichts erscheint vorab. Die neue Fassung kommt als `MessagesUpdated`, bevor der Aufruf zurückkehrt.
   - Derselbe Text noch einmal ist ein Erfolg ohne Abruf.

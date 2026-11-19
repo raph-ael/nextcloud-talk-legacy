@@ -172,15 +172,11 @@ impl ChatMessage {
         }
         let mut out = self.message.clone();
         for (key, param) in &self.message_parameters {
-            let s = |k: &str| param.get(k).and_then(Value::as_str).unwrap_or_default();
-            let replacement = match s("type") {
-                "file" if key == "file" => String::new(),
-                "user" | "guest" | "call" | "user-group" | "group" | "circle" | "team" | "email" => {
-                    // Always quoted: a bare id would swallow a full stop that follows it.
-                    let id = if s("mention-id").is_empty() { s("id") } else { s("mention-id") };
-                    format!("@\"{id}\"")
-                }
-                _ => s("name").to_string(),
+            let replacement = match crate::mentions::param_label(key, param) {
+                // Always quoted: a bare id would swallow a full stop that follows it.
+                Some(_) => format!("@\"{}\"", crate::mentions::param_mention_id(param)),
+                None if key == "file" => String::new(),
+                None => param.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
             };
             out = out.replace(&format!("{{{key}}}"), &replacement);
         }
@@ -253,7 +249,8 @@ impl ChatMessage {
         self.rendered_text()
     }
 
-    /// Message text with `{placeholders}` replaced by their display names.
+    /// Message text with `{placeholders}` replaced by their display names; a mention reads
+    /// `@Name`, one of everybody `@Alle` (docs/mentions.md).
     pub fn rendered_text(&self) -> String {
         self.rendered_text_without("")
     }
@@ -265,13 +262,10 @@ impl ChatMessage {
                 out = out.replace(&format!("{{{key}}}"), "");
                 continue;
             }
-            let name = param
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let replacement = match param.get("type").and_then(Value::as_str) {
-                Some("user" | "guest" | "call" | "user-group" | "group") => format!("@{name}"),
-                _ => name.to_string(),
+            // Only mentions carry the `@`, not the acting person of a system message.
+            let replacement = match crate::mentions::param_label(key, param) {
+                Some(label) => format!("@{label}"),
+                None => param.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
             };
             out = out.replace(&format!("{{{key}}}"), &replacement);
         }
@@ -568,7 +562,7 @@ mod tests {
             "mention-guest1":{"type":"guest","id":"guest/1f","name":"Gast"}}"#;
         let m = msg("{mention-user1}. {mention-call1} {mention-group1} {mention-guest1}", mentions);
         assert_eq!(m.source_text(), r#"@"b". @"all" @"group/team eins" @"guest/1f""#);
-        assert_eq!(m.rendered_text(), "@Bea. @Garten @Team @Gast");
+        assert_eq!(m.rendered_text(), "@Bea. @Alle @Team @Gast");
         let file = r#"{"file":{"type":"file","id":"7","name":"Beet.jpg","path":"Talk/Beet.jpg","mimetype":"image/jpeg"}}"#;
         assert_eq!(msg("{file}", file).source_text(), "");
         assert_eq!(msg("Unser Beet", file).source_text(), "Unser Beet");
