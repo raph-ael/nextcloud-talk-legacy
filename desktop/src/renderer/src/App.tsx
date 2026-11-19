@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { closeRoom, closeSettings, focusSearch, getState, openCompose, openSettings, useStore } from './store'
 import { GroupInfo } from './components/GroupInfo'
-import { Categories } from './components/Categories'
 import { Settings } from './components/Settings'
 import { Login } from './components/Login'
 import { cycleRoom, Sidebar } from './components/Sidebar'
@@ -75,7 +74,6 @@ export function App() {
   const activeToken = useStore((s) => s.activeToken)
   const room = useStore((s) => s.rooms.find((r) => r.token === s.activeToken) ?? null)
   const groupInfo = useStore((s) => s.groupInfo)
-  const categories = useStore((s) => s.categories)
   const settings = useStore((s) => s.settings)
   const adding = useStore((s) => s.adding)
   // Tokens of different servers overlap: another account means another chat.
@@ -106,9 +104,9 @@ export function App() {
         e.preventDefault()
         cycleRoom(e.key === 'ArrowUp' ? -1 : 1)
       } else if (e.key === 'Escape' && document.activeElement === document.body) {
-        // Steps of „Neue Nachricht“, the group settings and „Kategorien“ handle Esc themselves.
+        // Steps of „Neue Nachricht“ and the group settings handle Esc themselves.
         const s = getState()
-        if (!e.defaultPrevented && !s.composing && !s.groupInfo && !s.categories) closeRoom()
+        if (!e.defaultPrevented && !s.composing && !s.groupInfo) closeRoom()
       } else if (
         // Typing anywhere goes into the message field (like Signal).
         !mod &&
@@ -116,7 +114,6 @@ export function App() {
         e.key.length === 1 &&
         composer.current &&
         !getState().groupInfo &&
-        !getState().categories &&
         !(document.activeElement instanceof HTMLInputElement) &&
         !(document.activeElement instanceof HTMLTextAreaElement) &&
         // Not out of a dialog or menu, and Space presses the focused button.
@@ -147,7 +144,7 @@ export function App() {
     <ReturnToCallBar />
     <div className="app-stage" style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
     {/* The settings cover chat list and chat; both stay mounted (draft, scroll position). */}
-    <div className={`app${activeToken || categories ? ' has-chat' : ''}`} inert={!!settings}>
+    <div className={`app${activeToken ? ' has-chat' : ''}`} inert={!!settings}>
       <Sidebar />
       <div
         className="sidebar-resize"
@@ -160,13 +157,11 @@ export function App() {
       {room ? (
         <div className="chat-pane">
           {/* The chat stays mounted under the settings (scroll position, draft). */}
-          <div className="chat-slot" inert={groupInfo === room.token || categories}>
+          <div className="chat-slot" inert={groupInfo === room.token}>
             <Chat key={`${accountKey}:${room.token}`} room={room} ref={composer} />
           </div>
-          {categories ? <Categories /> : groupInfo === room.token && <GroupInfo key={`${accountKey}:${room.token}`} room={room} />}
+          {groupInfo === room.token && <GroupInfo key={`${accountKey}:${room.token}`} room={room} />}
         </div>
-      ) : categories ? (
-        <Categories />
       ) : (
         <section className="chat empty">
           <p className="muted">Wähle einen Chat aus.</p>

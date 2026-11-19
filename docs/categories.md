@@ -37,14 +37,15 @@ Standardmäßig steht statt „Chats“ das Paar **„Gruppen“ | „Direktchat
 - `collapsed`
 - `rooms`: die Zeilen, die angezeigt werden
 - `total`: alle Chats des Abschnitts
-- `unread`, `unreadMention`, `hasCall`: für den Kopf eines eingeklappten Abschnitts
+- `unread`, `unreadQuiet`, `unreadMention`, `hasCall`: für den Kopf eines eingeklappten Abschnitts
 
 **Eingeklappt:**
 - `rooms` ist dann leer. Das gilt auch für den offenen Chat, für ungelesene Chats und für Chats mit laufendem Anruf.
 - Damit nichts untergeht, rechnet der Kern für den Kopf über alle Chats des Abschnitts:
   | Feld | Inhalt |
   |---|---|
-  | `unread` | Summe der ungelesenen Nachrichten. Es zählt wie der Badge am App-Symbol (`badge()`, docs/settings.md „Stummgeschaltete Chats“): „Aus“ nie, „Nur Erwähnungen“ nur mit Erwähnung. |
+  | `unread` | Summe der ungelesenen Nachrichten. Chats auf „Aus“ zählen nicht. |
+  | `unreadQuiet` | Kein Chat des Abschnitts zählt für den Badge am App-Symbol (`badge()`, docs/settings.md „Stummgeschaltete Chats“): Alle ungelesenen stehen auf „Nur Erwähnungen“ und haben keine Erwähnung. Die Zahl ist dann grau, wie an der Chat-Zeile. |
   | `unreadMention` | In einem Chat steht eine ungelesene Erwähnung. Chats auf „Aus“ zählen nicht. |
   | `hasCall` | In einem Chat läuft ein Anruf. |
 - Die Felder sind auch bei einem offenen Abschnitt gefüllt. Angezeigt werden sie nur, solange er eingeklappt ist.
@@ -138,7 +139,7 @@ Eine Wahl für die ganze Liste, in den Einstellungen unter „Darstellung“, �
 |---|---|
 | grüner Anrufpunkt | `hasCall` |
 | „@“-Schild in `accent` | `unreadMention` |
-| Zähler in `accent` | `unread > 0`, über 99 als „99+“ |
+| Zähler | `unread > 0`, über 99 als „99+“. In `accent`, bei `unreadQuiet` grau wie an einem leisen Chat. |
 
 Es sind die vorhandenen Teile der Chat-Zeile, ohne neue Farben oder Größen.
 

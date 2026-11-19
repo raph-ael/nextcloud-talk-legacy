@@ -228,6 +228,9 @@ async fn engine_and_login_flow() {
     let closed = engine.room_sections("", None, true).remove(busy);
     assert!(closed.collapsed && closed.rooms.is_empty());
     assert_eq!((closed.unread, closed.unread_mention), (split[busy].unread, split[busy].unread_mention));
+    // "Gartenprojekt" is a group on "Nur Erwähnungen": it counts, in grey.
+    let favorites = &split[0];
+    assert_eq!((favorites.unread, favorites.unread_quiet), (5, true));
     engine.toggle_section(&split[busy].id).await.unwrap();
 
     // "Sortierung": saved on the server, every section by name.

@@ -5,7 +5,6 @@ import {
   getState,
   moreHits,
   moveHit,
-  openCategories,
   openCompose,
   openGroupInfo,
   openHit,
@@ -28,6 +27,7 @@ import { RecordingBanners } from '../call/RecordingBanners'
 import { NewMessage } from './NewMessage'
 import { OwnAvatar } from './AccountMenu'
 import { MessageMenu, type MenuItem } from './MessageMenu'
+import { GearIcon } from './Settings'
 import { NameDialog } from './Categories'
 import { isGroupRoom, LEVELS } from './GroupInfo'
 
@@ -57,12 +57,11 @@ export function Sidebar() {
   const noRooms = useStore((s) => s.rooms.length === 0)
   const account = useStore((s) => s.account)
   const composing = useStore((s) => s.composing)
-  const [menu, setMenu] = useState(false)
   const [canManage, setCanManage] = useState(false)
   const [chatMenu, setChatMenu] = useState<{ token: string; x: number; y: number } | null>(null)
   const now = useNow(30_000)
 
-  // Known after the first room list: ask again when a menu opens.
+  // Known after the first room list: ask again when the chat menu opens.
   useEffect(() => {
     let alive = true
     window.talk
@@ -72,7 +71,7 @@ export function Sidebar() {
     return () => {
       alive = false
     }
-  }, [account, menu, chatMenu])
+  }, [account, chatMenu])
 
   const onRoomMenu = useCallback((token: string, x: number, y: number) => setChatMenu({ token, x, y }), [])
 
@@ -162,39 +161,14 @@ export function Sidebar() {
             <path d="M17.5 3.8l2.7 2.7-8.4 8.4-3.3.6.6-3.3z" />
           </svg>
         </button>
-        <div className="menu-anchor">
-          <button className="icon-button" aria-label="Menü" title="Menü" onClick={() => setMenu((m) => !m)}>
-            <svg viewBox="0 0 24 24" width="20" height="20">
-              <circle cx="5" cy="12" r="2" fill="currentColor" />
-              <circle cx="12" cy="12" r="2" fill="currentColor" />
-              <circle cx="19" cy="12" r="2" fill="currentColor" />
-            </svg>
-          </button>
-          {menu && (
-            <div className="menu" onMouseLeave={() => setMenu(false)}>
-              <button
-                className="menu-item"
-                onClick={() => {
-                  setMenu(false)
-                  openSettings()
-                }}
-              >
-                Einstellungen
-              </button>
-              {canManage && (
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenu(false)
-                    openCategories()
-                  }}
-                >
-                  Kategorien verwalten
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        <button
+          className="icon-button"
+          aria-label="Einstellungen"
+          title={`Einstellungen (${navigator.platform.startsWith('Mac') ? '⌘' : 'Strg+'},)`}
+          onClick={() => openSettings()}
+        >
+          <GearIcon />
+        </button>
       </header>
       <div className="search">
         <div className="search-box">
@@ -356,12 +330,23 @@ const HitRow = memo(function HitRow({
   )
 })
 
-/** Head of a section: the whole row opens and closes it; the chevron turns down when open. */
+/**
+ * Head of a section: the whole row opens and closes it; the chevron turns down when open.
+ * Collapsed, the section is empty and the head shows what is new in it, with the parts of
+ * a chat row (docs/categories.md).
+ */
 function SectionHeader({ section }: { section: SectionView }) {
-  const hidden = section.collapsed ? section.total - section.rooms.length : 0
+  const { collapsed, unread, unreadQuiet, unreadMention, hasCall } = section
   const label = [
     section.kind === 'custom' ? `${section.title}, Kategorie` : section.title,
-    hidden > 0 ? (hidden === 1 ? '1 Chat ausgeblendet' : `${hidden} Chats ausgeblendet`) : '',
+    ...(collapsed
+      ? [
+          section.total === 1 ? '1 Chat' : `${section.total} Chats`,
+          unread === 1 ? '1 ungelesene Nachricht' : unread > 0 ? `${unread} ungelesene Nachrichten` : '',
+          unreadMention ? 'Erwähnung' : '',
+          hasCall ? 'laufender Anruf' : '',
+        ]
+      : []),
   ]
     .filter(Boolean)
     .join(', ')
@@ -377,6 +362,17 @@ function SectionHeader({ section }: { section: SectionView }) {
         <svg className={`chevron${section.collapsed ? '' : ' open'}`} viewBox="0 0 16 16" width="12" height="12" aria-hidden>
           <path fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" d="M6 3.5l4.5 4.5L6 12.5" />
         </svg>
+        {collapsed && (hasCall || unreadMention || unread > 0) && (
+          <span className="room-indicators section-indicators" aria-hidden>
+            {hasCall && <span className="call-dot" title="Laufender Anruf" />}
+            {unreadMention && (
+              <span className="badge mention" title="Erwähnt">
+                @
+              </span>
+            )}
+            {unread > 0 && <span className={`badge${unreadQuiet ? ' quiet' : ''}`}>{unread > 99 ? '99+' : unread}</span>}
+          </span>
+        )}
       </button>
     </h3>
   )

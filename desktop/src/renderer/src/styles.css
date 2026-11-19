@@ -346,9 +346,6 @@ body.resizing {
   text-align: center;
   box-shadow: 0 0 0 2px var(--bg-side);
 }
-.menu-anchor {
-  position: relative;
-}
 .menu {
   position: absolute;
   right: 0;
@@ -4210,4 +4207,16 @@ a.settings-row:focus-visible {
 }
 [data-layout='compact'] .appearance-preview .msg:hover {
   background: none;
+}
+
+/* Head of a collapsed section: what is new in it, at the right edge (docs/categories.md). */
+.section-indicators {
+  margin: 0 0 0 auto;
+  padding-left: 8px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+/* The compact row ends 4 px further right: the head's counter stands above the rows' ones. */
+[data-layout='compact'] .section-indicators {
+  margin-right: -4px;
 }

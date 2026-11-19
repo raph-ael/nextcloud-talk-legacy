@@ -89,6 +89,8 @@ interface NativeSession {
   reactions(token: string, messageId: number): Promise<unknown>
   roomSections(query: string, activeToken: string | null, split?: boolean): unknown
   toggleSection(id: string): Promise<string | null>
+  sortOrder(): string
+  setSortOrder(order: string): Promise<string | null>
   categoriesSupported(): boolean
   categories(): unknown
   createCategory(name: string, tokens: string[]): Promise<unknown>
@@ -1601,6 +1603,8 @@ function registerIpc(): void {
     r ? r.session.roomSections(query, activeToken, split === true) : [],
   )
   handle('talk:toggleSection', (r, id: string) => (r ? r.session.toggleSection(id) : NOT_SIGNED_IN))
+  handle('talk:sortOrder', (r) => r?.session.sortOrder() ?? 'activity')
+  handle('talk:setSortOrder', (r, order: string) => (r ? r.session.setSortOrder(order) : NOT_SIGNED_IN))
   handle('talk:categoriesSupported', (r) => r?.session.categoriesSupported() ?? false)
   handle('talk:categories', (r) => (r ? r.session.categories() : []))
   handle('talk:createCategory', (r, name: string, tokens: string[]) =>

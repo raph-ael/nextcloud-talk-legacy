@@ -799,7 +799,7 @@ async fn category_cmd(client: TalkClient, cmd: &Cmd) -> Result<()> {
                 for s in engine.room_sections(query.as_deref().unwrap_or(""), None, *split) {
                     let title = if s.title.is_empty() { "(ohne Kopf)" } else { &s.title };
                     let arrow = if s.collapsed { ">" } else { "v" };
-                    let head = format!("{} neu{}{}", s.unread, if s.unread_mention { ", @" } else { "" }, if s.has_call { ", Anruf" } else { "" });
+                    let head = format!("{} neu{}{}{}", s.unread, if s.unread_quiet && s.unread > 0 { " (grau)" } else { "" }, if s.unread_mention { ", @" } else { "" }, if s.has_call { ", Anruf" } else { "" });
                     println!("{arrow} {title} [{} {}] {}/{} sichtbar, {head}", s.kind, s.id, s.rooms.len(), s.total);
                     for r in &s.rooms {
                         let unread = if r.unread_messages > 0 { format!(" ({} neu)", r.unread_messages) } else { String::new() };

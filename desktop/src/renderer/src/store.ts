@@ -19,6 +19,7 @@ import type {
   SearchHit,
   SearchResults,
   SectionView,
+  SortOrder,
   SendError,
   StagedFile,
   TalkEvent,
@@ -125,8 +126,8 @@ export interface State {
   searchFocus: number
   /** The newest request to place the open chat. */
   jump: Jump | null
-  /** The page „Kategorien“ replaces the chat area. */
-  categories: boolean
+  /** „Sortierung“ of the account shown (docs/categories.md); follows `roomsChanged`. */
+  sortOrder: SortOrder
   unreadLine: UnreadLine | null
   /** Counts notification clicks on the chat that is open already: it places itself again. */
   reopened: number
@@ -134,7 +135,7 @@ export interface State {
   settings: SettingsPage | null
 }
 
-export type SettingsPage = 'general' | 'appearance' | 'chats' | 'categories' | 'about'
+export type SettingsPage = 'general' | 'appearance' | 'categories' | 'about'
 
 let state: State = {
   session: 'loading',
@@ -156,7 +157,7 @@ let state: State = {
   hit: null,
   searchFocus: 0,
   jump: null,
-  categories: false,
+  sortOrder: 'activity',
   unreadLine: null,
   reopened: 0,
   settings: null,
@@ -177,7 +178,7 @@ const EMPTY = {
   hitsFor: '',
   hit: null,
   jump: null,
-  categories: false,
+  sortOrder: 'activity',
   unreadLine: null,
 } satisfies Partial<State>
 
@@ -473,16 +474,28 @@ onAppearance(() => {
 })
 
 /**
- * Asks the core for the sections again: on `roomsChanged`, a new search text and when
- * another chat opens. Only the newest answer counts.
+ * Asks the core for the sections again: on `roomsChanged` and a new search text. Only the
+ * newest answer counts. The sort order comes along: another device may have changed it.
  */
 export async function refreshSections(): Promise<void> {
   const seq = ++sectionsSeq
   // With the mark „in {Chat}“ the text searches that chat, not the names: the whole list
   // stays behind the hits (Alt+↑/↓).
   const query = state.scope ? '' : state.query
-  const sections = await window.talk.roomSections(query, state.activeToken, splitChats()).catch(() => null)
-  if (sections && seq === sectionsSeq && state.session === 'ready') set({ sections })
+  const [sections, sortOrder] = await Promise.all([
+    window.talk.roomSections(query, null, splitChats()).catch(() => null),
+    window.talk.sortOrder().catch(() => null),
+  ])
+  if (sections && seq === sectionsSeq && state.session === 'ready') set({ sections, sortOrder: sortOrder ?? state.sortOrder })
+}
+
+/** „Sortierung“: shown at once; on a failure the core takes it back and a toast says why. */
+export async function setSortOrder(order: SortOrder): Promise<void> {
+  if (order === state.sortOrder) return
+  set({ sortOrder: order })
+  const error = await window.talk.setSortOrder(order).catch(() => 'Keine Verbindung')
+  if (error) toast(error)
+  void refreshSections()
 }
 
 export function setQuery(query: string): void {
@@ -689,13 +702,6 @@ export function openGroupInfo(token: string): void {
 export function closeGroupInfo(): void {
   set({ groupInfo: null })
 }
-export function openCategories(): void {
-  set({ categories: true, groupInfo: null })
-}
-export function closeCategories(): void {
-  set({ categories: false })
-}
-
 export function openSettings(page: SettingsPage = 'appearance'): void {
   // Already open: stays on its page (⌘, from the menu and the key both arrive on macOS).
   if (state.session === 'ready') set({ settings: state.settings ?? page })
@@ -768,8 +774,8 @@ function withoutWindow(token: string | null): Record<string, ChatState> {
 export async function openRoom(token: string, at?: number): Promise<void> {
   const previous = state.activeToken
   if (previous === token) {
-    // Clicking the open chat in the list leaves its settings (or the page „Kategorien“).
-    if (state.groupInfo || state.categories) set({ groupInfo: null, categories: false })
+    // Clicking the open chat in the list leaves its settings.
+    if (state.groupInfo) set({ groupInfo: null })
     if (at != null) void showMessage(token, at)
     return
   }
@@ -779,7 +785,6 @@ export async function openRoom(token: string, at?: number): Promise<void> {
   set({
     activeToken: token,
     groupInfo: null,
-    categories: false,
     unreadLine: lineOnOpening(token),
     chats: withoutWindow(previous),
     jump: null,
@@ -878,7 +883,6 @@ async function openAt(token: string, id: number): Promise<void> {
   set({
     activeToken: token,
     groupInfo: null,
-    categories: false,
     // The read marker stays where it is; the line shows once its place is loaded.
     unreadLine: lineOnOpening(token),
     chats: { ...chats, [token]: chat },
@@ -946,7 +950,7 @@ export async function showMessage(token: string, id: number): Promise<boolean | 
     await openRoom(token, id)
     return null
   }
-  if (state.groupInfo || state.categories) set({ groupInfo: null, categories: false })
+  if (state.groupInfo) set({ groupInfo: null })
   const ask = ++jumpAsk
   if (state.chats[token]?.messages.some((m) => !m.status && m.id === id)) {
     set({ jump: { token, id, seq: ++jumpSeq } })

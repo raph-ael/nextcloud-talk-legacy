@@ -467,9 +467,12 @@ pub struct SectionView {
     pub rooms: Vec<RoomView>,
     /// All chats in the section, hidden ones included.
     pub total: u32,
-    /// For the head while collapsed: unread messages of all its chats, counted like the
-    /// app badge (muted chats never, "Nur Erwähnungen" only with a mention).
+    /// For the head while collapsed: unread messages of all its chats; muted ones ("Aus")
+    /// do not count.
     pub unread: u32,
+    /// Show `unread` in grey like the number of a quiet chat: nothing in it counts for the
+    /// app badge.
+    pub unread_quiet: bool,
     /// For the head while collapsed: an unread mention in one of its chats.
     pub unread_mention: bool,
     /// For the head while collapsed: a running call in one of its chats.
@@ -486,6 +489,7 @@ impl From<core::SectionView> for SectionView {
             rooms: s.rooms.into_iter().map(Into::into).collect(),
             total: s.total,
             unread: s.unread,
+            unread_quiet: s.unread_quiet,
             unread_mention: s.unread_mention,
             has_call: s.has_call,
         }

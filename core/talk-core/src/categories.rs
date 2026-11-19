@@ -87,10 +87,13 @@ pub struct SectionView {
     pub rooms: Vec<RoomView>,
     /// All chats in the section (also the hidden ones).
     pub total: u32,
-    /// For the head of a collapsed section. Unread messages of all its chats, counted
-    /// like the app badge ([`crate::accounts::badge`]): muted chats never, "Nur
-    /// Erwähnungen" only with a mention.
+    /// For the head of a collapsed section: unread messages of all its chats. Muted
+    /// chats ("Aus") do not count.
     pub unread: u32,
+    /// Show `unread` in grey like the number of a quiet chat: none of the chats counts
+    /// for the app badge ([`crate::accounts::badge`]), all are "Nur Erwähnungen"
+    /// without a mention.
+    pub unread_quiet: bool,
     /// One of its chats has an unread mention (muted chats do not count).
     pub unread_mention: bool,
     /// One of its chats has a running call.
@@ -477,7 +480,11 @@ pub(crate) fn build_sections(
         title,
         collapsed: collapsed && !searching,
         total: rooms.len() as u32,
-        unread: crate::accounts::badge(&rooms).messages,
+        unread: rooms
+            .iter()
+            .filter(|r| r.notification_level != 3)
+            .fold(0u32, |n, r| n.saturating_add(u32::try_from(r.unread_messages).unwrap_or(0))),
+        unread_quiet: crate::accounts::badge(&rooms).chats == 0,
         unread_mention: rooms.iter().any(|r| r.unread_messages > 0 && r.unread_mention && r.notification_level != 3),
         has_call: rooms.iter().any(|r| r.has_call),
         rooms,
@@ -518,6 +525,7 @@ pub(crate) fn build_sections(
             collapsed: false,
             total: archived.len() as u32,
             unread: 0,
+            unread_quiet: true,
             unread_mention: false,
             has_call: false,
             rooms: archived,
@@ -662,21 +670,23 @@ mod tests {
         unread.unread_messages = 2;
         let mut mention = room("m", false, &["3"]);
         (mention.unread_messages, mention.unread_mention, mention.notification_level) = (3, true, 2);
-        // "Nur Erwähnungen" without a mention and "Aus" do not count, like the app badge.
+        // "Nur Erwähnungen" without a mention counts (in grey when alone), "Aus" never.
         let mut quiet = room("q", false, &["3"]);
         (quiet.unread_messages, quiet.notification_level) = (5, 2);
         let mut muted = room("off", false, &["3"]);
         (muted.unread_messages, muted.unread_mention, muted.notification_level) = (7, true, 3);
         let mut call = room("k", false, &["3"]);
         call.has_call = true;
-        let rooms = vec![room("x", false, &["3"]), unread, mention, quiet, muted.clone(), call, room("d", false, &[])];
+        let rooms = vec![room("x", false, &["3"]), unread, mention, quiet.clone(), muted.clone(), call, room("d", false, &[])];
         let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", false, false);
         assert!(s[0].collapsed);
         assert_eq!(s[0].total, 6);
         assert!(s[0].rooms.is_empty());
-        assert_eq!((s[0].unread, s[0].unread_mention, s[0].has_call), (5, true, true));
+        assert_eq!((s[0].unread, s[0].unread_quiet, s[0].unread_mention, s[0].has_call), (10, false, true, true));
         assert_eq!((s[1].unread, s[1].unread_mention, s[1].has_call), (0, false, false));
-        // A muted chat alone shows nothing in the head.
+        // Only quiet chats: the number in grey. A muted chat alone shows nothing.
+        let s = build_sections(vec![quiet.clone(), muted.clone(), room("d", false, &[])], &tags, &HashSet::new(), "", false, false);
+        assert_eq!((s[0].unread, s[0].unread_quiet, s[0].unread_mention), (5, true, false));
         let s = build_sections(vec![muted, room("d", false, &[])], &tags, &HashSet::new(), "", false, false);
         assert_eq!((s[0].unread, s[0].unread_mention), (0, false));
         // Searching opens everything.

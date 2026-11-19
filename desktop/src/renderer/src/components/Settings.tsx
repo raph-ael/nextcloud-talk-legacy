@@ -3,8 +3,8 @@
 // list and an open chat stay mounted underneath (draft, scroll position); a call goes on.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AppInfo, Layout, Theme, UpdateCheck } from '@shared/core'
-import { closeSettings, MAX_ACCOUNTS, setSettingsPage, startAddAccount, useStore, type SettingsPage } from '../store'
+import type { AppInfo, Layout, SortOrder, Theme, UpdateCheck } from '@shared/core'
+import { closeSettings, MAX_ACCOUNTS, setSettingsPage, setSortOrder, startAddAccount, useStore, type SettingsPage } from '../store'
 import { toast } from '../call/store'
 import { ACCENTS } from '../accents'
 import { setAppearance, setLayout, setSplitChats, useAppearance } from '../appearance'
@@ -19,7 +19,6 @@ const IS_MAC = navigator.platform.startsWith('Mac')
 const TITLES: Record<Exclude<SettingsPage, 'categories'>, string> = {
   general: 'Allgemein',
   appearance: 'Darstellung',
-  chats: 'Chats',
   about: 'Über Wolkenfunk',
 }
 
@@ -29,9 +28,15 @@ const THEMES: { theme: Theme; label: string }[] = [
   { theme: 'dark', label: 'Dunkel' },
 ]
 
+/** „Sortierung“ of the chat list (docs/categories.md). */
+const SORTS: { order: SortOrder; label: string }[] = [
+  { order: 'activity', label: 'Letzte Aktivität' },
+  { order: 'alphabetical', label: 'Name (A–Z)' },
+]
+
 /** „Ansicht“ (docs/compact-view.md). */
 const LAYOUTS: { layout: Layout; label: string; sub?: string }[] = [
-  { layout: 'bubbles', label: 'Blasen' },
+  { layout: 'bubbles', label: 'Sprechblasen' },
   { layout: 'compact', label: 'Kompakt', sub: 'Einzeilige Chatliste, Nachrichten untereinander' },
 ]
 
@@ -56,7 +61,7 @@ function CompactPreviewRow({ name, text, time }: { name: string; text: string; t
 export function Settings() {
   const page = useStore((s) => s.settings) ?? 'appearance'
   const account = useStore((s) => s.account)
-  const [chats, setChats] = useState(false)
+  const [categories, setCategories] = useState(false)
   const [confirmLogout, setConfirmLogout] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -64,7 +69,7 @@ export function Settings() {
     let alive = true
     window.talk
       .categoriesSupported()
-      .then((ok) => alive && setChats(ok))
+      .then((ok) => alive && setCategories(ok))
       .catch(() => {})
     return () => {
       alive = false
@@ -76,7 +81,7 @@ export function Settings() {
     ref.current?.querySelector<HTMLElement>('.settings-nav-row[aria-current="page"]')?.focus()
   }, [])
 
-  // Esc goes back to the chats; on „Kategorien“ the page handles Esc itself (back to „Chats“).
+  // Esc goes back to the chats; „Kategorien“ handles Esc itself („Chats auswählen“ has steps).
   useEffect(() => {
     if (page === 'categories') return
     function onKey(e: KeyboardEvent) {
@@ -93,10 +98,10 @@ export function Settings() {
   const rows: { page: SettingsPage; label: string; icon: ReactNode }[] = [
     { page: 'general', label: 'Allgemein', icon: <GearIcon /> },
     { page: 'appearance', label: 'Darstellung', icon: <BrushIcon /> },
-    ...(chats ? [{ page: 'chats' as const, label: 'Chats', icon: <ChatIcon /> }] : []),
+    ...(categories ? [{ page: 'categories' as const, label: 'Kategorien', icon: <ChatIcon /> }] : []),
     { page: 'about', label: 'Über Wolkenfunk', icon: <InfoIcon /> },
   ]
-  const selected = page === 'categories' ? 'chats' : page
+  const selected = page
 
   return (
     <div className="settings-shell" ref={ref}>
@@ -139,7 +144,7 @@ export function Settings() {
       </aside>
       {confirmLogout && account && <LogoutDialog name={account.name} server={account.server} onClose={() => setConfirmLogout(false)} />}
       {page === 'categories' ? (
-        <Categories onClose={() => setSettingsPage('chats')} />
+        <Categories />
       ) : (
         <section className="chat settings-page" aria-label={TITLES[page]}>
           <header className="pane-header settings-page-header">
@@ -149,7 +154,6 @@ export function Settings() {
             <div className="settings">
               {page === 'general' && <GeneralPage />}
               {page === 'appearance' && <AppearancePage />}
-              {page === 'chats' && <ChatsPage />}
               {page === 'about' && <AboutPage />}
             </div>
           </div>
@@ -286,6 +290,7 @@ function GeneralPage() {
 /** „Darstellung“: preview, design, accent, view and chat list; every change applies at once. */
 function AppearancePage() {
   const { theme, accent, dark, layout, splitChats } = useAppearance()
+  const sortOrder = useStore((s) => s.sortOrder)
   return (
     <>
       <div className="appearance-preview" aria-hidden>
@@ -381,19 +386,26 @@ function AppearancePage() {
           <span className={`switch${splitChats ? ' on' : ''}`} aria-hidden />
         </button>
       </section>
+      <section className="settings-section">
+        <h3 className="settings-heading" id="settings-sort">
+          Sortierung
+        </h3>
+        <div className="choice-list settings-choices" role="radiogroup" aria-labelledby="settings-sort">
+          {SORTS.map((o) => (
+            <button
+              key={o.order}
+              role="radio"
+              aria-checked={sortOrder === o.order}
+              className="choice"
+              onClick={() => void setSortOrder(o.order)}
+            >
+              <span className={`radio${sortOrder === o.order ? ' on' : ''}`} aria-hidden />
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </section>
     </>
-  )
-}
-
-/** „Chats“ (only with server categories): the existing page „Kategorien“. */
-function ChatsPage() {
-  return (
-    <section className="settings-section">
-      <button className="settings-row" onClick={() => setSettingsPage('categories')}>
-        <span className="settings-text">Kategorien verwalten</span>
-        <Chevron />
-      </button>
-    </section>
   )
 }
 

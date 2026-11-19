@@ -224,11 +224,22 @@ export interface SectionView {
   /** Empty when it is the only section: then no header. */
   title: string
   collapsed: boolean
-  /** Rows to show (collapsed: only the open chat, unread ones and ones with a call). */
+  /** Rows to show: none when collapsed. */
   rooms: RoomView[]
   /** All chats in the section, hidden ones included. */
   total: number
+  /** For the head while collapsed: unread messages of all its chats; muted ones do not count. */
+  unread: number
+  /** Show `unread` in grey like the number of a quiet chat: nothing in it counts for the badge. */
+  unreadQuiet: boolean
+  /** For the head while collapsed: an unread mention in one of its chats. */
+  unreadMention: boolean
+  /** For the head while collapsed: a running call in one of its chats. */
+  hasCall: boolean
 }
+
+/** „Sortierung“ of the chats in every section (docs/categories.md). */
+export type SortOrder = 'activity' | 'alphabetical'
 
 /** A category on the page "Kategorien" (docs/categories.md). */
 export interface CategoryView {
@@ -598,7 +609,7 @@ export interface Appearance {
   splitChats: boolean
 }
 
-/** „Blasen“ or „Kompakt“ (docs/compact-view.md). */
+/** „Sprechblasen“ or „Kompakt“ (docs/compact-view.md). */
 export type Layout = 'bubbles' | 'compact'
 
 /** „Über Wolkenfunk“. */
@@ -751,7 +762,11 @@ export interface TalkApi {
   roomSections(query: string, activeToken: string | null, split: boolean): Promise<SectionView[]>
   /** Opens or closes a section (saved on the server; the list follows via `roomsChanged`). */
   toggleSection(id: string): Promise<string | null>
-  /** The server keeps categories: offer "Kategorien verwalten". */
+  /** „Sortierung“ of the account shown; read again on `roomsChanged`. */
+  sortOrder(): Promise<SortOrder>
+  /** Saved on the server where it knows the setting; resolves to a German error or null. */
+  setSortOrder(order: SortOrder): Promise<string | null>
+  /** The server keeps categories: offer „Kategorien“ in the settings. */
   categoriesSupported(): Promise<boolean>
   /** All categories in order, "Favoriten" and "Chats" included. */
   categories(): Promise<CategoryView[]>

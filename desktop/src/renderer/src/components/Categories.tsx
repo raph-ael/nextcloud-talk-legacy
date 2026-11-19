@@ -1,9 +1,9 @@
-// Page „Kategorien“ (docs/categories.md, desktop only): replaces the chat area like the group
-// settings; back arrow and Esc close it, opening a chat closes it too.
+// Page „Kategorien“ of the settings (docs/categories.md, desktop only). Esc goes back to the
+// chats like on every settings page; inside „Chats auswählen“ it goes one step back.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CategoryView } from '@shared/core'
-import { closeCategories, useStore } from '../store'
+import { closeSettings, useStore } from '../store'
 import { toast } from '../call/store'
 import { ConfirmDialog, Modal } from './Modal'
 import { MessageMenu } from './MessageMenu'
@@ -29,8 +29,7 @@ function chatCount(n: number): string {
   return n === 1 ? '1 Chat' : `${n} Chats`
 }
 
-/** `onClose`: back arrow and Esc (default: back to the chat; in the settings: to „Chats“). */
-export function Categories({ onClose = closeCategories }: { onClose?: () => void } = {}) {
+export function Categories() {
   const rooms = useStore((s) => s.rooms)
   const composing = useStore((s) => s.composing)
   const [list, setList] = useState<CategoryView[] | null>(null)
@@ -57,7 +56,7 @@ export function Categories({ onClose = closeCategories }: { onClose?: () => void
     () => {
       if (busy) return
       if (pick) back()
-      else onClose()
+      else closeSettings()
     },
     !composing,
   )
@@ -121,8 +120,10 @@ export function Categories({ onClose = closeCategories }: { onClose?: () => void
   }
 
   return (
-    <section className="chat group-info" ref={pane}>
-      <PaneHeader title="Kategorien" onBack={onClose} />
+    <section className="chat group-info settings-page" ref={pane} aria-label="Kategorien">
+      <header className="pane-header settings-page-header">
+        <h2>Kategorien</h2>
+      </header>
       <div className="settings-scroll">
         <div className="settings">
           <section className="settings-section">
