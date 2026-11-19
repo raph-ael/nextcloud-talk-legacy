@@ -152,8 +152,8 @@ Gegen `talk-demo`. Der User ist Mira Lange. Im Chat „Sommerfest“ gibt es die
 9. Nachricht mit Erwähnung bearbeiten: Das Feld zeigt den Namen hinterlegt. Eine zweite Erwähnung dazu, speichern: beide bleiben Erwähnungen.
 10. Chat verlassen und zurück: Der Entwurf mit Erwähnung ist wieder da und wird als Erwähnung gesendet.
 11. Erwähnung von Lena antippen: Der Direktchat öffnet, Zurück führt in die Gruppe. Erwähnung von Jonas antippen: Nachfrage. „Helferkreis“, „Alle“ und der eigene Name tun nichts.
-12. „@“-Knopf: Per `/demo/incoming` eine Nachricht mit `@mira` und danach 30 weitere in einen Chat schicken, der nicht offen ist. Chat öffnen: Der Knopf steht über „Zum Ende springen“. Tippen springt zur Erwähnung, die Blase leuchtet, der Knopf verschwindet.
-13. Zwei Erwähnungen: Der Knopf zeigt „2“ und zählt herunter. Hochscrollen bis zur Erwähnung zählt ebenso.
+12. „@“-Knopf: Per `/demo/incoming` in einen Chat, der nicht offen ist, erst 30 Nachrichten schicken, dann eine mit `@mira`, dann 30 weitere. Chat öffnen: Er steht an der Ungelesen-Linie, die Erwähnung liegt weiter unten, der Knopf steht über „Zum Ende springen“. Tippen springt zur Erwähnung, die Blase leuchtet, der Knopf verschwindet. (Ist die Erwähnung beim Öffnen schon zu sehen, erscheint der Knopf nicht: Sie gilt als gesehen.)
+13. Chat offen und hochgescrollt, zwei Nachrichten mit `@mira` und `@all` treffen ein: Der Knopf zeigt „2“ und zählt beim Tippen herunter. Hinscrollen bis zur Erwähnung zählt ebenso.
 14. Suche im Chat nach dem Namen: Die Erwähnung ist gelb hinterlegt.
 15. Systemmeldungen („… hat die Unterhaltung erstellt“) zeigen kein „@“.
 16. Desktop: Pfeiltasten, Enter, Tab, Maus. Esc schließt nur die Liste, die Antwort-Leiste bleibt.
