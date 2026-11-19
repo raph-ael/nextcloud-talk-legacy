@@ -2,7 +2,7 @@
   "_hinweis": "Demo-Inhalte (alles erfunden). Zeiten: \"at\": \"-2 18:30\" = vor 2 Tagen um 18:30 Ortszeit, \"-45m\" / \"-3h\" = so lange vor dem Serverstart. Pro Unterhaltung aufsteigend sortieren. \"from\": Personen-id aus people.json. \"@id\" im Text wird zur Erwähnung, in Gruppen auch \"@all\", \"@\\\"group/id\\\"\" und \"@\\\"team/id\\\"\" (\"groups\"/\"teams\" der Unterhaltung: id, name, members). \"unread\": die letzten N Nachrichten der anderen sind ungelesen. \"reply\": \"key\" einer früheren Nachricht. \"file\": Bild oder Sprachnachricht aus media/. \"system\": conversation_created | user_added (mit \"user\") oder eigener \"text\".",
   "categories": [
     { "id": "3", "name": "Familie & Freunde", "rooms": ["familie", "hilde", "paul", "lena"] },
-    { "id": "4", "name": "Arbeit", "rooms": ["website", "tobias", "sophie"] }
+    { "id": "4", "name": "Arbeit", "rooms": ["website", "tobias"] }
   ],
   "rooms": [
     {

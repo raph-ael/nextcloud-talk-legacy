@@ -1303,9 +1303,12 @@ impl TalkSession {
     // --- categories (docs/categories.md) ---------------------------------------------
 
     /// The chat list in sections ("Favoriten", categories, "Chats"). Call again on
-    /// `RoomsChanged`, when the search text or the open chat changes.
-    pub fn room_sections(&self, query: String, active_token: Option<String>) -> Vec<SectionView> {
-        self.engine.room_sections(&query, active_token.as_deref()).into_iter().map(Into::into).collect()
+    /// `RoomsChanged`, when the search text, the open chat or `split` changes. `split` is
+    /// the device setting "Gruppen und Direktchats trennen": "Gruppen" and "Direktchats"
+    /// instead of "Chats" (ids and kinds `groups`, `direct`).
+    #[uniffi::method(default(split = false))]
+    pub fn room_sections(&self, query: String, active_token: Option<String>, split: bool) -> Vec<SectionView> {
+        self.engine.room_sections(&query, active_token.as_deref(), split).into_iter().map(Into::into).collect()
     }
 
     /// Opens or closes a section (saved on the server). German error text or `None`;

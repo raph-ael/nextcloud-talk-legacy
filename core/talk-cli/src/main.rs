@@ -163,6 +163,9 @@ enum Cmd {
         /// The open chat (stays visible in a collapsed section)
         #[arg(long)]
         active: Option<String>,
+        /// "Gruppen" and "Direktchats" instead of "Chats" (the apps' default)
+        #[arg(long)]
+        split: bool,
     },
     /// Categories in the chat list (docs/categories.md)
     Category {
@@ -784,8 +787,8 @@ async fn category_cmd(client: TalkClient, cmd: &Cmd) -> Result<()> {
     let fail = |op: CategoryOp| move |e: talk_core::Error| anyhow::anyhow!("{} ({e})", category_error_text(op, &e));
     let result: Result<()> = async {
         match cmd {
-            Cmd::Sections { query, active } => {
-                for s in engine.room_sections(query.as_deref().unwrap_or(""), active.as_deref()) {
+            Cmd::Sections { query, active, split } => {
+                for s in engine.room_sections(query.as_deref().unwrap_or(""), active.as_deref(), *split) {
                     let title = if s.title.is_empty() { "(ohne Kopf)" } else { &s.title };
                     let arrow = if s.collapsed { ">" } else { "v" };
                     println!("{arrow} {title} [{} {}] {}/{} sichtbar", s.kind, s.id, s.rooms.len(), s.total);

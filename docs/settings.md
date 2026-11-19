@@ -54,7 +54,15 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
    - Jedes Feld zeigt den Akzent des aktuellen Modus.
    - Das gewählte Feld hat ein weißes Häkchen und einen Ring.
    - Das Label ist der Farbname, beim gewählten Feld mit „, ausgewählt“.
-4. **Jede Änderung gilt sofort** in der ganzen App, auch in offenen Sheets und Dialogen. Einen Knopf „Speichern“ gibt es nicht.
+4. **„Ansicht“** (nur Desktop) ist eine Auswahl wie „Design“, mit zwei Werten:
+   - „Blasen“ (Standard)
+   - „Kompakt“ mit dem Untertitel „Einzeilige Chatliste, Nachrichten untereinander“
+
+   Was sich ändert, steht in `docs/compact-view.md`. Die Vorschau oben zeigt die gewählte Ansicht.
+5. **„Chatliste“** (alle) ist ein Abschnitt mit einem Schalter:
+   - **„Gruppen und Direktchats trennen“**, Untertitel „Eigene Abschnitte statt „Chats““, standardmäßig an.
+   - Die Regeln stehen in `docs/categories.md` („Gruppen und Direktchats“).
+6. **Jede Änderung gilt sofort** in der ganzen App, auch in offenen Sheets und Dialogen. Einen Knopf „Speichern“ gibt es nicht.
 
 **Was die Akzentfarbe färbt:**
 - alles, was heute `accent` nutzt: Knöpfe, Links, Schalter, Häkchen, Badges, Auswahl, „Neue Gruppe“-Kreise
@@ -110,11 +118,20 @@ Die Einstellungen gelten nur für das Gerät. Sie gehören nicht zum Konto und b
 
 | Plattform | Ort | Schlüssel |
 |---|---|---|
-| Desktop | `settings.json` im Datenordner (Main-Prozess) | `theme`: `system`, `light` oder `dark`; `accent`: Farb-id |
-| Android | SharedPreferences `ui` | `theme`, `accent` |
-| iOS | UserDefaults | `appearance.theme`, `appearance.accent` |
+| Desktop | `settings.json` im Datenordner (Main-Prozess) | `theme`: `system`, `light` oder `dark`; `accent`: Farb-id; `layout`: `bubbles` oder `compact`; `splitChats`: `true`/`false` |
+| Android | SharedPreferences `ui` | `theme`, `accent`, `split_chats` |
+| iOS | UserDefaults | `appearance.theme`, `appearance.accent`, `chatlist.split` |
 
-Fehlt der Wert oder ist die id unbekannt, gelten `system` bzw. `blau`.
+Fehlt der Wert oder ist er unbekannt, gelten `system`, `blau`, `bubbles` bzw. `true`.
+
+**Desktop:**
+- Die IPC-Aufrufe sind:
+  - `appearance()` mit `{theme, accent, layout, splitChats}`
+  - `setAppearance(theme, accent)`
+  - `setLayout(layout)`
+  - `setSplitChats(on)`
+- Jede Änderung meldet das Ereignis `appearanceChanged`.
+- Der Renderer setzt `data-layout` auf `<html>`.
 
 ## Akzentfarben
 
@@ -139,7 +156,7 @@ Diese Dateien werden nie von Hand geändert.
 - **Desktop:**
   - Der Main-Prozess setzt `nativeTheme.themeSource`. Damit folgen `prefers-color-scheme` im CSS, der Fensterhintergrund, das Tray-Symbol und die Avatare.
   - Der Renderer setzt `--accent`, `--accent-hover` und `--bubble-own` auf `:root`, passend zum aktuellen Modus. Bei einem Moduswechsel setzt er sie neu.
-  - Die IPC-Aufrufe sind `appearance()` mit `{theme, accent}`, `setAppearance(theme, accent)` und das Ereignis `appearanceChanged`.
+  - Die IPC-Aufrufe stehen unter „Speicherung“.
 - **Android:**
   - `TalkTheme(dark, accent)` liest einen `AppearanceStore` (einen StateFlow über die SharedPreferences).
   - `primary` und `TalkColors.accent`/`bubbleOwn` kommen aus der Palette.
@@ -228,6 +245,8 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
 | Zeile der Startseite | ihr Titel, als Knopf |
 | Farbfeld | „{Farbname}“ bzw. „{Farbname}, ausgewählt“ |
 | Design-Auswahl | Radiogruppe „Design“ |
+| Ansicht-Auswahl (Desktop) | Radiogruppe „Ansicht“ |
+| „Gruppen und Direktchats trennen“ | Schalter mit Titel und Zustand (Desktop `role="switch"`, Android `Switch`, iOS `Toggle`) |
 | Chat-Zeile | zusätzliche Aktion „Chat-Menü“ (Android `customActions`, iOS `accessibilityActions` bzw. das Kontextmenü, Desktop `aria-haspopup="menu"`) |
 | Durchgestrichene Glocke | „stummgeschaltet“, im Label der Zeile |
 | Untermenü-Eintrag (Desktop) | `aria-haspopup="menu"` und `aria-expanded`; Einträge mit `menuitemcheckbox` bzw. `menuitemradio` |

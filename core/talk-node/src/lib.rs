@@ -440,10 +440,10 @@ impl TalkSession {
     // --- categories (docs/categories.md); changes resolve to a German error or `null` --
 
     /// `SectionView[]`: the chat list in sections. Again on `roomsChanged`, a new search
-    /// text or another open chat.
+    /// text, another open chat or a changed `split` ("Gruppen und Direktchats trennen").
     #[napi(ts_return_type = "any")]
-    pub fn room_sections(&self, query: String, active_token: Option<String>) -> Result<Value> {
-        json(&self.engine.room_sections(&query, active_token.as_deref()))
+    pub fn room_sections(&self, query: String, active_token: Option<String>, split: Option<bool>) -> Result<Value> {
+        json(&self.engine.room_sections(&query, active_token.as_deref(), split.unwrap_or(false)))
     }
 
     #[napi]

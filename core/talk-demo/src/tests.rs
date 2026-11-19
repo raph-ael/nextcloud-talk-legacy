@@ -202,8 +202,22 @@ async fn engine_and_login_flow() {
     let garden = rooms.iter().find(|r| r.token == "garten").unwrap();
     assert_eq!(garden.unread_messages, 5);
     assert!(garden.can_react);
-    let titles: Vec<String> = engine.room_sections("", None).into_iter().map(|s| s.title).collect();
+    let titles: Vec<String> = engine.room_sections("", None, false).into_iter().map(|s| s.title).collect();
     assert_eq!(titles, vec!["Favoriten", "Familie & Freunde", "Arbeit", "Chats"]);
+    // Split (the apps' default): "Gruppen" and "Direktchats" where "Chats" was.
+    let split = engine.room_sections("", None, true);
+    let heads: Vec<&str> = split.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(heads, vec!["Favoriten", "Familie & Freunde", "Arbeit", "Gruppen", "Direktchats"]);
+    for s in &split[3..] {
+        let direct = s.kind == "direct";
+        assert!(s.rooms.iter().all(|r| matches!(r.room_type, 1 | 4 | 5 | 6) == direct), "{}", s.title);
+    }
+    let all_chats = engine.room_sections("", None, false).pop().unwrap().total;
+    assert_eq!(split[3].total + split[4].total, all_chats);
+    engine.toggle_section("groups").await.unwrap();
+    assert!(engine.room_sections("", None, true)[3].collapsed, "collapsed only here");
+    engine.toggle_section("groups").await.unwrap();
+    assert!(!engine.room_sections("", None, true)[3].collapsed);
 
     // Chat menu (docs/settings.md): the default level is resolved, actions show at once.
     let room = |token: &str| engine.rooms().into_iter().find(|r| r.token == token).unwrap();
@@ -218,7 +232,7 @@ async fn engine_and_login_flow() {
     assert!(engine.set_favorite("gibt-es-nicht", true).await.is_err());
     engine.set_room_categories("lesekreis", &["3".into(), "4".into()]).await.unwrap();
     assert_eq!(room("lesekreis").tag_ids, vec!["3", "4"]);
-    let sections = engine.room_sections("", None);
+    let sections = engine.room_sections("", None, false);
     assert!(sections.iter().filter(|s| s.rooms.iter().any(|r| r.token == "lesekreis")).count() == 2);
     engine.set_room_categories("lesekreis", &[]).await.unwrap();
     assert!(room("lesekreis").tag_ids.is_empty());
@@ -1451,9 +1465,9 @@ async fn the_whole_history_is_searchable() {
     assert!(total(&picture.name, Some("garten")) >= 1);
     engine.close_chat("garten");
     // A chat's name finds the archived chat too, in its own section.
-    let sections = engine.room_sections("hofladen", None);
+    let sections = engine.room_sections("hofladen", None, false);
     assert_eq!(sections.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["archived"]);
-    assert!(engine.room_sections("", None).iter().all(|s| s.rooms.iter().all(|r| r.token != "hofladen")));
+    assert!(engine.room_sections("", None, false).iter().all(|s| s.rooms.iter().all(|r| r.token != "hofladen")));
 
     // Opening the chat at the hit: a window from the server (the chat was never open),
     // 36 messages before it, the message, 50 after it.

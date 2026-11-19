@@ -1,5 +1,5 @@
-//! Categories in the chat list: "Favoriten", our own categories, "Chats", each one
-//! collapsible (Talk calls them conversation tags). The contract for the platforms is
+//! Categories in the chat list: "Favoriten", our own categories, "Chats" (or split into
+//! "Gruppen" and "Direktchats"), each one collapsible (Talk calls them conversation tags). The contract for the platforms is
 //! docs/categories.md.
 
 use std::collections::HashSet;
@@ -20,6 +20,9 @@ const KIND_OTHER: &str = "other";
 const KIND_CUSTOM: &str = "custom";
 /// The section of archived chats in a search; no category, it cannot be collapsed.
 const KIND_ARCHIVED: &str = "archived";
+/// "Chats" split in two (a device setting): kind and id are the same, collapsed only here.
+pub const SECTION_GROUPS: &str = "groups";
+pub const SECTION_DIRECT: &str = "direct";
 
 /// What the engine knows about categories.
 #[derive(Debug, Default)]
@@ -28,7 +31,8 @@ pub(crate) struct Categories {
     supported: bool,
     /// From the server (cached), any order.
     tags: Vec<ConversationTag>,
-    /// Collapsed sections without server categories (ids [`LOCAL_FAVORITES`], [`LOCAL_OTHER`]).
+    /// Collapsed sections without a server category behind them ([`LOCAL_FAVORITES`],
+    /// [`LOCAL_OTHER`], [`SECTION_GROUPS`], [`SECTION_DIRECT`]).
     local_collapsed: HashSet<String>,
 }
 
@@ -129,10 +133,11 @@ impl Engine {
     /// The chat list as sections (docs/categories.md): "Favoriten", our categories,
     /// "Chats" in the server's order; empty sections are left out. `query` filters by
     /// name (then nothing is collapsed). `active_token` stays visible when collapsed.
-    pub fn room_sections(&self, query: &str, active_token: Option<&str>) -> Vec<SectionView> {
+    /// `split` (the device setting) puts "Gruppen" and "Direktchats" where "Chats" is.
+    pub fn room_sections(&self, query: &str, active_token: Option<&str>, split: bool) -> Vec<SectionView> {
         let rooms = self.rooms();
         let c = self.categories.lock().unwrap();
-        build_sections(rooms, &c.sorted(), &c.local_collapsed, query, active_token)
+        build_sections(rooms, &c.sorted(), &c.local_collapsed, query, active_token, split)
     }
 
     /// Opens or closes a section. Saved on the server (all devices, Talk-Web); without
@@ -335,14 +340,21 @@ fn has_category(r: &RoomView, custom: &HashSet<&str>) -> bool {
     r.tag_ids.iter().any(|id| custom.contains(id.as_str()))
 }
 
+/// One-to-one, former one-to-one, note to self and the changelog: under "Direktchats".
+fn is_direct(r: &RoomView) -> bool {
+    matches!(r.room_type, 1 | 4 | 5 | 6)
+}
+
 /// The sections like Talk-Web: a favorite is under "Favoriten" (and its categories),
-/// a chat in no category and no favorite under "Chats".
+/// a chat in no category and no favorite under "Chats", or with `split` under
+/// "Gruppen" or "Direktchats".
 pub(crate) fn build_sections(
     rooms: Vec<RoomView>,
     sorted_tags: &[ConversationTag],
     local_collapsed: &HashSet<String>,
     query: &str,
     active_token: Option<&str>,
+    split: bool,
 ) -> Vec<SectionView> {
     // Like the message search: case and accents do not count (docs/search.md).
     let q = crate::search::fold(query.trim());
@@ -368,28 +380,36 @@ pub(crate) fn build_sections(
     };
     let custom: HashSet<&str> = tags.iter().filter(|t| t.kind == KIND_CUSTOM).map(|t| t.id.as_str()).collect();
 
-    let mut sections: Vec<SectionView> = tags
-        .iter()
-        .filter_map(|t| {
-            let members: Vec<RoomView> = rooms
-                .iter()
-                .filter(|r| match t.kind.as_str() {
-                    KIND_FAVORITES => r.is_favorite,
-                    KIND_OTHER => !r.is_favorite && !has_category(r, &custom),
-                    _ => r.tag_ids.contains(&t.id),
-                })
-                .cloned()
-                .collect();
-            (!members.is_empty()).then(|| SectionView {
-                id: t.id.clone(),
-                kind: t.kind.clone(),
-                title: title(t),
-                collapsed: t.collapsed && !searching,
-                total: members.len() as u32,
-                rooms: members,
+    let section = |id: &str, kind: &str, title: String, collapsed: bool, rooms: Vec<RoomView>| SectionView {
+        id: id.into(),
+        kind: kind.into(),
+        title,
+        collapsed: collapsed && !searching,
+        total: rooms.len() as u32,
+        rooms,
+    };
+    let mut sections: Vec<SectionView> = Vec::new();
+    for t in tags {
+        let members: Vec<RoomView> = rooms
+            .iter()
+            .filter(|r| match t.kind.as_str() {
+                KIND_FAVORITES => r.is_favorite,
+                KIND_OTHER => !r.is_favorite && !has_category(r, &custom),
+                _ => r.tag_ids.contains(&t.id),
             })
-        })
-        .collect();
+            .cloned()
+            .collect();
+        if split && t.kind == KIND_OTHER {
+            let (direct, groups): (Vec<RoomView>, Vec<RoomView>) = members.into_iter().partition(is_direct);
+            for (id, title, part) in [(SECTION_GROUPS, "Gruppen", groups), (SECTION_DIRECT, "Direktchats", direct)] {
+                if !part.is_empty() {
+                    sections.push(section(id, id, title.into(), local_collapsed.contains(id), part));
+                }
+            }
+        } else if !members.is_empty() {
+            sections.push(section(&t.id, &t.kind, title(t), t.collapsed, members));
+        }
+    }
 
     if let [only] = sections.as_mut_slice() {
         only.title.clear();
@@ -514,7 +534,7 @@ mod tests {
             room("e", true, &["4"]),
             room("f", false, &["99"]), // unknown category: under "Chats"
         ];
-        let s = build_sections(rooms, &server_tags(), &HashSet::new(), "", None);
+        let s = build_sections(rooms, &server_tags(), &HashSet::new(), "", None, false);
         let titles: Vec<&str> = s.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(titles, ["Favoriten", "Arbeit", "Familie", "Chats"]);
         assert_eq!(ids(&s[0]), ["a", "e"]);
@@ -526,12 +546,12 @@ mod tests {
 
     #[test]
     fn empty_sections_and_single_section() {
-        let s = build_sections(vec![room("a", false, &[])], &server_tags(), &HashSet::new(), "", None);
+        let s = build_sections(vec![room("a", false, &[])], &server_tags(), &HashSet::new(), "", None, false);
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].title, "");
         let mut tags = server_tags();
         tags[3].collapsed = true;
-        let s = build_sections(vec![room("a", false, &[])], &tags, &HashSet::new(), "", None);
+        let s = build_sections(vec![room("a", false, &[])], &tags, &HashSet::new(), "", None, false);
         assert!(!s[0].collapsed);
         assert_eq!(ids(&s[0]), ["a"]);
     }
@@ -545,12 +565,12 @@ mod tests {
         let mut call = room("k", false, &["3"]);
         call.has_call = true;
         let rooms = vec![room("x", false, &["3"]), unread, call, room("act", false, &["3"]), room("d", false, &[])];
-        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", Some("act"));
+        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", Some("act"), false);
         assert!(s[0].collapsed);
         assert_eq!(s[0].total, 4);
         assert_eq!(ids(&s[0]), ["u", "k", "act"]);
         // Searching opens everything.
-        let s = build_sections(rooms, &tags, &HashSet::new(), "x", None);
+        let s = build_sections(rooms, &tags, &HashSet::new(), "x", None, false);
         assert!(!s[0].collapsed);
         assert_eq!(ids(&s[0]), ["x"]);
     }
@@ -562,15 +582,76 @@ mod tests {
         archived.is_archived = true;
         let rooms = vec![room("a", true, &[]), room("b", false, &["3"]), archived];
         // A search finds the archived chat too, under its own heading, and ignores case.
-        let found = build_sections(rooms.clone(), &[], &collapsed, "Z", None);
+        let found = build_sections(rooms.clone(), &[], &collapsed, "Z", None, false);
         assert_eq!(found.iter().map(|s| (s.kind.as_str(), s.title.as_str())).collect::<Vec<_>>(), [("archived", "Archiviert")]);
         assert_eq!(found[0].rooms[0].token, "z");
-        let s = build_sections(rooms, &[], &collapsed, "", None);
+        let s = build_sections(rooms, &[], &collapsed, "", None, false);
         assert_eq!(s.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [LOCAL_FAVORITES, LOCAL_OTHER]);
         assert_eq!(s[1].title, "Chats");
         assert!(s[1].collapsed);
         assert!(s[1].rooms.is_empty());
         assert_eq!(s[1].total, 1);
+    }
+
+    fn typed(token: &str, room_type: u8, fav: bool) -> RoomView {
+        RoomView { room_type, ..room(token, fav, &[]) }
+    }
+
+    #[test]
+    fn split_into_groups_and_direct() {
+        let mut in_cat = typed("k", 1, false);
+        in_cat.tag_ids = vec!["3".into()];
+        let rooms = vec![
+            typed("g", 2, false),
+            typed("p", 3, false),
+            typed("d", 1, false),
+            typed("former", 5, false),
+            typed("note", 6, false),
+            typed("log", 4, false),
+            typed("fav", 1, true), // only under "Favoriten"
+            in_cat,                // only under "Arbeit"
+        ];
+        let s = build_sections(rooms.clone(), &server_tags(), &HashSet::new(), "", None, true);
+        let heads: Vec<(&str, &str, &str)> = s.iter().map(|s| (s.id.as_str(), s.kind.as_str(), s.title.as_str())).collect();
+        assert_eq!(
+            heads,
+            [("1", "favorites", "Favoriten"), ("3", "custom", "Arbeit"), ("groups", "groups", "Gruppen"), ("direct", "direct", "Direktchats")]
+        );
+        assert_eq!(ids(&s[0]), ["fav"]);
+        assert_eq!(ids(&s[1]), ["k"]);
+        assert_eq!(ids(&s[2]), ["g", "p"]);
+        assert_eq!(ids(&s[3]), ["d", "former", "note", "log"]);
+        // The same without the setting: one "Chats" as before.
+        let off = build_sections(rooms, &server_tags(), &HashSet::new(), "", None, false);
+        assert_eq!(off.last().map(|s| s.title.as_str()), Some("Chats"));
+        assert_eq!(off.last().unwrap().total, 6);
+    }
+
+    #[test]
+    fn split_collapses_locally_and_keeps_rules() {
+        let collapsed: HashSet<String> = [SECTION_GROUPS.to_string()].into();
+        let mut unread = typed("u", 2, false);
+        unread.unread_messages = 1;
+        let rooms = vec![typed("g", 2, false), unread, typed("act", 2, false), typed("d", 1, false)];
+        // Also without server categories (local "fav"/"other").
+        let s = build_sections(rooms.clone(), &[], &collapsed, "", Some("act"), true);
+        assert_eq!(s.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [SECTION_GROUPS, SECTION_DIRECT]);
+        assert!(s[0].collapsed);
+        assert_eq!(s[0].total, 3);
+        assert_eq!(ids(&s[0]), ["u", "act"]);
+        assert!(!s[1].collapsed);
+        // The server's collapsed "Chats" does not close the split sections.
+        let mut tags = server_tags();
+        tags[3].collapsed = true;
+        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", None, true);
+        assert!(s.iter().all(|s| !s.collapsed));
+        // Searching opens everything.
+        let s = build_sections(rooms.clone(), &[], &collapsed, "g", None, true);
+        assert_eq!(s.len(), 1);
+        assert!(!s[0].collapsed);
+        // Only one kind left: no heading, never collapsed.
+        let s = build_sections(vec![typed("g", 2, false)], &[], &collapsed, "", None, true);
+        assert_eq!((s.len(), s[0].title.as_str(), s[0].collapsed), (1, "", false));
     }
 
     #[test]
