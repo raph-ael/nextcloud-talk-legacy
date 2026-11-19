@@ -813,7 +813,7 @@ pub struct ChatPage {
     /// Pass to `load_newer`.
     pub newest_id: Option<i64>,
     /// Messages behind the read marker that mention the user, oldest first: the "@"
-    /// button (docs/mentions.md). Only from `cached_chat` and `open_chat`.
+    /// button (docs/mentions.md). Every page tells what it knows; merge them.
     pub unread_mentions: Vec<i64>,
 }
 

@@ -105,7 +105,7 @@ Wurde der User erwähnt und hat die Stelle noch nicht gesehen, führt ein Knopf 
 | Punkt | Regel |
 |---|---|
 | Liste | Der Chat hält die ids der ungesehenen Erwähnungen, aufsteigend. |
-| Quellen | `unreadMentions` der Seiten von `cachedChat` und `openChat` (zusammengeführt), dazu jede Nachricht aus `messagesAdded` mit `mentionsMe`. |
+| Quellen | `unreadMentions` jeder Seite, die der Chat bekommt (`cachedChat`, `openChat`, `loadOlder`, `messagesAround`, `loadNewer`), zusammengeführt. Dazu jede Nachricht aus `messagesAdded` mit `mentionsMe`. Bei sehr vielen ungelesenen Nachrichten kennt die erste Seite nur die neuesten Erwähnungen, die älteren kommen mit dem Nachladen. Eine einmal gesehene id kommt nicht wieder in die Liste. |
 | Gesehen | Eine id fällt heraus, sobald ihre Blase mindestens zur Hälfte sichtbar war, nach dem Sprung zu ihr, und wenn die Nachricht gelöscht wurde. Beim Verlassen des Chats ist die Liste leer. |
 | Knopf | Rund, Größe und Fläche wie „Zum Ende springen“, direkt darüber mit 8 Abstand. Zeichen „@“. Ab zwei Erwähnungen die Zahl im selben Schild wie der Zähler von „Zum Ende springen“. |
 | Sichtbar | Solange die Liste nicht leer ist. Auf Android und iOS nicht im Suchmodus (dort ersetzt die Suchleiste das Eingabefeld). Am Desktop gibt es keinen Suchmodus, der Knopf bleibt auch mit der Marke „in {Chat}“ sichtbar. |
@@ -130,7 +130,7 @@ Die Erwähnung einer Gruppe oder eines Teams trägt kein `mentionsMe`, weil die 
 Neue Felder:
 - `MentionCandidate { mentionId, label, kind, userId?, subline }`. `label` ist der Name ohne „@“.
 - `MessageView.mentions: [MentionView { label, kind, id, isSelf }]` und `MessageView.mentionsMe`.
-- `ChatPage.unreadMentions: [id]`, nur von `cachedChat` und `openChat`.
+- `ChatPage.unreadMentions: [id]`: was der Cache hinter der Lesemarke kennt, und was die Seite selbst bringt.
 - `kind`: `user`, `group`, `team`, `guest`, `email`, `federated` oder `all`. `id` ist bei `user` die Benutzerkennung, sonst die `mentionId`.
 
 Der Kern setzt beim Senden jede Erwähnung in `@"mentionId"` um. Eine Kennung mit Zeichen, die der Server nicht liest, bleibt als Name stehen.

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::engine::Engine;
+use crate::engine::{ChatPage, Engine};
 use crate::error::Result;
 use crate::models::{ChatMessage, RoomType};
 use crate::search::fold;
@@ -448,6 +448,21 @@ impl Engine {
             direct.extend(group);
         }
         direct
+    }
+
+    /// A page with its `unread_mentions`: the cached ones, and its own messages behind the
+    /// read marker. The cache starts with the newest messages only; older unread ones
+    /// arrive with the pages the platform loads.
+    pub(crate) fn with_unread_mentions(&self, token: &str, mut page: ChatPage) -> ChatPage {
+        let mut ids = self.unread_mentions(token);
+        if let Some(room) = self.state_room(token) {
+            let after = room.last_read_message;
+            ids.extend(page.messages.iter().filter(|m| m.mentions_me && m.id > after).map(|m| m.id));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        page.unread_mentions = ids;
+        page
     }
 
     /// The one-to-one chat with a person when there is one already (nothing is created;

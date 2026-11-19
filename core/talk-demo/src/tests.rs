@@ -1641,6 +1641,49 @@ async fn mentions_from_the_suggestions_to_the_bubble() {
     let asked = page.messages.iter().find(|m| m.text == "@Mira Lange kommst du am Sonntag?").unwrap();
     assert_eq!(page.unread_mentions, [asked.id]);
 
+    // Many unread messages: the cache starts with the newest only, the pages that are
+    // loaded towards the read marker bring the older mention.
+    post(vec![("token", "lesekreis"), ("from", "clara"), ("text", "@mira liest du mit?")]).await;
+    for _ in 0..70 {
+        post(vec![("token", "lesekreis"), ("from", "lena"), ("text", "Noch eine Seite.")]).await;
+    }
+    post(vec![("token", "lesekreis"), ("from", "sophie"), ("text", "@all Treffen ist am Dienstag.")]).await;
+    engine.refresh_rooms(false).await.unwrap();
+    let read = engine.rooms().into_iter().find(|r| r.token == "lesekreis").unwrap().last_read_message;
+    let mut page = engine.open_chat("lesekreis").await.unwrap();
+    let mut seen = page.unread_mentions.clone();
+    let mut texts: Vec<(i64, String)> = page.messages.iter().map(|m| (m.id, m.text.clone())).collect();
+    while page.has_more && page.oldest_id.is_some_and(|id| id > read) {
+        page = engine.load_older("lesekreis", page.oldest_id.unwrap()).await.unwrap();
+        seen.extend(page.unread_mentions.iter().copied());
+        texts.extend(page.messages.iter().map(|m| (m.id, m.text.clone())));
+    }
+    seen.sort_unstable();
+    seen.dedup();
+    let id_of = |text: &str| texts.iter().find(|t| t.1 == text).unwrap().0;
+    assert_eq!(seen, [id_of("@Mira Lange liest du mit?"), id_of("@Alle Treffen ist am Dienstag.")]);
+
+    // A file with a caption: the mention goes along.
+    let path = dir.join("plan.txt");
+    std::fs::write(&path, b"Plan").unwrap();
+    engine
+        .enqueue_file(
+            "sommerfest",
+            &path.to_string_lossy(),
+            "plan.txt",
+            "text/plain",
+            0,
+            0,
+            "@Lena Hoffmann der Plan",
+            vec![pick("Lena Hoffmann")],
+            None,
+            "ref-caption",
+        )
+        .unwrap();
+    let file = arrived(&sink, "@Lena Hoffmann der Plan").await;
+    assert!(file.attachment.is_some());
+    assert_eq!((file.mentions[0].label.as_str(), file.mentions[0].id.as_str()), ("@Lena Hoffmann", "lena"));
+
     // Tapping a mention: the chat with that person, when there is one.
     assert_eq!(engine.existing_direct("lena").as_deref(), Some("lena"));
     assert_eq!(engine.existing_direct("jonas"), None);

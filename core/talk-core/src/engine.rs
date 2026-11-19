@@ -325,7 +325,8 @@ pub struct ChatPage {
     /// Pass to `load_newer`; like `oldest_id` it counts hidden messages too.
     pub newest_id: Option<i64>,
     /// Messages behind the read marker that mention the user, oldest first: the "@"
-    /// button of the chat (docs/mentions.md). Only from `cached_chat` and `open_chat`.
+    /// button of the chat (docs/mentions.md). What the cache holds, and what this page
+    /// brings: a chat with many unread messages tells them page by page.
     pub unread_mentions: Vec<i64>,
 }
 
@@ -1005,9 +1006,7 @@ impl Engine {
             return ChatPage::default();
         };
         let (messages, more) = self.cache.messages(token, None, PAGE_SIZE);
-        let mut page = self.cached_page(messages, more || range.has_more, range.last_common_read);
-        page.unread_mentions = self.unread_mentions(token);
-        page
+        self.with_unread_mentions(token, self.cached_page(messages, more || range.has_more, range.last_common_read))
     }
 
     /// Brings a chat up to date and starts live updates for it. Returns its newest page.
@@ -1030,11 +1029,10 @@ impl Engine {
             })
         };
         match synced {
-            Ok((mut page, newest)) => {
+            Ok((page, newest)) => {
                 self.start_poll(token, newest);
                 self.cache.flush().await;
-                page.unread_mentions = self.unread_mentions(token);
-                Ok(page)
+                Ok(self.with_unread_mentions(token, page))
             }
             Err(Error::Unauthorized) => Err(Error::Unauthorized),
             Err(e) => {
@@ -1253,7 +1251,7 @@ impl Engine {
         if let Some(r) = self.cache.range(token).filter(|r| before_id > r.oldest_id) {
             let (messages, more) = self.cache.messages(token, Some(before_id), PAGE_SIZE);
             if !messages.is_empty() {
-                return Ok(self.cached_page(messages, more || r.has_more, None));
+                return Ok(self.with_unread_mentions(token, self.cached_page(messages, more || r.has_more, None)));
             }
         }
         let batch = self.guard(self.client.history(token, Some(before_id), PAGE_SIZE).await)?;
@@ -1261,7 +1259,7 @@ impl Engine {
         let cover = batch.messages.iter().map(|m| m.id).min().map(|oldest| (oldest, before_id - 1));
         self.index_messages(token, &batch.messages, &parent_updates(&batch.messages), cover);
         self.cache.prepend(token, before_id, batch.messages.clone(), has_more);
-        Ok(self.page(batch.messages, batch.last_common_read))
+        Ok(self.with_unread_mentions(token, self.page(batch.messages, batch.last_common_read)))
     }
 
     /// A window into the history around a message (a search hit, a quoted message): up to
@@ -1278,7 +1276,7 @@ impl Engine {
                 messages.extend(after);
                 let mut page = self.cached_page(messages, more || r.has_more, r.last_common_read);
                 page.has_newer = newer;
-                return Ok(page);
+                return Ok(self.with_unread_mentions(token, page));
             }
         }
         let batch = self.guard(self.client.message_context(token, message_id, PAGE_SIZE).await)?;
@@ -1288,7 +1286,7 @@ impl Engine {
         let mut page = self.page(batch.messages, batch.last_common_read);
         page.has_more = older as u32 >= PAGE_SIZE;
         page.has_newer = newer as u32 >= PAGE_SIZE;
-        Ok(page)
+        Ok(self.with_unread_mentions(token, page))
     }
 
     /// Messages newer than `after_id`, for a window into the history: from the cache when
@@ -1300,7 +1298,7 @@ impl Engine {
             let (messages, newer) = self.cache.messages_after(token, after_id, PAGE_SIZE);
             let mut page = self.cached_page(messages, true, r.last_common_read);
             page.has_newer = newer;
-            return Ok(page);
+            return Ok(self.with_unread_mentions(token, page));
         }
         let batch = self.guard(self.client.newer_messages(token, after_id, PAGE_SIZE as usize).await)?;
         let newest = batch.messages.iter().map(|m| m.id).max().into_iter().chain(batch.last_given).max();
@@ -1312,7 +1310,7 @@ impl Engine {
         page.has_more = true;
         page.has_newer = full || below_cache;
         page.newest_id = newest.or(Some(after_id));
-        Ok(page)
+        Ok(self.with_unread_mentions(token, page))
     }
 
     /// Sends a text message. The live poll delivers the same message again; match it

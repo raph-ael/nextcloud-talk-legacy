@@ -194,7 +194,10 @@ pub async fn share(AxState(app): S, p: Params) -> Response {
     };
     let me = st.me.clone();
     let caption = meta["caption"].as_str().unwrap_or("").trim().to_string();
+    // Like Talk: mentions in the caption are mentions.
+    let (caption, params) = st.mentions(st.room(&token), &caption);
     let mut m = st.new_msg(&me, if caption.is_empty() { "{file}".into() } else { caption });
+    m.params = params;
     if meta["messageType"] == "voice-message" {
         m.kind = "voice-message".into();
     }
