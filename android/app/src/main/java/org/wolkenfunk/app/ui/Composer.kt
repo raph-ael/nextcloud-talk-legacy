@@ -101,11 +101,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import org.wolkenfunk.app.VoiceManager
+import androidx.compose.ui.focus.onFocusChanged
+import org.wolkenfunk.app.SessionManager
+import org.wolkenfunk.app.TextDraft
+import uniffi.talk_ffi.MentionCandidate
+import uniffi.talk_ffi.MentionPick
 import uniffi.talk_ffi.MessageView
+import uniffi.talk_ffi.RoomView
 
-/** A message being edited: [source] is what the input field starts with (`editSource()`). */
-class EditTarget(val msg: MessageView, val source: String)
+/**
+ * A message being edited: [source] is what the input field starts with (`editSource()`),
+ * [picks] who the names in it stand for.
+ */
+class EditTarget(val msg: MessageView, val source: String, val picks: List<MentionPick>)
 
 /** What replaces the keyboard below the input row. */
 enum class InputPanel { NONE, EMOJI, ATTACH }
@@ -121,15 +129,16 @@ private const val KEY_KB_HEIGHT = "keyboard_height_px"
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Composer(
-    token: String,
+    sessions: SessionManager,
+    room: RoomView,
     replyTo: MessageView?,
     onCancelReply: () -> Unit,
     /** Edit mode (docs/chat.md „Bearbeiten und Löschen“): the bar replaces the reply bar meanwhile. */
     editing: EditTarget?,
     saving: Boolean,
     onCancelEdit: () -> Unit,
-    onSaveEdit: (String) -> Unit,
-    onSend: (String) -> Unit,
+    onSaveEdit: (String, List<MentionPick>) -> Unit,
+    onSend: (String, List<MentionPick>) -> Unit,
     onOpenCamera: () -> Unit,
     onImagePicked: (Uri) -> Unit,
     onFilesPicked: (List<Uri>) -> Unit,
@@ -137,24 +146,37 @@ fun Composer(
     onLocation: (sent: () -> Unit) -> Unit,
     /** „Kontakt“ in the attachment menu; `sent` as for the place. */
     onContact: (sent: () -> Unit) -> Unit,
-    voice: VoiceManager,
     onVoiceSent: () -> Unit,
 ) {
+    val token = room.token
+    val voice = sessions.voice
     val colors = LocalTalkColors.current
     val context = LocalContext.current
     val density = LocalDensity.current
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    var value by rememberSaveable(token, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    // The draft outlives the chat screen (docs/mentions.md „Entwurf“): text, cursor and picks.
+    var value by rememberSaveable(token, stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(sessions.draft(token)?.let { TextFieldValue(it.text, TextRange(it.cursor)) } ?: TextFieldValue())
+    }
+    // The mentions picked from the suggestions; which places of the text they are, the text alone tells.
+    var picks by rememberSaveable(token, stateSaver = PicksSaver) { mutableStateOf(sessions.draft(token)?.picks.orEmpty()) }
+    LaunchedEffect(token, value.text, value.selection, picks) {
+        sessions.setDraft(token, if (value.text.isEmpty()) null else TextDraft(value.text, value.selection.end, picks))
+    }
     // The text being edited lives next to the draft: it never becomes the draft, and the draft
     // (like a started reply) is back untouched once the edit mode ends.
     var editValue by remember(editing?.msg?.id) {
         val source = editing?.source.orEmpty()
         mutableStateOf(TextFieldValue(source, TextRange(source.length)))
     }
+    var editPicks by remember(editing?.msg?.id) { mutableStateOf(editing?.picks.orEmpty()) }
     val field = if (editing != null) editValue else value
+    val fieldPicks = if (editing != null) editPicks else picks
+    /** Every change of the field passes here: deleting backwards behind a mention takes it as a whole. */
     fun setField(v: TextFieldValue) {
-        if (editing != null) editValue = v else value = v
+        val next = deleteWholeMention(field, v, fieldPicks)
+        if (editing != null) editValue = next else value = next
     }
     val editText = editValue.text.trim()
     val canSave = editing != null && !saving && editText.isNotEmpty() && editText != editing.source.trim()
@@ -225,6 +247,32 @@ fun Composer(
 
     val hasText = field.text.isNotBlank()
 
+    // --- suggestions after an „@“ (docs/mentions.md „Vorschlagsliste“) -----------------
+    var focused by remember { mutableStateOf(false) }
+    val query = remember(field.text, field.selection, fieldPicks) { mentionQuery(field, fieldPicks) }
+    var candidates by remember(token) { mutableStateOf(emptyList<MentionCandidate>()) }
+    // The core answers from memory: asked on every change, a later question drops the earlier one.
+    LaunchedEffect(token, query?.text) {
+        val q = query?.text
+        candidates = if (q == null) emptyList() else sessions.mentionCandidates(token, q)
+    }
+    // „Zurück“ closes the list for this „@“ until the text behind it changes.
+    var dismissed by remember(token) { mutableStateOf<MentionQuery?>(null) }
+    val suggesting = query != null && focused && candidates.isNotEmpty() && dismissed != query
+    BackBeforeKeyboard(enabled = suggesting) { dismissed = query }
+    fun pick(c: MentionCandidate) {
+        val q = query ?: return
+        val chosen = fieldPicks.filter { it.label != c.label } + MentionPick(c.label, c.mentionId)
+        val next = acceptMention(field, q, c.label)
+        if (editing != null) {
+            editPicks = chosen
+            editValue = next
+        } else {
+            picks = chosen
+            value = next
+        }
+    }
+
     // --- voice messages ---------------------------------------------------------------
     val voiceUi by voice.state.collectAsStateWithLifecycle()
     val rec = voiceUi.recording?.takeIf { it.token == token }
@@ -271,6 +319,17 @@ fun Composer(
     }
 
     Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
+        if (suggesting) {
+            // Over the message list, which keeps its place: the list takes no room of its own.
+            Box(
+                Modifier.layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints.copy(minHeight = 0))
+                    layout(placeable.width, 0) { placeable.place(0, -placeable.height) }
+                },
+            ) {
+                MentionSuggestions(sessions, room, candidates, ::pick)
+            }
+        }
         if (editing != null) {
             ContextBar(
                 title = "Nachricht bearbeiten",
@@ -323,6 +382,8 @@ fun Composer(
                 if (rec != null && editing == null) {
                     HeldRecording(rec, drag.x, Modifier.weight(1f))
                 } else {
+                // docs/mentions.md „Farben“: the field's text colour at 12 %.
+                val mentionMark = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
                 PillIcon(
                     if (panel == InputPanel.EMOJI) TalkIcons.Keyboard else TalkIcons.Mood,
                     if (panel == InputPanel.EMOJI) "Tastatur" else "Emoji",
@@ -336,9 +397,11 @@ fun Composer(
                     cursorBrush = SolidColor(colors.accent),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     maxLines = 5,
+                    visualTransformation = remember(fieldPicks, mentionMark) { MentionHighlight(fieldPicks, mentionMark) },
                     modifier = Modifier
                         .weight(1f)
                         .focusRequester(focus)
+                        .onFocusChanged { focused = it.isFocused }
                         .heightIn(min = 44.dp)
                         .padding(top = 10.dp, bottom = 10.dp, end = if (hasText || editing != null) 12.dp else 0.dp),
                     decorationBox = { inner ->
@@ -399,11 +462,13 @@ fun Composer(
                     .background(colors.accent.copy(alpha = if (editing != null && !canSave) 0.4f else 1f))
                     .clickable(enabled = editing == null || canSave) {
                         if (editing != null) {
-                            onSaveEdit(editText)
+                            onSaveEdit(editText, editPicks)
                         } else if (hasText) {
                             val text = value.text.trim()
+                            val chosen = picks
                             value = TextFieldValue()
-                            onSend(text)
+                            picks = emptyList()
+                            onSend(text, chosen)
                         } else {
                             open(InputPanel.ATTACH)
                         }

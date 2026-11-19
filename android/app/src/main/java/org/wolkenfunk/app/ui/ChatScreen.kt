@@ -110,7 +110,12 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.TextLayoutResult
 import org.wolkenfunk.app.Jump
+import uniffi.talk_ffi.MentionPick
+import uniffi.talk_ffi.MentionView
 import org.wolkenfunk.app.SendStatus
 import uniffi.talk_ffi.SearchHit
 import uniffi.talk_ffi.SearchResults
@@ -181,10 +186,11 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     // Search in the chat (docs/search.md „Suche im Chat“). `searchText` null: closed.
     var searchText by rememberSaveable(room.token) { mutableStateOf<String?>(null) }
     var found by remember(room.token) { mutableStateOf<SearchResults?>(null) }
-    var selected by remember(room.token) { mutableIntStateOf(0) }
+    // Saved with the search text: coming back from a chat opened at a mention, the chosen hit stays.
+    var selected by rememberSaveable(room.token) { mutableIntStateOf(0) }
     // The search text `found` belongs to, and the hit the chat jumped to last.
-    var searchedFor by remember(room.token) { mutableStateOf<String?>(null) }
-    var lastHit by remember(room.token) { mutableStateOf<Long?>(null) }
+    var searchedFor by rememberSaveable(room.token) { mutableStateOf<String?>(null) }
+    var lastHit by rememberSaveable(room.token) { mutableStateOf<Long?>(null) }
     val searchQuery = searchText?.trim()
     val marks = remember(searchQuery) { searchQuery?.let(::searchWords).orEmpty() }
     val goToHit = { hit: SearchHit ->
@@ -226,6 +232,17 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
             delay(300)
         }
         sessions.searchMessagesEverywhere(q, room.token, CHAT_SEARCH_LIMIT)?.let { show(it, false) }
+    }
+    // A tapped mention of a person (docs/mentions.md „Antippen“): their chat opens over this
+    // one, after a question when there is none yet.
+    var startChatWith by remember(room.token) { mutableStateOf<MentionView?>(null) }
+    val openMention = { m: MentionView ->
+        val direct = sessions.existingDirect(m.id)
+        when (direct) {
+            null -> startChatWith = m
+            room.token -> Unit
+            else -> sessions.openOver(direct)
+        }
     }
     // The message a jump lights up (docs/search.md „Aufleuchten“).
     var flash by remember(room.token) { mutableStateOf<Jump?>(null) }
@@ -284,6 +301,8 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                 jumped = jump.seq
                 opening = false
                 flash = jump
+                // A mention jumped to counts as seen, also when its message is hidden in the list.
+                sessions.mentionsSeen(room.token, listOf(jump.messageId))
                 // The keyboard of the hit list may still be closing: the list grows, the message keeps its place.
                 withTimeoutOrNull(800) {
                     snapshotFlow { listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset }
@@ -323,6 +342,26 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
     LaunchedEffect(listState, room.token) {
         snapshotFlow { Triple(windowNow && !opening, listState.firstVisibleItemIndex, newestNow) }
             .collect { (newer, first, _) -> if (newer && first <= 15) sessions.loadNewer(room.token) }
+    }
+    // Mentions of the user not seen yet (docs/mentions.md „„@“-Knopf im Chat“): one is seen
+    // once half of its bubble was on the screen.
+    val mentionIds = chat?.mentions.orEmpty()
+    val mentionsNow by rememberUpdatedState(mentionIds)
+    LaunchedEffect(listState, room.token) {
+        snapshotFlow {
+            val wanted = mentionsNow
+            if (wanted.isEmpty() || opening) {
+                emptyList()
+            } else {
+                val info = listState.layoutInfo
+                val height = info.viewportEndOffset - info.viewportStartOffset
+                info.visibleItemsInfo.mapNotNull { item ->
+                    val id = (item.key as? String)?.toLongOrNull()?.takeIf { it in wanted } ?: return@mapNotNull null
+                    val shown = minOf(item.offset + item.size, info.viewportEndOffset) - maxOf(item.offset, info.viewportStartOffset)
+                    id.takeIf { shown * 2 >= minOf(item.size, height) }
+                }
+            }
+        }.collect { seen -> if (seen.isNotEmpty()) sessions.mentionsSeen(room.token, seen) }
     }
     // Keep the newest message visible when sending / receiving while at the bottom. Pages
     // loaded below a window are not new messages: the list stays where it is.
@@ -442,13 +481,20 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                             marks = marks,
                             flash = flash?.takeIf { m.status == null && it.messageId == m.msg.id }?.seq ?: 0,
                             onJump = { sessions.jumpTo(room.token, it) },
+                            onMention = openMention,
                             canReact = room.canReact,
                             canChat = room.canChat,
                             canDeleteOthers = room.canDeleteOthers,
                             onReply = { replyTo = it },
                             onEdit = { msg ->
                                 scope.launch {
-                                    editing = EditTarget(msg, sessions.editSource(room.token, msg.id) ?: msg.text)
+                                    val source = sessions.editSource(room.token, msg.id)
+                                    editing = if (source != null) {
+                                        EditTarget(msg, source.text, source.mentions)
+                                    } else {
+                                        // The shown text, and who its names stand for.
+                                        EditTarget(msg, msg.text, msg.mentions.map { MentionPick(it.label.removePrefix("@"), it.id) })
+                                    }
                                 }
                             },
                             onDelete = { deleting = it },
@@ -477,8 +523,18 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                 ScrollDatePill(listState, reversed, enabled = !opening, Modifier.align(Alignment.TopCenter))
                 // In a window the button counts what arrived meanwhile (docs/search.md „Neue Nachrichten“).
                 val arrived = chat?.held.orEmpty().count { !it.isOwn && it.kind != MessageKind.SYSTEM }
+                // In a window into the history the end is never on the screen: the button is always there.
+                val toEnd = farFromEnd(listState) || window
+                // Above it the way to the oldest unseen mention; not in the search.
+                MentionJump(
+                    count = if (searchText == null) mentionIds.size else 0,
+                    lifted = toEnd,
+                    onClick = { mentionIds.firstOrNull()?.let { sessions.jumpTo(room.token, it) } },
+                    Modifier.align(Alignment.BottomEnd),
+                )
                 JumpToEnd(
                     listState,
+                    toEnd,
                     maxOf(room.unreadMessages.toInt(), arrived),
                     window,
                     onLeaveWindow = { sessions.leaveWindow(room.token) },
@@ -519,25 +575,26 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
             } else composerState.SaveableStateProvider("composer") {
                 // Kept while the search bar stands in its place: the draft is there again afterwards.
                 Composer(
-                    token = room.token,
+                    sessions = sessions,
+                    room = room,
                     replyTo = replyTo,
                     onCancelReply = { replyTo = null },
                     editing = editing,
                     saving = savingId != null && savingId == editing?.msg?.id,
                     onCancelEdit = { editing = null },
-                    onSaveEdit = { text ->
+                    onSaveEdit = { text, mentions ->
                         val id = editing?.msg?.id
                         if (id != null) {
                             savingId = id
-                            sessions.editMessage(room.token, id, text) { error ->
+                            sessions.editMessage(room.token, id, text, mentions) { error ->
                                 if (savingId == id) savingId = null
                                 // On an error the mode stays open with the text; the toast says why.
                                 if (error == null && editing?.msg?.id == id) editing = null
                             }
                         }
                     },
-                    onSend = { text ->
-                        sessions.send(room.token, text, replyTo)
+                    onSend = { text, mentions ->
+                        sessions.send(room.token, text, mentions, replyTo)
                         replyTo = null
                         scope.launch { listState.animateScrollToItem(0) }
                     },
@@ -549,7 +606,6 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
                         afterContact = sent
                         contactSend.open()
                     },
-                    voice = sessions.voice,
                     onVoiceSent = {
                         sessions.leaveWindow(room.token)
                         sessions.clearUnreadLine()
@@ -624,6 +680,20 @@ fun ChatScreen(sessions: SessionManager, state: UiState, room: RoomView, onOpenI
         replyTo = null
         afterContact()
         scope.launch { listState.animateScrollToItem(0) }
+    }
+    startChatWith?.let { m ->
+        // No chat with this person yet: a tap by accident must not create an empty one.
+        AlertDialog(
+            onDismissRequest = { startChatWith = null },
+            title = { Text("Chat mit ${m.label.removePrefix("@")} beginnen?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    startChatWith = null
+                    scope.launch { sessions.openDirect(m.id, over = true) }
+                }) { Text("Chat öffnen") }
+            },
+            dismissButton = { TextButton(onClick = { startChatWith = null }) { Text("Abbrechen") } },
+        )
     }
     deleting?.let { d ->
         val text = buildString {
@@ -813,32 +883,16 @@ private sealed interface ReactionSheet {
  * than half a screen away from the newest message, with the unread count as badge.
  */
 @Composable
-private fun JumpToEnd(listState: LazyListState, unread: Int, window: Boolean, onLeaveWindow: () -> Unit, modifier: Modifier) {
+private fun JumpToEnd(listState: LazyListState, visible: Boolean, unread: Int, window: Boolean, onLeaveWindow: () -> Unit, modifier: Modifier) {
     val colors = LocalTalkColors.current
     val scope = rememberCoroutineScope()
-    val far by remember(listState) {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val half = (info.viewportEndOffset - info.viewportStartOffset) / 2
-            val index = listState.firstVisibleItemIndex
-            val offset = listState.firstVisibleItemScrollOffset
-            if (index == 0) {
-                offset > half
-            } else {
-                // Items scrolled past are not measured any more; estimate them by the visible ones.
-                val avg = info.visibleItemsInfo.map { it.size }.average().takeIf { !it.isNaN() } ?: 0.0
-                index * avg + offset > half
-            }
-        }
-    }
     val label = when {
         unread == 1 -> "Zum Ende springen, 1 neue Nachricht"
         unread > 1 -> "Zum Ende springen, $unread neue Nachrichten"
         else -> "Zum Ende springen"
     }
     AnimatedVisibility(
-        // In a window into the history the end is never on the screen: always there.
-        visible = far || window,
+        visible = visible,
         modifier = modifier.padding(end = 14.dp, bottom = 14.dp),
         enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.6f),
         exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.6f),
@@ -871,30 +925,33 @@ private fun JumpToEnd(listState: LazyListState, unread: Int, window: Boolean, on
             ) {
                 Icon(TalkIcons.ChevronDown, null, tint = colors.muted, modifier = Modifier.size(26.dp))
             }
-            if (unread > 0) {
-                Box(
-                    Modifier
-                        .align(Alignment.TopCenter)
-                        .offset(y = (-10).dp)
-                        .heightIn(min = 20.dp)
-                        .widthIn(min = 20.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(colors.accent)
-                        .clearAndSetSemantics {}
-                        .padding(horizontal = 5.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (unread > 99) "99+" else unread.toString(),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        lineHeight = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
+            if (unread > 0) CountBadge(unread, Modifier.align(Alignment.TopCenter))
+        }
+    }
+}
+
+/** The list is more than half a screen away from the newest message. */
+@Composable
+private fun farFromEnd(listState: LazyListState): Boolean {
+    val far by remember(listState) {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val half = (info.viewportEndOffset - info.viewportStartOffset) / 2
+            val index = listState.firstVisibleItemIndex
+            val offset = listState.firstVisibleItemScrollOffset
+            if (info.visibleItemsInfo.isEmpty()) {
+                // Not laid out yet (a restored place in the list): nothing to tell.
+                false
+            } else if (index == 0) {
+                offset > half
+            } else {
+                // Items scrolled past are not measured any more; estimate them by the visible ones.
+                val avg = info.visibleItemsInfo.map { it.size }.average().takeIf { !it.isNaN() } ?: 0.0
+                index * avg + offset > half
             }
         }
     }
+    return far
 }
 
 /** Full-screen layers above the chat. */
@@ -949,6 +1006,8 @@ private fun MessageRow(
     /** Not 0: a jump just led here, the bubble lights up once for this number. */
     flash: Int,
     onJump: (Long) -> Unit,
+    /** A mention of a person was tapped (docs/mentions.md „Antippen“). */
+    onMention: (MentionView) -> Unit,
     canReact: Boolean,
     canChat: Boolean,
     canDeleteOthers: Boolean,
@@ -1267,14 +1326,30 @@ private fun MessageRow(
                                 msg.kind == MessageKind.DELETED ->
                                     Text("Diese Nachricht wurde gelöscht.", color = textColor, fontStyle = FontStyle.Italic)
                                 jumbo -> Text(msg.text, fontSize = 44.sp)
-                                else -> Text(
-                                    remember(msg.text, msg.markdown, textColor, marks, colors.searchMark) {
-                                        markWords(renderMessage(msg.text, msg.markdown, textColor), marks, colors.searchMark)
-                                    },
-                                    color = textColor,
-                                    style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
-                                    modifier = inset.padding(top = if (image) 6.dp else 0.dp),
-                                )
+                                else -> {
+                                    // Mentions first (docs/mentions.md „In der Nachricht“), then the search words, which win over them.
+                                    val shown = remember(msg.text, msg.markdown, msg.mentions, own, textColor, marks, colors.searchMark, colors.mentionSelf) {
+                                        val mentioned = markMentions(
+                                            renderMessage(msg.text, msg.markdown, textColor),
+                                            msg.mentions,
+                                            own,
+                                            textColor.copy(alpha = 0.12f),
+                                            colors.mentionSelf,
+                                        )
+                                        markWords(mentioned, marks, colors.searchMark)
+                                    }
+                                    val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
+                                    val tapped by rememberUpdatedState { i: Int -> msg.mentions.getOrNull(i)?.let(onMention) }
+                                    Text(
+                                        shown,
+                                        color = textColor,
+                                        style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                                        onTextLayout = { layout[0] = it },
+                                        modifier = inset
+                                            .padding(top = if (image) 6.dp else 0.dp)
+                                            .mentionTaps(shown, msg.mentions.map { it.label }, { layout[0] }) { tapped(it) },
+                                    )
+                                }
                             }
                             if (showMeta && !metaOnImage && !metaInVoice) {
                                 Box(

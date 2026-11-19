@@ -72,6 +72,9 @@ import uniffi.talk_ffi.CoreException
 import uniffi.talk_ffi.CoreListener
 import uniffi.talk_ffi.FileAttachment
 import uniffi.talk_ffi.LoginFlow
+import uniffi.talk_ffi.EditDraft
+import uniffi.talk_ffi.MentionCandidate
+import uniffi.talk_ffi.MentionPick
 import uniffi.talk_ffi.MessageKind
 import uniffi.talk_ffi.MessageView
 import uniffi.talk_ffi.PendingMessage
@@ -99,6 +102,9 @@ import org.wolkenfunk.app.ui.withAttachment
 
 /** So long a tapped search hit waits for its window before the chat opens with a spinner. */
 private const val AROUND_WAIT_MS = 400L
+
+/** Suggestions after an „@“ come at most this many (docs/mentions.md „Abfrage“). */
+private const val MENTION_LIMIT = 50u
 
 enum class SessionState { LOADING, LOGGED_OUT, READY }
 enum class SendStatus { SENDING, WAITING, FAILED }
@@ -141,7 +147,23 @@ data class ChatState(
     val rev: Int = 0,
     /** Counts the jumps from a window to the end of the chat: the view follows. */
     val endRev: Int = 0,
-)
+    /** Messages that mention the user and were not seen yet, oldest first: the „@“ button (docs/mentions.md). */
+    val mentions: List<Long> = emptyList(),
+    /** Mentions seen since the chat was opened: a later page does not bring them back. */
+    val mentionsSeen: Set<Long> = emptySet(),
+) {
+    /** Adds mentions to the list of the „@“ button, leaving out what was seen. */
+    fun withMentions(ids: List<Long>): ChatState {
+        val fresh = ids.filter { it !in mentionsSeen && it !in mentions }
+        return if (fresh.isEmpty()) this else copy(mentions = (mentions + fresh).sorted())
+    }
+}
+
+/**
+ * What stands in the input field of a chat: the text, the cursor and the mentions picked
+ * from the suggestions (docs/mentions.md „Entwurf“).
+ */
+class TextDraft(val text: String, val cursor: Int, val picks: List<MentionPick>)
 
 /**
  * A message the open chat shows (search hit, quoted message): the screen scrolls it into the
@@ -191,6 +213,13 @@ data class UiState(
     val activeToken: String? = null,
     val unreadLine: UnreadLine? = null,
     val jump: Jump? = null,
+    /**
+     * Chats below the open one, the nearest last: it was opened from a mention there, and
+     * „Zurück“ leads back (docs/mentions.md „Antippen“).
+     */
+    val returnTo: List<String> = emptyList(),
+    /** The open chat (or the list) was reached by going back: it slides in from the left. */
+    val navBack: Boolean = false,
     /** Counts taps on a notification of the chat that was open already: its view starts over. */
     val chatFollowed: Int = 0,
     /** All signed-in accounts in the order they signed in (the active one included). */
@@ -563,6 +592,7 @@ class SessionManager(private val context: Context) {
         val password = if (revoke) (store.password(rt.id) as? Secret.Present)?.value else null
         // The UI leaves the account first, so nothing calls into it any more.
         runtimes = runtimes - rt.id
+        drafts.keys.removeAll { it.startsWith("${rt.id}|") }
         if (active === rt) {
             voice.cancel()
             voice.player.stop()
@@ -810,7 +840,7 @@ class SessionManager(private val context: Context) {
         }
         val body = text.trim()
         if (body.isNotEmpty()) {
-            rt.session.enqueueText(token, body, null, newReferenceId())
+            rt.session.enqueueText(token, body, emptyList(), null, newReferenceId())
             OutboxWorker.schedule(context)
         }
         MessageNotifications.replied(context, account, token, body)
@@ -1068,14 +1098,17 @@ class SessionManager(private val context: Context) {
             is CoreEvent.MessagesAdded -> if (shown) {
                 adoptLocalPreviews(rt.id, event.messages)
                 trackUnreadLine(rt.id, event.token, event.messages)
+                // Who mentions the user feeds the „@“ button until the bubble was seen (docs/mentions.md).
+                val mentioning = event.messages.filter { it.mentionsMe }.map { it.id }
                 updateChat(rt.id, event.token) {
                     // In a window they would leave a gap: kept for its end (docs/search.md).
-                    if (it.hasNewer) {
+                    val next = if (it.hasNewer) {
                         val ids = event.messages.mapTo(HashSet()) { m -> m.id }
                         it.copy(held = (it.held.filter { h -> h.id !in ids } + event.messages).sortedBy { m -> m.id })
                     } else {
                         it.copy(messages = merge(it.messages, event.messages))
                     }
+                    next.withMentions(mentioning)
                 }
             }
             is CoreEvent.MessagesUpdated -> updateChat(rt.id, event.token) { c ->
@@ -1083,6 +1116,8 @@ class SessionManager(private val context: Context) {
                 c.copy(
                     messages = c.messages.map { m -> byId[m.msg.id]?.let { UiMessage(it) } ?: m },
                     held = if (c.held.isEmpty()) c.held else c.held.map { m -> byId[m.id] ?: m },
+                    // A deleted message mentions nobody any more.
+                    mentions = c.mentions.filter { id -> byId[id]?.kind != MessageKind.DELETED },
                 )
             }
             is CoreEvent.ReadStatus -> updateChat(rt.id, event.token) {
@@ -1277,14 +1312,23 @@ class SessionManager(private val context: Context) {
         }
     }
 
-    /** Opens the one-to-one chat with [userId]; `false` (and a toast) on failure. */
-    suspend fun openDirect(userId: String): Boolean {
+    /**
+     * Opens the one-to-one chat with [userId]; `false` (and a toast) on failure. [over]: from
+     * a mention in the open chat, „Zurück“ leads there again.
+     */
+    suspend fun openDirect(userId: String, over: Boolean = false): Boolean {
         val s = session ?: return false
         val r = s.openDirect(userId)
         val token = r.token ?: return toast(r.error ?: "Chat konnte nicht geöffnet werden")
-        openRoom(token)
+        if (over) openOver(token) else openRoom(token)
         return true
     }
+
+    /** The one-to-one chat with a person when there is one already; creates nothing. */
+    fun existingDirect(userId: String): String? = session?.existingDirect(userId)
+
+    /** Opens a chat from a mention in the open one (docs/mentions.md „Antippen“): „Zurück“ leads back. */
+    fun openOver(token: String) = showRoom(token, followed = false, nav = Nav.OVER)
 
     /** Creates a group and opens it; `false` (and a toast) on failure. */
     suspend fun createGroup(name: String, userIds: List<String>, photo: ByteArray?): Boolean {
@@ -1360,7 +1404,12 @@ class SessionManager(private val context: Context) {
      * keeps its messages and its poll, but the view stands as after a new opening, at the
      * Ungelesen-Linie or at the end (docs/notifications.md „War der Chat schon offen“).
      */
-    fun openRoom(token: String, followed: Boolean = false) {
+    fun openRoom(token: String, followed: Boolean = false) = showRoom(token, followed, Nav.FRESH)
+
+    /** How a chat is reached: anew, over the open one (from a mention), or back to the one below. */
+    private enum class Nav { FRESH, OVER, BACK }
+
+    private fun showRoom(token: String, followed: Boolean, nav: Nav) {
         val rt = active ?: return
         val s = rt.session
         val previous = _state.value.activeToken
@@ -1390,7 +1439,16 @@ class SessionManager(private val context: Context) {
                 activeToken = token,
                 unreadLine = line,
                 jump = null,
+                returnTo = when (nav) {
+                    Nav.FRESH -> emptyList()
+                    // A chat that is below already is not stacked twice.
+                    Nav.OVER -> (st.returnTo + listOfNotNull(previous)).takeWhile { it != token }
+                    Nav.BACK -> st.returnTo.takeWhile { it != token }
+                },
+                navBack = nav == Nav.BACK,
                 chats = st.chats + (token to chat.copy(
+                    mentions = cached.unreadMentions,
+                    mentionsSeen = emptySet(),
                     loading = messages.none { it.status == null },
                     synced = false,
                     messages = withPending(messages, s.pending(token)),
@@ -1422,6 +1480,7 @@ class SessionManager(private val context: Context) {
      */
     private fun onOpened(rt: Runtime, token: String, page: ChatPage?): Boolean {
         val room = _state.value.rooms.find { it.token == token }
+        if (page != null) updateChat(rt.id, token) { it.withMentions(page.unreadMentions) }
         updateChat(rt.id, token) {
             // A chat that opens at a message keeps its spinner until the window is there.
             val waiting = it.hasNewer && it.loading
@@ -1458,10 +1517,14 @@ class SessionManager(private val context: Context) {
     }
 
     fun closeRoom() {
-        val token = _state.value.activeToken ?: return
+        val st = _state.value
+        val token = st.activeToken ?: return
+        // Opened from a mention: back to the chat it stood in.
+        val below = st.returnTo.lastOrNull { t -> st.rooms.any { it.token == t } }
+        if (below != null) return showRoom(below, followed = false, nav = Nav.BACK)
         session?.closeChat(token)
         jumpSeq++
-        _state.update { it.copy(activeToken = null, unreadLine = null, jump = null) }
+        _state.update { it.copy(activeToken = null, unreadLine = null, jump = null, returnTo = emptyList(), navBack = true) }
     }
 
     fun loadOlder(token: String) {
@@ -1540,6 +1603,8 @@ class SessionManager(private val context: Context) {
                     activeToken = token,
                     unreadLine = line,
                     jump = Jump(token, messageId, seq, ready = false),
+                    returnTo = emptyList(),
+                    navBack = false,
                     chats = st.chats + (token to ChatState(hasNewer = true, lastCommonRead = st.chats[token]?.lastCommonRead ?: 0, rev = rev)),
                 )
             }
@@ -1685,12 +1750,38 @@ class SessionManager(private val context: Context) {
     }
 
     /** Queues a text message in the outbox; it shows up at once and is delivered reliably. */
-    fun send(token: String, text: String, replyTo: MessageView?) {
+    /** [mentions]: what was picked from the suggestions; the core turns the names into the server's notation. */
+    fun send(token: String, text: String, mentions: List<MentionPick>, replyTo: MessageView?) {
         val s = session ?: return
         leaveWindow(token)
         clearUnreadLine()
-        s.enqueueText(token, text, replyTo?.toReply(), newReferenceId())
+        s.enqueueText(token, text, mentions, replyTo?.toReply(), newReferenceId())
         OutboxWorker.schedule(context)
+    }
+
+    // --- mentions (docs/mentions.md) -----------------------------------------------------
+
+    /** Who can be mentioned in a chat for what was typed after the „@“; answers from memory. */
+    suspend fun mentionCandidates(token: String, query: String): List<MentionCandidate> =
+        session?.mentionCandidates(token, query, MENTION_LIMIT).orEmpty()
+
+    /** The bubbles of these mentions were seen (or jumped to): the „@“ button lets go of them. */
+    fun mentionsSeen(token: String, ids: Collection<Long>) {
+        val rt = active ?: return
+        updateChat(rt.id, token) { c ->
+            val seen = ids.filter { it in c.mentions }
+            if (seen.isEmpty()) c else c.copy(mentions = c.mentions - seen.toSet(), mentionsSeen = c.mentionsSeen + seen)
+        }
+    }
+
+    /** Text drafts live as long as the app does, per account and chat. */
+    private val drafts = ConcurrentHashMap<String, TextDraft>()
+
+    fun draft(token: String): TextDraft? = active?.let { drafts["${it.id}|$token"] }
+
+    fun setDraft(token: String, draft: TextDraft?) {
+        val key = "${(active ?: return).id}|$token"
+        if (draft == null) drafts.remove(key) else drafts[key] = draft
     }
 
     private fun MessageView.toReply() = ReplyPreview(id, author, text, isOwn, attachment, location)
@@ -1706,18 +1797,21 @@ class SessionManager(private val context: Context) {
         }
     }
 
-    /** The text for the input field when editing (docs/chat.md „Bearbeiten und Löschen“); `null`: take `MessageView.text`. */
-    suspend fun editSource(token: String, messageId: Long): String? = session?.editSource(token, messageId)
+    /**
+     * Text and mentions for the input field when editing (docs/chat.md „Bearbeiten und
+     * Löschen“); `null`: take `MessageView.text` and `MessageView.mentions`.
+     */
+    suspend fun editSource(token: String, messageId: Long): EditDraft? = session?.editSource(token, messageId)
 
     /**
      * Saves an edited message; the new version arrives as `MessagesUpdated` before [onDone].
      * An error becomes a toast and is handed to [onDone], so the caller keeps the edit mode open.
      * Runs in the manager's scope: leaving the chat does not cut the request off.
      */
-    fun editMessage(token: String, messageId: Long, text: String, onDone: (error: String?) -> Unit) {
+    fun editMessage(token: String, messageId: Long, text: String, mentions: List<MentionPick>, onDone: (error: String?) -> Unit) {
         val s = session ?: return onDone(null)
         scope.launch {
-            val error = s.editMessage(token, messageId, text)
+            val error = s.editMessage(token, messageId, text, mentions)
             error?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
             onDone(error)
         }
@@ -1760,7 +1854,7 @@ class SessionManager(private val context: Context) {
                 runCatching {
                     s.enqueueFile(
                         token, image.file.path, image.name, "image/jpeg",
-                        image.width.toLong(), image.height.toLong(), caption.trim(), replyTo?.toReply(), ref,
+                        image.width.toLong(), image.height.toLong(), caption.trim(), emptyList(), replyTo?.toReply(), ref,
                     )
                 }
             }
@@ -1830,6 +1924,8 @@ class SessionManager(private val context: Context) {
                         rt.session.enqueueFile(
                             token, p.file.path, p.name, p.mime, p.width.toLong(), p.height.toLong(),
                             if (i == prepared.lastIndex) caption.trim() else "",
+                            // The caption field of the preview has no suggestions (docs/mentions.md „Nicht im Umfang“).
+                            emptyList(),
                             if (i == 0) replyTo?.toReply() else null,
                             ref,
                         )

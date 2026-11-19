@@ -22,7 +22,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import uniffi.talk_ffi.RoomView
 import androidx.compose.ui.Modifier
@@ -62,10 +64,22 @@ fun TalkApp(sessions: SessionManager) {
                 // Group settings belong to the open chat, or come over the list from the chat menu.
                 if (infoFor != null && active != null && infoFor != active) infoFor = null
                 BackHandler(enabled = active != null) { sessions.closeRoom() }
+                // A chat left through a mention keeps its view (place in the list, search) for
+                // the way back (docs/mentions.md „Antippen“); any other leaving forgets it.
+                val chatViews = rememberSaveableStateHolder()
+                val kept = remember { mutableSetOf<String>() }
+                LaunchedEffect(active, state.returnTo) {
+                    // A window into the history is not opened again: its place means nothing at the end of the chat.
+                    val gone = kept.filter { it != active && (it !in state.returnTo || state.chats[it]?.hasNewer == true) }
+                    gone.forEach(chatViews::removeState)
+                    kept -= gone.toSet()
+                    active?.let { kept += it }
+                }
                 AnimatedContent(
                     targetState = active,
                     transitionSpec = {
-                        if (targetState != null) {
+                        // Forward into a chat; back to the list or to the chat below.
+                        if (targetState != null && !state.navBack) {
                             slideInHorizontally { it } togetherWith slideOutHorizontally { -it / 4 }
                         } else {
                             slideInHorizontally { -it / 4 } togetherWith slideOutHorizontally { it }
@@ -75,7 +89,9 @@ fun TalkApp(sessions: SessionManager) {
                 ) { token ->
                     val room = token?.let { t -> state.rooms.find { it.token == t } }
                     if (token != null && room != null) {
-                        ChatScreen(sessions, state, room, onOpenInfo = { infoFor = token })
+                        chatViews.SaveableStateProvider(token) {
+                            ChatScreen(sessions, state, room, onOpenInfo = { infoFor = token })
+                        }
                     } else {
                         RoomListScreen(
                             sessions,

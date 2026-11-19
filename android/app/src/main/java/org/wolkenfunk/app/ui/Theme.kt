@@ -31,7 +31,11 @@ data class TalkColors(
     val reactionMine: Color,
     /** Behind search words in a bubble, and over the whole bubble a jump lights up (docs/search.md „Farbe“). */
     val searchMark: Color,
+    /** Behind a mention of the user in somebody else's bubble (docs/mentions.md „Farben“); follows the accent. */
+    val mentionSelf: Color,
 )
+
+private fun mentionSelfColor(accent: Color, dark: Boolean) = accent.copy(alpha = if (dark) 0.32f else 0.22f)
 
 private val LightTalk = TalkColors(
     accent = accentById(DEFAULT_ACCENT).light.accent,
@@ -46,6 +50,7 @@ private val LightTalk = TalkColors(
     reaction = Color(0xFFE9E9E9),
     reactionMine = Color(0xFFB9B9B9),
     searchMark = Color(0xFFFFD60A).copy(alpha = 0.45f),
+    mentionSelf = mentionSelfColor(accentById(DEFAULT_ACCENT).light.accent, dark = false),
 )
 
 private val DarkTalk = TalkColors(
@@ -61,6 +66,7 @@ private val DarkTalk = TalkColors(
     reaction = Color(0xFF1B1B1B),
     reactionMine = Color(0xFF5E5E5E),
     searchMark = Color(0xFFFFD60A).copy(alpha = 0.35f),
+    mentionSelf = mentionSelfColor(accentById(DEFAULT_ACCENT).dark.accent, dark = true),
 )
 
 /** Conversation-list typography (Signal: BodyLarge/BodyMedium with tighter line spacing). */
@@ -86,7 +92,11 @@ fun isDarkTheme(): Boolean = LocalDarkTheme.current
 @Composable
 fun TalkTheme(dark: Boolean = isSystemInDarkTheme(), accent: String = DEFAULT_ACCENT, content: @Composable () -> Unit) {
     val palette = accentById(accent).let { if (dark) it.dark else it.light }
-    val talk = (if (dark) DarkTalk else LightTalk).copy(accent = palette.accent, bubbleOwn = palette.bubble)
+    val talk = (if (dark) DarkTalk else LightTalk).copy(
+        accent = palette.accent,
+        bubbleOwn = palette.bubble,
+        mentionSelf = mentionSelfColor(palette.accent, dark),
+    )
     val scheme = if (dark) {
         darkColorScheme(
             primary = talk.accent,
