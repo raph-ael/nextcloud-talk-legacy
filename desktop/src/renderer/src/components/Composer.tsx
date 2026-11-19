@@ -14,7 +14,7 @@ import {
 } from 'react'
 import { withAttachment, type MentionCandidate, type MentionPick } from '@shared/core'
 import { sendFiles, sendMessage, useStore, type UiMessage } from '../store'
-import { fieldMentions, mentionTrigger, type MentionTrigger } from '../format'
+import { closedFor, fieldMentions, mentionTrigger, takeMention, type MentionTrigger } from '../format'
 import { MentionBackdrop, MentionList, mentionRowId } from './Mentions'
 import { toast } from '../call/store'
 import type { Editing } from './Chat'
@@ -96,7 +96,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   const [caret, setCaret] = useState<number | null>(null)
   const [rows, setRows] = useState<MentionCandidate[]>([])
   const [chosen, setChosen] = useState(0)
-  /** Esc closed the list for this „@“ and this search text. */
+  /** Esc or taking a row closed the list for this „@“ and this search text. */
   const [dismissed, setDismissed] = useState<MentionTrigger | null>(null)
   const asked = useRef(0)
   const listId = useId()
@@ -253,8 +253,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
       setDismissed(null)
       return
     }
-    // Esc holds until the search text changes.
-    setDismissed((d) => (d && d.at === at && d.query === query ? d : null))
+    // Closed (Esc, a row taken) holds until the search text changes.
+    setDismissed((d) => (at != null && closedFor(d, { at, query }) ? d : null))
     window.talk.mentionCandidates(token, query, MENTION_ROWS).then(
       (list) => {
         if (seq !== asked.current) return
@@ -292,9 +292,10 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     if (!trigger || caret == null) return
     // An older pick with the same name gives way.
     updatePicks([...picks.filter((p) => p.label !== row.label), { label: row.label, mentionId: row.mentionId }])
-    // No second space when one follows already; the caret goes behind it.
-    const spaced = text[caret] === ' '
-    replaceRange(trigger.at, caret, `@${row.label}${spaced ? '' : ' '}`, trigger.at + row.label.length + 2)
+    const taken = takeMention(text, trigger, caret, row.label)
+    // Closed as after Esc: „Lena Brandt“ does not open the list again right behind „@Lena “.
+    setDismissed(taken.closed)
+    replaceRange(trigger.at, caret, taken.insert, taken.caret)
   }
 
   function updateFiles(f: (list: Draft[]) => Draft[]) {

@@ -237,6 +237,27 @@ export function mentionTrigger(text: string, caret: number, picks: MentionPick[]
 }
 
 /**
+ * Taking a row of the suggestions (docs/mentions.md „Übernehmen“): `insert` replaces the
+ * text from the „@“ to the caret, the caret goes to `caret`. The list is then closed for
+ * `closed`, as after Esc: it does not open again only because a longer name starts alike.
+ */
+export function takeMention(
+  text: string,
+  trigger: MentionTrigger,
+  caret: number,
+  label: string,
+): { insert: string; caret: number; closed: MentionTrigger } {
+  // No second space when one follows already; the caret goes behind it.
+  const insert = `@${label}${text[caret] === ' ' ? '' : ' '}`
+  return { insert, caret: trigger.at + label.length + 2, closed: { at: trigger.at, query: `${label} ` } }
+}
+
+/** Whether the list stays closed (Esc, a row taken): for this „@“, until the search text changes. */
+export function closedFor(closed: MentionTrigger | null, trigger: MentionTrigger | null): boolean {
+  return !!closed && !!trigger && closed.at === trigger.at && closed.query === trigger.query
+}
+
+/**
  * Splits the text of a bubble at its mentions (docs/mentions.md „In der Nachricht“): every
  * `label` („@Lena Brandt“) that no letter or digit follows, the longest name first.
  */
