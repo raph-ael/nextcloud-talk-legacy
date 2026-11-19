@@ -740,10 +740,13 @@ async function loadEnd(token: string): Promise<void> {
       setChat(token, (c) => {
         // A jump was quicker: the window stays.
         if (c.hasNewer) return c
-        const older = cached.oldestId != null && (c.oldestId == null || cached.oldestId < c.oldestId)
+        // The cache went on while the chat was closed (the history loads in the background):
+        // what an earlier visit left here does not reach it, and merging would leave a hole.
+        const apart = !joins(c.messages, cached)
+        const older = apart || (cached.oldestId != null && (c.oldestId == null || cached.oldestId < c.oldestId))
         return {
           ...c,
-          messages: merge(c.messages, cached.messages),
+          messages: merge(apart ? c.messages.filter((m) => m.status) : c.messages, cached.messages),
           hasMore: older ? cached.hasMore : c.hasMore,
           oldestId: older ? cached.oldestId : c.oldestId,
           lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
