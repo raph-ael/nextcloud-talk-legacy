@@ -59,7 +59,7 @@ Die Zahl ist die Summe von `badge().chats` der anderen Konten, also die Chats mi
 ### Wechseln
 
 - Der offene Chat schließt (`closeChat`), eine laufende Sprachaufnahme wird beendet und als Entwurf abgelegt. Dann zeigt die App die Chatliste des anderen Kontos, sofort aus dessen Laufzeit (`rooms()`), ohne Ladezustand.
-- Entwürfe gehören zu Konto und Chat: Ein Entwurf aus Konto A taucht nie in B auf. Wie lange ein Textentwurf lebt, bleibt wie bisher auf der Plattform (Android: solange der Chat offen ist). Eine neue dauerhafte Speicherung gehört nicht zu diesem Block.
+- Entwürfe gehören zu Konto und Chat: Ein Entwurf aus Konto A taucht nie in B auf. Ein Textentwurf lebt auf allen Plattformen im Speicher, bis die App endet, auch über das Schließen des Chats hinaus (Android seit den Erwähnungen, docs/mentions.md). Dauerhaft gespeichert wird er nicht.
 - Das aktive Konto wird gespeichert und ist nach einem Neustart wieder aktiv.
 - **Während eines Anrufs** ist der Wechsel gesperrt: Die Zeilen der anderen Konten sind ausgegraut, ein Klick zeigt den Toast „Während eines Anrufs nicht möglich“. Das gilt auch für den Klick auf eine Benachrichtigung eines anderen Kontos.
 
@@ -233,7 +233,7 @@ Die eigenen Kopien der Badge-Regel entfallen: Desktop `countsForBadge`, iOS `bad
   - Zweites Konto hinzufügen, wechseln, Neustart: Konten und aktives Konto sind noch da.
   - Nachricht im inaktiven Konto: Zahl am Avatar, Zahl im Kontomenü, App-Badge als Summe, Benachrichtigung mit Kontozeile; der Klick wechselt und öffnet den Chat.
   - Nach dem Wechsel zeigt `garten` Namen, Bild und Nachrichten des richtigen Servers.
-  - Entwurf in Konto A schreiben, wechseln: Er taucht in B nicht auf. Zurück in A ist er noch da, wo die Plattform Entwürfe über das Schließen des Chats hinaus hält (Desktop, iOS).
+  - Entwurf in Konto A schreiben, wechseln: Er taucht in B nicht auf. Zurück in A ist er noch da.
   - Dasselbe Konto noch einmal anmelden: Toast, kein zweiter Eintrag.
   - Ein Konto abmelden: Rückfrage mit Namen, das andere läuft weiter.
   - Übernahme von der Vorversion, mit einer wartenden Nachricht samt Anhang im Postausgang: kein neues Anmelden, der Anhang geht raus.

@@ -24,7 +24,7 @@ Verbindlich für alle Plattformen. Vorbild für die Bedienung ist Signal, übern
 ### Android und iOS
 - Die Liste liegt direkt über dem Eingabefeld und über der Leiste für Antwort oder Bearbeiten, in voller Breite, auf der Fläche `floating` mit einer Haarlinie oben.
 - Zeilenhöhe 48, Bild 32. Höchstens viereinhalb Zeilen hoch, darüber hinaus scrollbar. Die beste Zeile steht oben.
-- Die Tastatur bleibt offen. Antippen übernimmt. Zurück schließt zuerst die Liste.
+- Die Tastatur bleibt offen. Antippen übernimmt. Zurück schließt zuerst die Liste (Android ab Version 13, darunter schließt Zurück wie überall zuerst die Tastatur).
 - Die Nachrichtenliste darunter verschiebt sich nicht, die Liste liegt über ihr.
 
 ### Desktop
@@ -50,7 +50,7 @@ Passen mehrere Auswahlen, gilt der längste Name.
 | Löschen | Rückwärts löschen mit der Schreibmarke direkt hinter einer Erwähnung (ohne Auswahl) entfernt sie als Ganzes samt „@“. |
 | Hineintippen | Wer im Namen tippt, macht daraus gewöhnlichen Text. Die Hinterlegung verschwindet von selbst, weil die Regel nicht mehr passt. |
 | Einfügen | Eingefügter Text „@Name“ einer vorhandenen Auswahl wird zur Erwähnung. |
-| Entwurf | Der Entwurf eines Chats merkt sich Text und Auswahlen. |
+| Entwurf | Der Entwurf eines Chats merkt sich Text und Auswahlen, je Konto und Chat, im Speicher bis die App endet. Er überlebt das Verlassen des Chats. |
 | Senden | `enqueueText(token, text, auswahlen, …)`. Auswahlen, die im Text nicht mehr vorkommen, stören nicht. Danach ist die Liste der Auswahlen leer. |
 | Bearbeiten | `editSource` liefert `{ text, mentions }`: Der Text zeigt Namen, `mentions` sind die Auswahlen. Speichern mit `editMessage(token, id, text, auswahlen)`. Liefert `editSource` nichts, gilt `MessageView.text`, und aus jedem Eintrag von `MessageView.mentions` wird eine Auswahl (`label` ohne das „@“, `mentionId` = `id`). |
 | Gleiche Namen | Zwei gewählte Personen mit demselben Namen: Die zuletzt gewählte gilt für alle Stellen. |
@@ -96,7 +96,7 @@ Am Desktop hat die Fläche 4 px Eckenradius und links und rechts 2 px Luft, ohne
 | Fehler | Der Text von `openDirect` als Hinweis, wie bei „Neue Nachricht“. |
 | Sonst | Langes Drücken und Rechtsklick bleiben das Menü der Nachricht. Am Desktop hat die Erwähnung den Zeiger einer Schaltfläche. |
 
-**Barrierefreiheit:** Eine antippbare Erwähnung ist als Verweis erreichbar, Bezeichnung „Chat mit {Name} öffnen“.
+**Barrierefreiheit:** Eine antippbare Erwähnung ist mit der Bezeichnung „Chat mit {Name} öffnen“ erreichbar: am Desktop als Verweis im Text, auf Android als Aktion der Nachricht (ein Verweis im Text würde dort das lange Drücken schlucken). iOS nimmt, was das lange Drücken nicht stört.
 
 ## „@“-Knopf im Chat
 
@@ -107,7 +107,7 @@ Wurde der User erwähnt und hat die Stelle noch nicht gesehen, führt ein Knopf 
 | Liste | Der Chat hält die ids der ungesehenen Erwähnungen, aufsteigend. |
 | Quellen | `unreadMentions` jeder Seite, die der Chat bekommt (`cachedChat`, `openChat`, `loadOlder`, `messagesAround`, `loadNewer`), zusammengeführt. Dazu jede Nachricht aus `messagesAdded` mit `mentionsMe`. Bei sehr vielen ungelesenen Nachrichten kennt die erste Seite nur die neuesten Erwähnungen, die älteren kommen mit dem Nachladen. Eine einmal gesehene id kommt nicht wieder in die Liste. |
 | Gesehen | Eine id fällt heraus, sobald ihre Blase mindestens zur Hälfte sichtbar war, nach dem Sprung zu ihr, und wenn die Nachricht gelöscht wurde. Beim Verlassen des Chats ist die Liste leer. |
-| Knopf | Rund, Größe und Fläche wie „Zum Ende springen“, direkt darüber mit 8 Abstand. Zeichen „@“. Ab zwei Erwähnungen die Zahl im selben Schild wie der Zähler von „Zum Ende springen“. |
+| Knopf | Rund, Größe und Fläche wie „Zum Ende springen“, direkt darüber mit 16 Abstand von Knopf zu Knopf (das Zähler-Schild des unteren ragt über ihn hinaus und soll den oberen nicht berühren). Der Platz ist fest, auch wenn „Zum Ende springen“ gerade nicht zu sehen ist. Zeichen „@“. Ab zwei Erwähnungen die Zahl im selben Schild wie der Zähler von „Zum Ende springen“. |
 | Sichtbar | Solange die Liste nicht leer ist. Auf Android und iOS nicht im Suchmodus (dort ersetzt die Suchleiste das Eingabefeld). Am Desktop gibt es keinen Suchmodus, der Knopf bleibt auch mit der Marke „in {Chat}“ sichtbar. |
 | Tippen | Springt zur ältesten id der Liste, mit demselben Sprung wie die Suche (docs/search.md „Chat an einer Nachricht öffnen“). Die Blase leuchtet auf. |
 | Lesemarke | Bleibt, wie sie ist: Sie bewegt sich nur am Ende des Chats. |
