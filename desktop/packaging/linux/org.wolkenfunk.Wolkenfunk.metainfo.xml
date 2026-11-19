@@ -81,6 +81,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.6" date="2026-11-19" type="development">
+      <description>
+        <p>Sortierung der Chatliste. Unter Einstellungen, „Darstellung“, wählst du „Letzte Aktivität“ oder „Name (A–Z)“. Die Wahl gilt in jedem Abschnitt und für dein Konto, also auch auf deinen anderen Geräten und in Talk im Browser.</p>
+        <p>Eingeklappte Abschnitte sind jetzt wirklich eingeklappt. Chats mit neuen Nachrichten bleiben nicht mehr stehen. Dafür zeigt der Kopf des Abschnitts, wie viele ungelesene Nachrichten darin warten, ob du erwähnt wurdest und ob ein Anruf läuft.</p>
+        <p>Computer: Die Kategorien verwaltest du jetzt in den Einstellungen unter „Kategorien“. Oben in der Chatliste öffnet ein Zahnrad die Einstellungen direkt. Die Ansicht „Blasen“ heißt jetzt „Sprechblasen“.</p>
+      </description>
+    </release>
     <release version="0.6.5" date="2026-11-19" type="development">
       <description>
         <p>Gruppen und Direktchats getrennt. In der Chatliste stehen deine Gruppen und deine Einzelchats jetzt in eigenen Abschnitten „Gruppen“ und „Direktchats“, so wie „Favoriten“. Beide lassen sich einklappen. Wer lieber alles zusammen hat, schaltet es unter Einstellungen, „Darstellung“, wieder ab.</p>
