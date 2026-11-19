@@ -306,10 +306,18 @@ function appendHeld(messages: UiMessage[], held: MessageView[]): UiMessage[] {
   return newer.length > 0 ? merge(messages, newer) : messages
 }
 
-/** The chat with more mentions the user has not seen yet. */
+/**
+ * The chat with more mentions the user has not seen yet. Every page the chat gets names
+ * them (docs/mentions.md „Quellen“); one that was seen does not come back.
+ */
 function withMentions(c: ChatState, ids: number[] | undefined): ChatState {
   const fresh = (ids ?? []).filter((id) => !c.mentions.includes(id) && !c.mentionsSeen.includes(id))
   return fresh.length > 0 ? { ...c, mentions: [...c.mentions, ...fresh].sort((a, b) => a - b) } : c
+}
+
+/** What a page says about unseen mentions; it counts for the chat that is open. */
+function openMentions(token: string, page: ChatPage): number[] {
+  return state.activeToken === token ? (page.unreadMentions ?? []) : []
 }
 
 /** The bubbles of these mentions were in sight (or are gone): the „@“ button drops them. */
@@ -805,7 +813,7 @@ async function loadEnd(token: string): Promise<void> {
     const room = state.rooms.find((r) => r.token === token)
     const lastCommonRead = Math.max(page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0)
     // Left meanwhile: the mentions belong to the chat that is open.
-    const mentions = state.activeToken === token ? page.unreadMentions : []
+    const mentions = openMentions(token, page)
     setChat(token, (c) =>
       withMentions(
         c.hasNewer
@@ -872,7 +880,7 @@ async function openAt(token: string, id: number): Promise<void> {
     const page = await opening
     setChat(token, (c) => {
       const base = {
-        ...withMentions(c, state.activeToken === token ? page.unreadMentions : []),
+        ...withMentions(c, openMentions(token, page)),
         lastCommonRead: Math.max(c.lastCommonRead, page.lastCommonRead ?? 0, room?.lastCommonReadMessage ?? 0),
         synced: true,
       }
@@ -898,20 +906,23 @@ function windowed(c: ChatState, page: ChatPage, pending?: PendingMessage[]): Cha
     messages = appendHeld(messages, held)
     held = []
   }
-  return {
-    ...c,
-    messages,
-    hasMore: page.hasMore,
-    oldestId: page.oldestId,
-    lastCommonRead: Math.max(c.lastCommonRead, page.lastCommonRead ?? 0),
-    loading: false,
-    loadingOlder: false,
-    loadingNewer: false,
-    hasNewer: page.hasNewer,
-    newestId: page.newestId,
-    held,
-    view: c.view + 1,
-  }
+  return withMentions(
+    {
+      ...c,
+      messages,
+      hasMore: page.hasMore,
+      oldestId: page.oldestId,
+      lastCommonRead: Math.max(c.lastCommonRead, page.lastCommonRead ?? 0),
+      loading: false,
+      loadingOlder: false,
+      loadingNewer: false,
+      hasNewer: page.hasNewer,
+      newestId: page.newestId,
+      held,
+      view: c.view + 1,
+    },
+    page.unreadMentions,
+  )
 }
 
 /**
@@ -964,19 +975,22 @@ export async function showEnd(token: string, place = true): Promise<void> {
     toast('Keine Verbindung')
     return
   }
-  const chat: ChatState = {
-    ...c,
-    messages: appendHeld(merge(c.messages.filter((m) => m.status), cached.messages), c.held),
-    hasMore: cached.hasMore,
-    oldestId: cached.oldestId,
-    lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
-    loadingOlder: false,
-    loadingNewer: false,
-    hasNewer: false,
-    newestId: null,
-    held: [],
-    view: c.view + 1,
-  }
+  const chat = withMentions(
+    {
+      ...c,
+      messages: appendHeld(merge(c.messages.filter((m) => m.status), cached.messages), c.held),
+      hasMore: cached.hasMore,
+      oldestId: cached.oldestId,
+      lastCommonRead: Math.max(c.lastCommonRead, cached.lastCommonRead ?? 0),
+      loadingOlder: false,
+      loadingNewer: false,
+      hasNewer: false,
+      newestId: null,
+      held: [],
+      view: c.view + 1,
+    },
+    cached.unreadMentions,
+  )
   set({ chats: { ...state.chats, [token]: chat }, jump: place ? { token, id: null, seq: ++jumpSeq } : null })
 }
 
@@ -996,13 +1010,18 @@ export async function loadOlder(token: string): Promise<void> {
     const page = await window.talk.loadOlder(token, chat.oldestId)
     // The list was replaced meanwhile (a jump): the page belongs to the one before.
     if (state.chats[token]?.view !== view) return
-    setChat(token, (c) => ({
-      ...c,
-      messages: merge(c.messages, page.messages),
-      hasMore: page.hasMore,
-      oldestId: page.oldestId ?? c.oldestId,
-      loadingOlder: false,
-    }))
+    setChat(token, (c) =>
+      withMentions(
+        {
+          ...c,
+          messages: merge(c.messages, page.messages),
+          hasMore: page.hasMore,
+          oldestId: page.oldestId ?? c.oldestId,
+          loadingOlder: false,
+        },
+        openMentions(token, page),
+      ),
+    )
   } catch {
     if (state.chats[token]?.view === view) setChat(token, (c) => ({ ...c, loadingOlder: false }))
   }
@@ -1031,15 +1050,18 @@ export async function loadNewer(token: string): Promise<void> {
     appendListener?.(token)
     setChat(token, (c) => {
       const messages = merge(c.messages, page.messages)
-      return {
-        ...c,
-        // Only what is newer than the last message of the list: nothing twice, no hole.
-        messages: page.hasNewer ? messages : appendHeld(messages, c.held),
-        hasNewer: page.hasNewer,
-        newestId: page.newestId ?? c.newestId,
-        held: page.hasNewer ? c.held : [],
-        loadingNewer: false,
-      }
+      return withMentions(
+        {
+          ...c,
+          // Only what is newer than the last message of the list: nothing twice, no hole.
+          messages: page.hasNewer ? messages : appendHeld(messages, c.held),
+          hasNewer: page.hasNewer,
+          newestId: page.newestId ?? c.newestId,
+          held: page.hasNewer ? c.held : [],
+          loadingNewer: false,
+        },
+        openMentions(token, page),
+      )
     })
     // A page of hidden messages only shows nothing: the next one right away.
     if (page.hasNewer && page.messages.length === 0 && page.newestId != null && page.newestId > newestId) void loadNewer(token)

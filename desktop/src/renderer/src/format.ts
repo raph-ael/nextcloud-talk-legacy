@@ -221,7 +221,8 @@ const MENTION_QUERY_MAX = 40
 /**
  * The suggestions' search text (docs/mentions.md „Vorschlagsliste“): from the nearest „@“
  * before the caret that stands at the start or after white space. None across a line break,
- * beyond 40 characters, or when a finished mention starts at that „@“.
+ * beyond 40 characters, or with the caret in a finished mention or right behind it. Further
+ * behind, the text counts as always: „@Lena Br“ finds Lena Brandt although „Lena“ is picked.
  */
 export function mentionTrigger(text: string, caret: number, picks: MentionPick[]): MentionTrigger | null {
   for (let i = caret - 1; i >= 0; i--) {
@@ -230,7 +231,7 @@ export function mentionTrigger(text: string, caret: number, picks: MentionPick[]
     if (ch !== '@' || (i > 0 && !/\s/.test(text[i - 1]))) continue
     const query = text.slice(i + 1, caret)
     if ([...query].length > MENTION_QUERY_MAX) return null
-    return fieldMentions(text, picks).some(([from]) => from === i) ? null : { at: i, query }
+    return fieldMentions(text, picks).some(([from, to]) => from === i && caret <= to) ? null : { at: i, query }
   }
   return null
 }

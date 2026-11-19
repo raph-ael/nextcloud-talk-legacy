@@ -257,7 +257,7 @@ export interface ChatPage {
   hasNewer: boolean
   /** For `loadNewer`; like `oldestId` it counts hidden messages too. */
   newestId: number | null
-  /** Mentions of the user after the read marker; only from `cachedChat` and `openChat`. */
+  /** Mentions of the user after the read marker that this page knows of (docs/mentions.md „Quellen“). */
   unreadMentions: number[]
 }
 
