@@ -458,15 +458,22 @@ impl From<core::UserView> for UserView {
 pub struct SectionView {
     /// For `toggle_section`; row keys are section id + token (a chat may be in several).
     pub id: String,
-    /// `favorites`, `custom` or `other`.
+    /// `favorites`, `custom`, `other`, `groups` or `direct`; in a search also `archived`.
     pub kind: String,
     /// Empty when it is the only section: then no header.
     pub title: String,
     pub collapsed: bool,
-    /// Rows to show (collapsed: only the open chat, unread ones and ones with a call).
+    /// Rows to show: none when collapsed.
     pub rooms: Vec<RoomView>,
     /// All chats in the section, hidden ones included.
     pub total: u32,
+    /// For the head while collapsed: unread messages of all its chats, counted like the
+    /// app badge (muted chats never, "Nur Erwähnungen" only with a mention).
+    pub unread: u32,
+    /// For the head while collapsed: an unread mention in one of its chats.
+    pub unread_mention: bool,
+    /// For the head while collapsed: a running call in one of its chats.
+    pub has_call: bool,
 }
 
 impl From<core::SectionView> for SectionView {
@@ -478,6 +485,9 @@ impl From<core::SectionView> for SectionView {
             collapsed: s.collapsed,
             rooms: s.rooms.into_iter().map(Into::into).collect(),
             total: s.total,
+            unread: s.unread,
+            unread_mention: s.unread_mention,
+            has_call: s.has_call,
         }
     }
 }
@@ -1303,9 +1313,9 @@ impl TalkSession {
     // --- categories (docs/categories.md) ---------------------------------------------
 
     /// The chat list in sections ("Favoriten", categories, "Chats"). Call again on
-    /// `RoomsChanged`, when the search text, the open chat or `split` changes. `split` is
-    /// the device setting "Gruppen und Direktchats trennen": "Gruppen" and "Direktchats"
-    /// instead of "Chats" (ids and kinds `groups`, `direct`).
+    /// `RoomsChanged`, when the search text or `split` changes. `split` is the device
+    /// setting "Gruppen und Direktchats trennen": "Gruppen" and "Direktchats" instead of
+    /// "Chats" (ids and kinds `groups`, `direct`). `active_token` is no longer used.
     #[uniffi::method(default(split = false))]
     pub fn room_sections(&self, query: String, active_token: Option<String>, split: bool) -> Vec<SectionView> {
         self.engine.room_sections(&query, active_token.as_deref(), split).into_iter().map(Into::into).collect()
@@ -1319,6 +1329,17 @@ impl TalkSession {
             .await
             .err()
             .map(|e| core::category_error_text(core::CategoryOp::Collapse, &e))
+    }
+
+    /// "Sortierung" (docs/categories.md): `activity` or `alphabetical`, for every section.
+    pub fn sort_order(&self) -> String {
+        self.engine.sort_order()
+    }
+
+    /// Chooses the sort order (saved on the server where it knows the setting). German
+    /// error text or `None`; the list updates via `RoomsChanged` either way.
+    pub async fn set_sort_order(&self, order: String) -> Option<String> {
+        cat_err(self.engine.set_sort_order(&order).await, core::CategoryOp::Sort)
     }
 
     /// The server keeps categories: offer "Kategorie" in the chat menu.

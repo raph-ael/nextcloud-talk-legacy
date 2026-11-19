@@ -440,7 +440,8 @@ impl TalkSession {
     // --- categories (docs/categories.md); changes resolve to a German error or `null` --
 
     /// `SectionView[]`: the chat list in sections. Again on `roomsChanged`, a new search
-    /// text, another open chat or a changed `split` ("Gruppen und Direktchats trennen").
+    /// text or a changed `split` ("Gruppen und Direktchats trennen"). `active_token` is no
+    /// longer used.
     #[napi(ts_return_type = "any")]
     pub fn room_sections(&self, query: String, active_token: Option<String>, split: Option<bool>) -> Result<Value> {
         json(&self.engine.room_sections(&query, active_token.as_deref(), split.unwrap_or(false)))
@@ -449,6 +450,18 @@ impl TalkSession {
     #[napi]
     pub async fn toggle_section(&self, id: String) -> Option<String> {
         cat_err(self.engine.toggle_section(&id).await, core::CategoryOp::Collapse)
+    }
+
+    /// "Sortierung" (docs/categories.md): `activity` or `alphabetical`, for every section.
+    #[napi]
+    pub fn sort_order(&self) -> String {
+        self.engine.sort_order()
+    }
+
+    /// Saved on the server where it knows the setting; the list follows via `roomsChanged`.
+    #[napi]
+    pub async fn set_sort_order(&self, order: String) -> Option<String> {
+        cat_err(self.engine.set_sort_order(&order).await, core::CategoryOp::Sort)
     }
 
     /// Whether the server keeps categories (show "Kategorien verwalten").

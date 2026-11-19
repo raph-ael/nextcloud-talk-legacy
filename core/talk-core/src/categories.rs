@@ -24,6 +24,12 @@ const KIND_ARCHIVED: &str = "archived";
 pub const SECTION_GROUPS: &str = "groups";
 pub const SECTION_DIRECT: &str = "direct";
 
+/// How the chats of a section are ordered (Talk's user setting `conversations_sort_order`).
+pub const SORT_ACTIVITY: &str = "activity";
+pub const SORT_ALPHABETICAL: &str = "alphabetical";
+/// The user setting on the server and the capability that reports it.
+const SORT_CONFIG_KEY: &str = "conversations_sort_order";
+
 /// What the engine knows about categories.
 #[derive(Debug, Default)]
 pub(crate) struct Categories {
@@ -34,6 +40,10 @@ pub(crate) struct Categories {
     /// Collapsed sections without a server category behind them ([`LOCAL_FAVORITES`],
     /// [`LOCAL_OTHER`], [`SECTION_GROUPS`], [`SECTION_DIRECT`]).
     local_collapsed: HashSet<String>,
+    /// Chats by name instead of by last activity.
+    alphabetical: bool,
+    /// The server keeps the sort order (all devices, Talk-Web); otherwise only here.
+    sort_on_server: bool,
 }
 
 impl Categories {
@@ -48,6 +58,8 @@ impl Categories {
                 .meta("collapsed_local")
                 .and_then(|v| serde_json::from_str(&v).ok())
                 .unwrap_or_default(),
+            alphabetical: cache.meta("sort_order").is_some_and(|v| v == SORT_ALPHABETICAL),
+            sort_on_server: cache.meta("sort_on_server").is_some_and(|v| v == "true"),
         }
     }
 
@@ -64,18 +76,25 @@ impl Categories {
 pub struct SectionView {
     /// Pass to `toggle_section`; also part of the row keys (a chat may be in several).
     pub id: String,
-    /// `favorites`, `custom` or `other`; in a search also `archived` (archived chats
-    /// whose name matches; it has no category and is never collapsed).
+    /// `favorites`, `custom`, `other`, `groups` or `direct`; in a search also `archived`
+    /// (archived chats whose name matches; it has no category and is never collapsed).
     pub kind: String,
     /// "Favoriten", the category name or "Chats". Empty when it is the only section:
     /// then show no header (and it is never collapsed).
     pub title: String,
     pub collapsed: bool,
-    /// What to show: all chats, or when collapsed only the open one, unread ones and
-    /// ones with a call.
+    /// What to show: all chats, or none when collapsed.
     pub rooms: Vec<RoomView>,
     /// All chats in the section (also the hidden ones).
     pub total: u32,
+    /// For the head of a collapsed section. Unread messages of all its chats, counted
+    /// like the app badge ([`crate::accounts::badge`]): muted chats never, "Nur
+    /// Erwähnungen" only with a mention.
+    pub unread: u32,
+    /// One of its chats has an unread mention (muted chats do not count).
+    pub unread_mention: bool,
+    /// One of its chats has a running call.
+    pub has_call: bool,
 }
 
 /// One category for the desktop page "Kategorien".
@@ -104,6 +123,8 @@ pub enum CategoryOp {
     Favorite,
     /// "Als gelesen markieren" (chat menu).
     MarkRead,
+    /// "Sortierung" (docs/categories.md).
+    Sort,
 }
 
 impl Engine {
@@ -132,12 +153,70 @@ impl Engine {
 
     /// The chat list as sections (docs/categories.md): "Favoriten", our categories,
     /// "Chats" in the server's order; empty sections are left out. `query` filters by
-    /// name (then nothing is collapsed). `active_token` stays visible when collapsed.
-    /// `split` (the device setting) puts "Gruppen" and "Direktchats" where "Chats" is.
-    pub fn room_sections(&self, query: &str, active_token: Option<&str>, split: bool) -> Vec<SectionView> {
+    /// name (then nothing is collapsed). A collapsed section has no rooms; its head shows
+    /// what is new in it. `split` (the device setting) puts "Gruppen" and "Direktchats"
+    /// where "Chats" is. `_active_token` is no longer used (it once stayed visible).
+    pub fn room_sections(&self, query: &str, _active_token: Option<&str>, split: bool) -> Vec<SectionView> {
         let rooms = self.rooms();
         let c = self.categories.lock().unwrap();
-        build_sections(rooms, &c.sorted(), &c.local_collapsed, query, active_token, split)
+        build_sections(rooms, &c.sorted(), &c.local_collapsed, query, split, c.alphabetical)
+    }
+
+    /// [`SORT_ACTIVITY`] or [`SORT_ALPHABETICAL`]: how the chats of every section are ordered.
+    pub fn sort_order(&self) -> String {
+        sort_name(self.categories.lock().unwrap().alphabetical).into()
+    }
+
+    /// The sort order from the capabilities (`None`: the server has no such setting, then
+    /// ours stays). Sends `RoomsChanged` when the list changes by it.
+    pub(crate) fn apply_sort_order(&self, server: Option<&str>) {
+        let changed = {
+            let mut c = self.categories.lock().unwrap();
+            if c.sort_on_server != server.is_some() {
+                c.sort_on_server = server.is_some();
+                self.cache.set_meta("sort_on_server", c.sort_on_server.to_string());
+            }
+            match server.map(|v| v == SORT_ALPHABETICAL) {
+                Some(alphabetical) if alphabetical != c.alphabetical => {
+                    c.alphabetical = alphabetical;
+                    self.cache.set_meta("sort_order", sort_name(alphabetical).to_string());
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.emit_rooms();
+        }
+    }
+
+    /// Chooses the sort order. Saved on the server when it knows the setting (all devices,
+    /// Talk-Web), otherwise only here. Shows the change at once and undoes it on failure.
+    pub async fn set_sort_order(&self, order: &str) -> Result<()> {
+        if order != SORT_ACTIVITY && order != SORT_ALPHABETICAL {
+            return Err(Error::Decode(format!("sort order: {order}")));
+        }
+        let alphabetical = order == SORT_ALPHABETICAL;
+        let on_server = {
+            let mut c = self.categories.lock().unwrap();
+            if c.alphabetical == alphabetical {
+                return Ok(());
+            }
+            c.alphabetical = alphabetical;
+            c.sort_on_server
+        };
+        self.cache.set_meta("sort_order", order.to_string());
+        self.emit_rooms();
+        if !on_server {
+            return Ok(());
+        }
+        if let Err(e) = self.guard(self.client.set_user_config(SORT_CONFIG_KEY, order).await) {
+            self.categories.lock().unwrap().alphabetical = !alphabetical;
+            self.cache.set_meta("sort_order", sort_name(!alphabetical).to_string());
+            self.emit_rooms();
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Opens or closes a section. Saved on the server (all devices, Talk-Web); without
@@ -327,6 +406,14 @@ impl Engine {
     }
 }
 
+fn sort_name(alphabetical: bool) -> &'static str {
+    if alphabetical {
+        SORT_ALPHABETICAL
+    } else {
+        SORT_ACTIVITY
+    }
+}
+
 fn title(t: &ConversationTag) -> String {
     match t.kind.as_str() {
         KIND_FAVORITES => "Favoriten".into(),
@@ -347,15 +434,19 @@ fn is_direct(r: &RoomView) -> bool {
 
 /// The sections like Talk-Web: a favorite is under "Favoriten" (and its categories),
 /// a chat in no category and no favorite under "Chats", or with `split` under
-/// "Gruppen" or "Direktchats".
+/// "Gruppen" or "Direktchats". `rooms` come by activity; `alphabetical` orders every
+/// section by name instead (case and accents do not count, equal names by activity).
 pub(crate) fn build_sections(
-    rooms: Vec<RoomView>,
+    mut rooms: Vec<RoomView>,
     sorted_tags: &[ConversationTag],
     local_collapsed: &HashSet<String>,
     query: &str,
-    active_token: Option<&str>,
     split: bool,
+    alphabetical: bool,
 ) -> Vec<SectionView> {
+    if alphabetical {
+        rooms.sort_by_cached_key(|r| (crate::search::fold(&r.name), std::cmp::Reverse(r.last_activity)));
+    }
     // Like the message search: case and accents do not count (docs/search.md).
     let q = crate::search::fold(query.trim());
     let searching = !q.is_empty();
@@ -386,6 +477,9 @@ pub(crate) fn build_sections(
         title,
         collapsed: collapsed && !searching,
         total: rooms.len() as u32,
+        unread: crate::accounts::badge(&rooms).messages,
+        unread_mention: rooms.iter().any(|r| r.unread_messages > 0 && r.unread_mention && r.notification_level != 3),
+        has_call: rooms.iter().any(|r| r.has_call),
         rooms,
     };
     let mut sections: Vec<SectionView> = Vec::new();
@@ -423,13 +517,16 @@ pub(crate) fn build_sections(
             title: "Archiviert".into(),
             collapsed: false,
             total: archived.len() as u32,
+            unread: 0,
+            unread_mention: false,
+            has_call: false,
             rooms: archived,
         });
     }
+    // Collapsed means empty: what is new stands in the head (unread, mention, call).
     for s in &mut sections {
         if s.collapsed {
-            s.rooms
-                .retain(|r| Some(r.token.as_str()) == active_token || r.unread_messages > 0 || r.has_call);
+            s.rooms.clear();
         }
     }
     sections
@@ -465,6 +562,7 @@ pub fn category_error_text(op: CategoryOp, e: &Error) -> String {
         (Favorite | MarkRead, Error::NotFound) => "Chat nicht gefunden",
         (_, Error::NotFound) => "Kategorie nicht gefunden",
         (Collapse, _) => "Konnte nicht gespeichert werden",
+        (Sort, _) => "Sortierung konnte nicht gespeichert werden",
         (Create, _) => "Kategorie konnte nicht erstellt werden",
         (Rename | Assign | Favorite | MarkRead, _) => "Speichern fehlgeschlagen",
         (Delete, _) => "Löschen fehlgeschlagen",
@@ -534,7 +632,7 @@ mod tests {
             room("e", true, &["4"]),
             room("f", false, &["99"]), // unknown category: under "Chats"
         ];
-        let s = build_sections(rooms, &server_tags(), &HashSet::new(), "", None, false);
+        let s = build_sections(rooms, &server_tags(), &HashSet::new(), "", false, false);
         let titles: Vec<&str> = s.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(titles, ["Favoriten", "Arbeit", "Familie", "Chats"]);
         assert_eq!(ids(&s[0]), ["a", "e"]);
@@ -546,31 +644,43 @@ mod tests {
 
     #[test]
     fn empty_sections_and_single_section() {
-        let s = build_sections(vec![room("a", false, &[])], &server_tags(), &HashSet::new(), "", None, false);
+        let s = build_sections(vec![room("a", false, &[])], &server_tags(), &HashSet::new(), "", false, false);
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].title, "");
         let mut tags = server_tags();
         tags[3].collapsed = true;
-        let s = build_sections(vec![room("a", false, &[])], &tags, &HashSet::new(), "", None, false);
+        let s = build_sections(vec![room("a", false, &[])], &tags, &HashSet::new(), "", false, false);
         assert!(!s[0].collapsed);
         assert_eq!(ids(&s[0]), ["a"]);
     }
 
     #[test]
-    fn collapsed_keeps_active_unread_and_calls() {
+    fn collapsed_is_empty_and_the_head_counts() {
         let mut tags = server_tags();
         tags[1].collapsed = true;
         let mut unread = room("u", false, &["3"]);
         unread.unread_messages = 2;
+        let mut mention = room("m", false, &["3"]);
+        (mention.unread_messages, mention.unread_mention, mention.notification_level) = (3, true, 2);
+        // "Nur Erwähnungen" without a mention and "Aus" do not count, like the app badge.
+        let mut quiet = room("q", false, &["3"]);
+        (quiet.unread_messages, quiet.notification_level) = (5, 2);
+        let mut muted = room("off", false, &["3"]);
+        (muted.unread_messages, muted.unread_mention, muted.notification_level) = (7, true, 3);
         let mut call = room("k", false, &["3"]);
         call.has_call = true;
-        let rooms = vec![room("x", false, &["3"]), unread, call, room("act", false, &["3"]), room("d", false, &[])];
-        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", Some("act"), false);
+        let rooms = vec![room("x", false, &["3"]), unread, mention, quiet, muted.clone(), call, room("d", false, &[])];
+        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", false, false);
         assert!(s[0].collapsed);
-        assert_eq!(s[0].total, 4);
-        assert_eq!(ids(&s[0]), ["u", "k", "act"]);
+        assert_eq!(s[0].total, 6);
+        assert!(s[0].rooms.is_empty());
+        assert_eq!((s[0].unread, s[0].unread_mention, s[0].has_call), (5, true, true));
+        assert_eq!((s[1].unread, s[1].unread_mention, s[1].has_call), (0, false, false));
+        // A muted chat alone shows nothing in the head.
+        let s = build_sections(vec![muted, room("d", false, &[])], &tags, &HashSet::new(), "", false, false);
+        assert_eq!((s[0].unread, s[0].unread_mention), (0, false));
         // Searching opens everything.
-        let s = build_sections(rooms, &tags, &HashSet::new(), "x", None, false);
+        let s = build_sections(rooms, &tags, &HashSet::new(), "x", false, false);
         assert!(!s[0].collapsed);
         assert_eq!(ids(&s[0]), ["x"]);
     }
@@ -582,10 +692,10 @@ mod tests {
         archived.is_archived = true;
         let rooms = vec![room("a", true, &[]), room("b", false, &["3"]), archived];
         // A search finds the archived chat too, under its own heading, and ignores case.
-        let found = build_sections(rooms.clone(), &[], &collapsed, "Z", None, false);
+        let found = build_sections(rooms.clone(), &[], &collapsed, "Z", false, false);
         assert_eq!(found.iter().map(|s| (s.kind.as_str(), s.title.as_str())).collect::<Vec<_>>(), [("archived", "Archiviert")]);
         assert_eq!(found[0].rooms[0].token, "z");
-        let s = build_sections(rooms, &[], &collapsed, "", None, false);
+        let s = build_sections(rooms, &[], &collapsed, "", false, false);
         assert_eq!(s.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [LOCAL_FAVORITES, LOCAL_OTHER]);
         assert_eq!(s[1].title, "Chats");
         assert!(s[1].collapsed);
@@ -611,7 +721,7 @@ mod tests {
             typed("fav", 1, true), // only under "Favoriten"
             in_cat,                // only under "Arbeit"
         ];
-        let s = build_sections(rooms.clone(), &server_tags(), &HashSet::new(), "", None, true);
+        let s = build_sections(rooms.clone(), &server_tags(), &HashSet::new(), "", true, false);
         let heads: Vec<(&str, &str, &str)> = s.iter().map(|s| (s.id.as_str(), s.kind.as_str(), s.title.as_str())).collect();
         assert_eq!(
             heads,
@@ -622,7 +732,7 @@ mod tests {
         assert_eq!(ids(&s[2]), ["g", "p"]);
         assert_eq!(ids(&s[3]), ["d", "former", "note", "log"]);
         // The same without the setting: one "Chats" as before.
-        let off = build_sections(rooms, &server_tags(), &HashSet::new(), "", None, false);
+        let off = build_sections(rooms, &server_tags(), &HashSet::new(), "", false, false);
         assert_eq!(off.last().map(|s| s.title.as_str()), Some("Chats"));
         assert_eq!(off.last().unwrap().total, 6);
     }
@@ -634,24 +744,56 @@ mod tests {
         unread.unread_messages = 1;
         let rooms = vec![typed("g", 2, false), unread, typed("act", 2, false), typed("d", 1, false)];
         // Also without server categories (local "fav"/"other").
-        let s = build_sections(rooms.clone(), &[], &collapsed, "", Some("act"), true);
+        let s = build_sections(rooms.clone(), &[], &collapsed, "", true, false);
         assert_eq!(s.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [SECTION_GROUPS, SECTION_DIRECT]);
         assert!(s[0].collapsed);
         assert_eq!(s[0].total, 3);
-        assert_eq!(ids(&s[0]), ["u", "act"]);
+        assert!(s[0].rooms.is_empty());
+        assert_eq!(s[0].unread, 1);
         assert!(!s[1].collapsed);
         // The server's collapsed "Chats" does not close the split sections.
         let mut tags = server_tags();
         tags[3].collapsed = true;
-        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", None, true);
+        let s = build_sections(rooms.clone(), &tags, &HashSet::new(), "", true, false);
         assert!(s.iter().all(|s| !s.collapsed));
         // Searching opens everything.
-        let s = build_sections(rooms.clone(), &[], &collapsed, "g", None, true);
+        let s = build_sections(rooms.clone(), &[], &collapsed, "g", true, false);
         assert_eq!(s.len(), 1);
         assert!(!s[0].collapsed);
         // Only one kind left: no heading, never collapsed.
-        let s = build_sections(vec![typed("g", 2, false)], &[], &collapsed, "", None, true);
+        let s = build_sections(vec![typed("g", 2, false)], &[], &collapsed, "", true, false);
         assert_eq!((s.len(), s[0].title.as_str(), s[0].collapsed), (1, "", false));
+    }
+
+    #[test]
+    fn alphabetical_in_every_section() {
+        let named = |token: &str, name: &str, activity: i64, fav: bool, tags: &[&str]| RoomView {
+            name: name.into(),
+            last_activity: activity,
+            ..room(token, fav, tags)
+        };
+        // As the engine hands them over: favorites first, then by activity.
+        let rooms = vec![
+            named("z", "Zeltlager", 9, true, &[]),
+            named("a", "anna", 1, true, &[]),
+            named("o", "Övelgönne", 8, false, &["3"]),
+            named("u", "Ulm", 7, false, &["3"]),
+            named("e2", "Élan", 6, false, &[]),
+            named("b", "Berta", 5, false, &[]),
+            named("e1", "elan", 2, false, &[]),
+        ];
+        let by_activity = build_sections(rooms.clone(), &server_tags(), &HashSet::new(), "", false, false);
+        assert_eq!(ids(&by_activity[0]), ["z", "a"]);
+        assert_eq!(ids(&by_activity[2]), ["e2", "b", "e1"]);
+        let s = build_sections(rooms.clone(), &server_tags(), &HashSet::new(), "", false, true);
+        assert_eq!(s.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Favoriten", "Arbeit", "Chats"]);
+        // Case and accents do not count; equal names by activity.
+        assert_eq!(ids(&s[0]), ["a", "z"]);
+        assert_eq!(ids(&s[1]), ["o", "u"]);
+        assert_eq!(ids(&s[2]), ["b", "e2", "e1"]);
+        // Also in a search.
+        let s = build_sections(rooms, &server_tags(), &HashSet::new(), "l", false, true);
+        assert_eq!(s.iter().flat_map(ids).collect::<Vec<_>>(), ["z", "o", "u", "e2", "e1"]);
     }
 
     #[test]

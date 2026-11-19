@@ -557,6 +557,9 @@ impl Engine {
                 self.cache.set_meta("can_create", can.to_string());
             }
         }
+        if caps.pointer("/capabilities/spreed").is_some() {
+            self.apply_sort_order(caps.pointer("/capabilities/spreed/config/conversations/sort-order").and_then(|v| v.as_str()));
+        }
         let Some(features) = caps.pointer("/capabilities/spreed/features").and_then(|f| f.as_array()) else {
             return;
         };

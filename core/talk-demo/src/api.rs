@@ -47,7 +47,8 @@ pub async fn root() -> Response {
         .into_response()
 }
 
-pub async fn capabilities() -> Response {
+pub async fn capabilities(AxState(app): S) -> Response {
+    let sort_order = app.st.lock().unwrap().sort_order.clone();
     ocs(json!({
         "version": { "major": 31, "minor": 0, "micro": 0, "string": "31.0.0", "edition": "", "extendedSupport": false },
         "capabilities": {
@@ -66,7 +67,7 @@ pub async fn capabilities() -> Response {
                 "config": {
                     "attachments": { "allowed": true, "folder": "/Talk" },
                     "chat": { "max-length": 32000, "read-privacy": 0, "typing-privacy": 1, "has-translation-providers": false },
-                    "conversations": { "can-create": true, "force-passwords": false },
+                    "conversations": { "can-create": true, "force-passwords": false, "sort-order": sort_order },
                     "call": { "enabled": true, "recording": false, "can-upload-background": false },
                     "previews": { "max-gif-size": 3145728 },
                     "signaling": { "session-ping-limit": 200 }
@@ -360,6 +361,17 @@ pub async fn archive_off(AxState(app): S, Path(token): Path<String>) -> Response
 pub async fn notify_level(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {
     let level = p.i64("level").unwrap_or(0).clamp(0, 3) as u8;
     room_flag(&app, &token, |r| r.notification_level = level)
+}
+
+/// The user settings Talk keeps in Nextcloud's user config; we know the sort order only.
+pub async fn user_config(AxState(app): S, Path(key): Path<String>, p: Params) -> Response {
+    match (key.as_str(), p.str("configValue")) {
+        ("conversations_sort_order", Some(v)) if v == "activity" || v == "alphabetical" => {
+            app.st.lock().unwrap().sort_order = v;
+            ocs(json!([]))
+        }
+        _ => bad_request("invalid"),
+    }
 }
 
 pub async fn room_tags(AxState(app): S, Path(token): Path<String>, p: Params) -> Response {

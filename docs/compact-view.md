@@ -2,7 +2,7 @@
 
 Eine zweite Ansicht für Linux, Windows und macOS. Sie zeigt eine einzeilige Chatliste und im Chat Nachrichten untereinander statt Blasen links und rechts, nach dem Muster von Team-Messengern. Farben, Schrift, Abstände und Akzentfarbe bleiben unsere. Es gibt keine farbige Seitenleiste und keine Kanal-Symbole.
 
-**Einstieg:** Einstellungen → „Darstellung“ → „Ansicht“: „Blasen“ (Standard) oder „Kompakt“ (docs/settings.md). Der Wechsel gilt sofort, auch in einem offenen Chat.
+**Einstieg:** Einstellungen → „Darstellung“ → „Ansicht“: „Sprechblasen“ (Standard) oder „Kompakt“ (docs/settings.md). Der Wechsel gilt sofort, auch in einem offenen Chat.
 
 **Technik:**
 - Gespeichert ist `layout: "bubbles" | "compact"` in `settings.json`.

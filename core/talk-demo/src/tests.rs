@@ -193,6 +193,7 @@ async fn engine_and_login_flow() {
     let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
     let sink = Arc::new(Sink(Mutex::new(Vec::new())));
     let account = Account { server: creds.server, user: creds.login_name, app_password: creds.app_password };
+    let engine_account = account.clone();
     let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
     engine.start().await.unwrap();
     assert_eq!(engine.user_id(), "mira");
@@ -215,9 +216,35 @@ async fn engine_and_login_flow() {
     let all_chats = engine.room_sections("", None, false).pop().unwrap().total;
     assert_eq!(split[3].total + split[4].total, all_chats);
     engine.toggle_section("groups").await.unwrap();
-    assert!(engine.room_sections("", None, true)[3].collapsed, "collapsed only here");
+    let closed = engine.room_sections("", None, true).remove(3);
+    assert!(closed.collapsed, "collapsed only here");
+    assert!(closed.rooms.is_empty(), "collapsed is empty");
+    assert_eq!(closed.total, split[3].total);
     engine.toggle_section("groups").await.unwrap();
     assert!(!engine.room_sections("", None, true)[3].collapsed);
+    // The head of a collapsed section says what is new in it (docs/categories.md).
+    let busy = split.iter().position(|s| s.unread > 0).expect("the fixtures have unread chats");
+    engine.toggle_section(&split[busy].id).await.unwrap();
+    let closed = engine.room_sections("", None, true).remove(busy);
+    assert!(closed.collapsed && closed.rooms.is_empty());
+    assert_eq!((closed.unread, closed.unread_mention), (split[busy].unread, split[busy].unread_mention));
+    engine.toggle_section(&split[busy].id).await.unwrap();
+
+    // "Sortierung": saved on the server, every section by name.
+    assert_eq!(engine.sort_order(), "activity");
+    engine.set_sort_order("alphabetical").await.unwrap();
+    assert_eq!(engine.sort_order(), "alphabetical");
+    for s in engine.room_sections("", None, true) {
+        let names: Vec<String> = s.rooms.iter().map(|r| r.name.to_lowercase()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "{}", s.title);
+    }
+    let caps = TalkClient::new(engine_account.clone(), Platform::Cli).unwrap().capabilities().await.unwrap();
+    assert_eq!(caps.pointer("/capabilities/spreed/config/conversations/sort-order").and_then(|v| v.as_str()), Some("alphabetical"));
+    assert!(engine.set_sort_order("von-hand").await.is_err());
+    engine.set_sort_order("activity").await.unwrap();
+    assert_eq!(engine.room_sections("", None, true)[3].rooms.len(), split[3].rooms.len());
 
     // Chat menu (docs/settings.md): the default level is resolved, actions show at once.
     let room = |token: &str| engine.rooms().into_iter().find(|r| r.token == token).unwrap();

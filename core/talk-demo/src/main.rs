@@ -69,6 +69,7 @@ pub fn router(app: App) -> Router {
         .route(&format!("{SPREED}/v4/call/{{token}}/notification-state"), get(api::call_notification_state))
         .route("/ocs/v2.php/cloud/capabilities", get(api::capabilities))
         .route("/ocs/v2.php/cloud/user", get(api::cloud_user))
+        .route("/ocs/v2.php/apps/provisioning_api/api/v1/config/users/spreed/{key}", post(api::user_config))
         .route("/ocs/v2.php/core/getapppassword", get(api::get_app_password))
         .route("/ocs/v2.php/core/apppassword", axum::routing::delete(api::delete_app_password))
         .route("/ocs/v2.php/core/autocomplete/get", get(api::autocomplete))

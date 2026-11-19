@@ -1151,6 +1151,16 @@ impl TalkClient {
         Ok(self.ocs(rb).await?.0)
     }
 
+    /// Sets one of our user settings on the server (`provisioning_api`, the way Talk-Web
+    /// saves its settings). 400: the server does not take this key or value.
+    pub async fn set_user_config(&self, key: &str, value: &str) -> Result<()> {
+        let rb = self
+            .request(Method::POST, &format!("/ocs/v2.php/apps/provisioning_api/api/v1/config/users/spreed/{key}"))
+            .json(&serde_json::json!({ "configValue": value }));
+        self.ocs::<serde_json::Value>(rb).await?;
+        Ok(())
+    }
+
     /// Favorite on (`POST`) or off (`DELETE`).
     pub async fn set_favorite(&self, token: &str, on: bool) -> Result<()> {
         let method = if on { Method::POST } else { Method::DELETE };

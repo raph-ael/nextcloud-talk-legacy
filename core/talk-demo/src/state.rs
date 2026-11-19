@@ -215,6 +215,8 @@ pub struct State {
     /// Files shared into conversations: (path with leading slash, token).
     pub shares: Vec<(String, String)>,
     pub tags: Vec<Tag>,
+    /// The user setting `conversations_sort_order`: `activity` or `alphabetical`.
+    pub sort_order: String,
     pub login_flows: HashMap<String, LoginFlow>,
     pub next_msg: i64,
     pub next_file: i64,
@@ -459,6 +461,7 @@ impl State {
             uploads: HashMap::new(),
             shares: Vec::new(),
             tags: Vec::new(),
+            sort_order: "activity".into(),
             login_flows: HashMap::new(),
             next_msg: 100,
             next_file: 2001,

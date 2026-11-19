@@ -8,7 +8,7 @@ Darin liegt „Darstellung“ mit Design und Akzentfarbe. Dazu kommt ein Menü a
 
 - Ein Klick oder Tippen auf den **eigenen Avatar** oben links in der Chatliste öffnet die Einstellungen direkt. Das gilt auf allen Plattformen. Ab zwei Konten öffnet er stattdessen das Kontomenü, das auch zu den Einstellungen führt (`docs/accounts.md`).
 - **Desktop:**
-  - Das „⋯“-Menü enthält nur noch „Einstellungen“ und „Kategorien verwalten“ (nur bei `categoriesSupported`). Kontoinfo und „Abmelden“ ziehen in die Einstellungen.
+  - Oben in der Chatliste steht ein Zahnrad mit dem Label „Einstellungen“. Es öffnet die Einstellungen direkt. Ein „⋯“-Menü gibt es nicht mehr.
   - Der Kurzbefehl ist Strg+, bzw. ⌘,.
   - Auf macOS steht im App-Menü unter „Über Wolkenfunk“ der Eintrag „Einstellungen …“ (⌘,).
 - **Android:** Das Menü oben rechts enthält nur noch „Einstellungen“.
@@ -28,7 +28,7 @@ Darin liegt „Darstellung“ mit Design und Akzentfarbe. Dazu kommt ein Menü a
    | Allgemein | nur Desktop | Zahnrad |
    | Darstellung | alle | Pinsel bzw. Palette |
    | Benachrichtigungen | nur Android und iOS | Glocke |
-   | Chats | nur Desktop, nur bei `categoriesSupported` | Sprechblase |
+   | Kategorien | nur Desktop, nur bei `categoriesSupported` | Sprechblase |
    | Über Wolkenfunk | alle | Info-Kreis |
 3. **Ganz unten** steht **„Abmelden“** in `danger`. Es meldet das aktive Konto ab und fragt auf allen Plattformen nach; Text und Ablauf stehen in `docs/accounts.md`.
 
@@ -55,13 +55,14 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
    - Das gewählte Feld hat ein weißes Häkchen und einen Ring.
    - Das Label ist der Farbname, beim gewählten Feld mit „, ausgewählt“.
 4. **„Ansicht“** (nur Desktop) ist eine Auswahl wie „Design“, mit zwei Werten:
-   - „Blasen“ (Standard)
+   - „Sprechblasen“ (Standard)
    - „Kompakt“ mit dem Untertitel „Einzeilige Chatliste, Nachrichten untereinander“
 
    Was sich ändert, steht in `docs/compact-view.md`. Die Vorschau oben zeigt die gewählte Ansicht.
 5. **„Chatliste“** (alle) ist ein Abschnitt mit einem Schalter:
    - **„Gruppen und Direktchats trennen“**, Untertitel „Eigene Abschnitte statt „Chats““, standardmäßig an.
    - Die Regeln stehen in `docs/categories.md` („Gruppen und Direktchats“).
+   - Darunter die Auswahl **„Sortierung“** mit „Letzte Aktivität“ (Standard) und „Name (A–Z)“. Sie gilt für das aktive Konto und liegt auf dem Server (`docs/categories.md`, „Sortierung“). Schlägt das Speichern fehl, springt die Auswahl zurück, und der Fehlertext kommt als Toast.
 6. **Jede Änderung gilt sofort** in der ganzen App, auch in offenen Sheets und Dialogen. Einen Knopf „Speichern“ gibt es nicht.
 
 **Was die Akzentfarbe färbt:**
@@ -81,9 +82,9 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
   - iOS: `UIApplication.openNotificationSettingsURLString`
 - Darunter ein Hinweis in `muted`: „Für einzelne Chats: Chat in der Liste lange gedrückt halten.“
 
-### „Chats“ (Desktop)
+### „Kategorien“ (Desktop)
 
-- Die Zeile **„Kategorien verwalten“** öffnet die bestehende Seite (docs/categories.md).
+- Die Zeile öffnet die Kategorien-Seite direkt (docs/categories.md). Eine Zwischenseite gibt es nicht.
 
 ### „Über Wolkenfunk“ (alle)
 
@@ -230,6 +231,8 @@ Desktop (`talk-node`) und mobil (`talk-ffi`) bekommen dieselben Aufrufe:
 | `setFavorite(token, on)` | Fehlertext oder `null` |
 | `setRoomCategories(token, ids)` | Fehlertext oder `null`; danach steht der Chat genau in diesen eigenen Kategorien |
 | `markRoomRead(token)` | Fehlertext oder `null` |
+| `sortOrder()` | `activity` oder `alphabetical` |
+| `setSortOrder(order)` | Fehlertext oder `null`; die Liste folgt über `RoomsChanged` |
 | `setNotificationLevel(token, level)` | vorhanden |
 
 Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
@@ -247,6 +250,8 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
 | Design-Auswahl | Radiogruppe „Design“ |
 | Ansicht-Auswahl (Desktop) | Radiogruppe „Ansicht“ |
 | „Gruppen und Direktchats trennen“ | Schalter mit Titel und Zustand (Desktop `role="switch"`, Android `Switch`, iOS `Toggle`) |
+| Sortierung | Radiogruppe „Sortierung“ |
+| Zahnrad oben in der Chatliste (Desktop) | „Einstellungen“ |
 | Chat-Zeile | zusätzliche Aktion „Chat-Menü“ (Android `customActions`, iOS `accessibilityActions` bzw. das Kontextmenü, Desktop `aria-haspopup="menu"`) |
 | Durchgestrichene Glocke | „stummgeschaltet“, im Label der Zeile |
 | Untermenü-Eintrag (Desktop) | `aria-haspopup="menu"` und `aria-expanded`; Einträge mit `menuitemcheckbox` bzw. `menuitemradio` |

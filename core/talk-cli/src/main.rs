@@ -160,12 +160,14 @@ enum Cmd {
     /// The chat list in sections like the apps (docs/categories.md)
     Sections {
         query: Option<String>,
-        /// The open chat (stays visible in a collapsed section)
-        #[arg(long)]
-        active: Option<String>,
         /// "Gruppen" and "Direktchats" instead of "Chats" (the apps' default)
         #[arg(long)]
         split: bool,
+    },
+    /// Show or set how the chats of every section are ordered (docs/categories.md)
+    Sort {
+        /// `activity` or `alphabetical`; without it the current order is printed
+        order: Option<String>,
     },
     /// Categories in the chat list (docs/categories.md)
     Category {
@@ -551,7 +553,7 @@ async fn main() -> Result<()> {
     if let Cmd::Group { op } = &cli.cmd {
         return group_cmd(client, op).await;
     }
-    if let Cmd::Sections { .. } | Cmd::Category { .. } = &cli.cmd {
+    if let Cmd::Sections { .. } | Cmd::Sort { .. } | Cmd::Category { .. } = &cli.cmd {
         return category_cmd(client, &cli.cmd).await;
     }
     if let Cmd::PushTest { proxy, token, keep } = &cli.cmd {
@@ -596,7 +598,7 @@ async fn main() -> Result<()> {
         | Cmd::Fetch { .. }
         | Cmd::Recordings { .. } | Cmd::React { .. } | Cmd::Reactions { .. } | Cmd::Users { .. } | Cmd::Mentions { .. } | Cmd::Group { .. }
         | Cmd::Edit { .. } | Cmd::DeleteMessage { .. } | Cmd::Changes { .. }
-        | Cmd::Sections { .. } | Cmd::Category { .. } => {
+        | Cmd::Sections { .. } | Cmd::Sort { .. } | Cmd::Category { .. } => {
             unreachable!()
         }
         Cmd::Rooms { json } => {
@@ -787,11 +789,18 @@ async fn category_cmd(client: TalkClient, cmd: &Cmd) -> Result<()> {
     let fail = |op: CategoryOp| move |e: talk_core::Error| anyhow::anyhow!("{} ({e})", category_error_text(op, &e));
     let result: Result<()> = async {
         match cmd {
-            Cmd::Sections { query, active, split } => {
-                for s in engine.room_sections(query.as_deref().unwrap_or(""), active.as_deref(), *split) {
+            Cmd::Sort { order } => {
+                if let Some(order) = order {
+                    engine.set_sort_order(order).await.map_err(fail(CategoryOp::Sort))?;
+                }
+                println!("{}", engine.sort_order());
+            }
+            Cmd::Sections { query, split } => {
+                for s in engine.room_sections(query.as_deref().unwrap_or(""), None, *split) {
                     let title = if s.title.is_empty() { "(ohne Kopf)" } else { &s.title };
                     let arrow = if s.collapsed { ">" } else { "v" };
-                    println!("{arrow} {title} [{} {}] {}/{} sichtbar", s.kind, s.id, s.rooms.len(), s.total);
+                    let head = format!("{} neu{}{}", s.unread, if s.unread_mention { ", @" } else { "" }, if s.has_call { ", Anruf" } else { "" });
+                    println!("{arrow} {title} [{} {}] {}/{} sichtbar, {head}", s.kind, s.id, s.rooms.len(), s.total);
                     for r in &s.rooms {
                         let unread = if r.unread_messages > 0 { format!(" ({} neu)", r.unread_messages) } else { String::new() };
                         println!("    {:<12} {}{unread}", r.token, r.name);

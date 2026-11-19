@@ -2,13 +2,14 @@
 
 In Talk kann man Chats in eigene Abschnitte ordnen. Talk nennt sie „Tags“ (Feature `conversation-tags`). In unseren Apps heißen sie **„Kategorie“**, denn „Gruppe“ ist schon der Gruppenchat (docs/groups.md).
 
-Die Liste zeigt **Favoriten | eigene Kategorien | Chats** in der Reihenfolge vom Server, genau wie Talk-Web. Jeder Abschnitt lässt sich einklappen.
+Die Liste zeigt **Favoriten | eigene Kategorien | Chats** in der Reihenfolge vom Server, genau wie Talk-Web. Jeder Abschnitt lässt sich einklappen. Ein eingeklappter Abschnitt ist leer, und sein Kopf zeigt, was darin neu ist.
 
 Standardmäßig steht statt „Chats“ das Paar **„Gruppen“ | „Direktchats“** (Abschnitt „Gruppen und Direktchats“ unten). Das lässt sich in den Einstellungen abschalten.
 
 **Wer was kann:**
 - Alle Plattformen zeigen die Abschnitte an und klappen sie ein und aus.
-- Nur der Desktop verwaltet sie: anlegen, umbenennen, löschen, sortieren und Chats zuordnen.
+- Alle Plattformen wählen die Sortierung der Chats (Abschnitt „Sortierung“ unten).
+- Nur der Desktop verwaltet die Kategorien: anlegen, umbenennen, löschen, verschieben und Chats zuordnen.
 
 ## Server (spreed ≥ 24, `/ocs/v2.php/apps/spreed/api/v4`)
 
@@ -36,13 +37,18 @@ Standardmäßig steht statt „Chats“ das Paar **„Gruppen“ | „Direktchat
 - `collapsed`
 - `rooms`: die Zeilen, die angezeigt werden
 - `total`: alle Chats des Abschnitts
+- `unread`, `unreadMention`, `hasCall`: für den Kopf eines eingeklappten Abschnitts
 
 **Eingeklappt:**
-- `rooms` enthält dann nur:
-  - den offenen Chat (`active_token`),
-  - ungelesene Chats,
-  - Chats mit laufendem Anruf.
-- So geht nichts unter.
+- `rooms` ist dann leer. Das gilt auch für den offenen Chat, für ungelesene Chats und für Chats mit laufendem Anruf.
+- Damit nichts untergeht, rechnet der Kern für den Kopf über alle Chats des Abschnitts:
+  | Feld | Inhalt |
+  |---|---|
+  | `unread` | Summe der ungelesenen Nachrichten. Es zählt wie der Badge am App-Symbol (`badge()`, docs/settings.md „Stummgeschaltete Chats“): „Aus“ nie, „Nur Erwähnungen“ nur mit Erwähnung. |
+  | `unreadMention` | In einem Chat steht eine ungelesene Erwähnung. Chats auf „Aus“ zählen nicht. |
+  | `hasCall` | In einem Chat läuft ein Anruf. |
+- Die Felder sind auch bei einem offenen Abschnitt gefüllt. Angezeigt werden sie nur, solange er eingeklappt ist.
+- `active_token` wird nicht mehr gebraucht. Der Parameter bleibt, damit sich die Bindungen nicht ändern.
 
 **Suche:** `query` filtert nach Namen, ohne Rücksicht auf Groß- und Kleinschreibung und Akzente. Während der Suche ist nichts eingeklappt.
 - Passt der Name eines archivierten Chats, steht er in einem eigenen Abschnitt „Archiviert“ (`kind: "archived"`) am Ende. Er hat keine Kategorie dahinter: kein Einklappen, kein Menü.
@@ -61,8 +67,7 @@ Standardmäßig steht statt „Chats“ das Paar **„Gruppen“ | „Direktchat
 - Jede Änderung sendet `RoomsChanged`.
 - Die Plattformen rufen `room_sections` neu auf:
   - bei `RoomsChanged`,
-  - wenn sich der Suchtext ändert,
-  - wenn ein anderer Chat geöffnet wird.
+  - wenn sich der Suchtext ändert.
 
 **Aufrufe:**
 - `toggle_section(id)`
@@ -92,6 +97,31 @@ Eine Einstellung je Gerät, standardmäßig an (docs/settings.md, „Darstellung
 
 **Ohne `split`** sieht die Liste aus wie bisher. Die Bindungen nehmen `false` an, wenn der Wert fehlt.
 
+## Sortierung
+
+Eine Wahl für die ganze Liste, in den Einstellungen unter „Darstellung“, „Chatliste“ (docs/settings.md).
+
+| Wert | Reihenfolge in jedem Abschnitt |
+|---|---|
+| `activity` „Letzte Aktivität“ (Standard) | Favoriten zuerst, dann nach der letzten Aktivität, wie bisher |
+| `alphabetical` „Name (A–Z)“ | Nach dem Namen, ohne Rücksicht auf Groß- und Kleinschreibung und Akzente (dieselbe Faltung wie die Suche). Bei gleichem Namen entscheidet die letzte Aktivität. |
+
+**Regeln:**
+- Die Sortierung gilt in „Favoriten“, in eigenen Kategorien, in „Chats“ bzw. „Gruppen“ und „Direktchats“, in „Archiviert“ und auch während einer Suche.
+- Die Reihenfolge der Abschnitte selbst ändert sich nicht.
+- Eine Reihenfolge von Hand gibt es nicht: Talk kennt keine Position einzelner Chats.
+
+**Speicherort:**
+- Talk kennt die Benutzereinstellung `conversations_sort_order`. Der Server meldet sie in den Capabilities unter `config.conversations.sort-order`, und Talk-Web liest sie ebenfalls.
+- Der Kern übernimmt den Wert bei jedem Start und jeder vollen Aktualisierung und merkt ihn sich im Cache. So startet die Liste auch offline richtig sortiert.
+- Geschrieben wird über die Benutzer-Konfiguration von Nextcloud: `POST /ocs/v2.php/apps/provisioning_api/api/v1/config/users/spreed/conversations_sort_order` mit `configValue`. Ein ungültiger Wert gibt 400.
+- Meldet der Server die Einstellung nicht, gilt die Wahl nur auf diesem Gerät und Konto.
+
+**Aufrufe:**
+- `sort_order()` gibt `activity` oder `alphabetical` zurück.
+- `set_sort_order(order)` zeigt die Änderung sofort, speichert dann und nimmt sie bei einem Fehler zurück. Es gibt `null` oder einen deutschen Fehlertext zurück („Sortierung konnte nicht gespeichert werden“ oder „Keine Verbindung“).
+- Beide Male kommt `RoomsChanged`. Die Plattform liest danach `sort_order()` neu, auch wenn die Änderung von einem anderen Gerät kam.
+
 ## Darstellung (alle Plattformen)
 
 **Kopf:**
@@ -101,7 +131,16 @@ Eine Einstellung je Gerät, standardmäßig an (docs/settings.md, „Darstellung
   - Aufgeklappt ist es um 90° nach unten gedreht.
   - Die Drehung dauert etwa 150 ms; bei „Bewegung reduzieren“ entfällt sie.
 - Der ganze Kopf ist anklickbar.
-- Mehr gibt es nicht: keine Zähler, keine Linien.
+- Solange der Abschnitt offen ist, steht dort sonst nichts: keine Zähler, keine Linien.
+
+**Kopf eines eingeklappten Abschnitts:** Am rechten Rand stehen dieselben Zeichen wie an einer Chat-Zeile, in dieser Reihenfolge und nur bei Bedarf:
+| Zeichen | Wann |
+|---|---|
+| grüner Anrufpunkt | `hasCall` |
+| „@“-Schild in `accent` | `unreadMention` |
+| Zähler in `accent` | `unread > 0`, über 99 als „99+“ |
+
+Es sind die vorhandenen Teile der Chat-Zeile, ohne neue Farben oder Größen.
 
 **Zeilen:**
 - Sie bleiben unverändert.
@@ -110,14 +149,18 @@ Eine Einstellung je Gerät, standardmäßig an (docs/settings.md, „Darstellung
 **Barrierefreiheit:**
 - Der Kopf ist ein Button mit `aria-expanded` bzw. dem Zustand „ausgeklappt“/„eingeklappt“.
 - Das Label nennt den Titel, zum Beispiel „Arbeit, Kategorie“.
-- Ist der Abschnitt eingeklappt und sind Chats ausgeblendet, kommt „, N Chats ausgeblendet“ hinzu.
+- Ist der Abschnitt eingeklappt, kommen hinzu, jeweils nur bei Bedarf:
+  - „N Chats“ bzw. „1 Chat“ (immer)
+  - „M ungelesene Nachrichten“ bzw. „1 ungelesene Nachricht“
+  - „Erwähnung“
+  - „laufender Anruf“
+- Beispiel: „Arbeit, Kategorie, 4 Chats, 7 ungelesene Nachrichten, Erwähnung“.
 
 ## Desktop: Seite „Kategorien“
 
 **Einstieg:**
-- Im „⋯“-Menü steht „Kategorien verwalten“, nur bei `categoriesSupported()`.
-- Die Seite ersetzt den Chatbereich mit Zurück-Pfeil, wie die Gruppeneinstellungen.
-- Öffnet man einen Chat, schließt sie.
+- In den Einstellungen steht die Zeile „Kategorien“, nur bei `categoriesSupported()` (docs/settings.md).
+- Die Seite steht rechts neben der Navigation der Einstellungen, wie jede andere Seite dort.
 
 **Liste** aus `categories()` in Reihenfolge:
 - Jede Zeile zeigt den Namen, darunter „N Chats“.
@@ -151,7 +194,8 @@ Eine Einstellung je Gerät, standardmäßig an (docs/settings.md, „Darstellung
 - Danach mit `talk-cli -a a category list` prüfen, dass nur „Favoriten“ und „Chats“ übrig sind, und mit `talk-cli -a a rooms --json` prüfen, dass alle `tagIds` leer sind.
 
 **Werkzeuge:**
-- Abschnitte prüfen: `talk-cli -a a sections [suche] [--active TOKEN] [--split]`
+- Abschnitte prüfen: `talk-cli -a a sections [suche] [--split]`
+- Sortierung lesen und setzen: `talk-cli -a a sort [activity|alphabetical]`. Am Ende wieder `activity` setzen.
 - Gegenseite und Vorbereitung: `talk-cli -a a category list|create|rename|delete|move|collapse|set …`
 - Bot-Tests laufen unter `bot-lock.sh`.
 
