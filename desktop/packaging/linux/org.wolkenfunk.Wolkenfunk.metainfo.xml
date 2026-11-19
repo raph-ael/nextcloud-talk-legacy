@@ -81,6 +81,16 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.4" date="2026-11-19" type="development">
+      <description>
+        <p>Erwähnungen mit „@“. Tippst du in einer Gruppe „@“, erscheint eine Liste mit den Leuten im Chat, dazu Gruppen, Teams und „Alle“. Jeder weitere Buchstabe filtert sofort, auch Vor- und Nachname mit Leerzeichen. Am Computer wählst du mit den Pfeiltasten und übernimmst mit Enter oder Tab.</p>
+        <p>Erwähnungen sind im Eingabefeld und in der Nachricht dezent hinterlegt. Wirst du selbst erwähnt, ist die Fläche in deiner Akzentfarbe. „Alle“ heißt jetzt überall „@Alle“ statt des Chatnamens.</p>
+        <p>Ein Tipp auf eine erwähnte Person öffnet den Direktchat mit ihr. Gibt es noch keinen, fragt die App vorher.</p>
+        <p>Wurdest du in einem Chat erwähnt und hast die Stelle noch nicht gesehen, steht über „Zum Ende springen“ ein „@“-Knopf. Er springt zur Erwähnung und zählt herunter.</p>
+        <p>Beim Bearbeiten und in noch wartenden Nachrichten steht der Name statt der Kennung. Systemmeldungen haben kein falsches „@“ mehr.</p>
+        <p>Computer: Im Chat konnte eine Lücke im Verlauf entstehen, und Zitate in eigenen Nachrichten waren schlecht lesbar. Beides ist behoben.</p>
+      </description>
+    </release>
     <release version="0.6.3" date="2026-11-18" type="development">
       <description>
         <p>Suche in den Nachrichten. Das Suchfeld der Chatliste findet jetzt auch Nachrichten aus allen Chats, mit jedem Tastendruck und ohne Netz. Mehrere Wörter dürfen in beliebiger Reihenfolge stehen, auch Wortteile treffen, Groß- und Kleinschreibung und Akzente zählen nicht. Gefunden werden auch Dateinamen, Kontakte und Standorte.</p>
