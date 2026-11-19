@@ -81,6 +81,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.5" date="2026-11-19" type="development">
+      <description>
+        <p>Gruppen und Direktchats getrennt. In der Chatliste stehen deine Gruppen und deine Einzelchats jetzt in eigenen Abschnitten „Gruppen“ und „Direktchats“, so wie „Favoriten“. Beide lassen sich einklappen. Wer lieber alles zusammen hat, schaltet es unter Einstellungen, „Darstellung“, wieder ab.</p>
+        <p>Computer: neue kompakte Ansicht. Unter „Darstellung“, „Ansicht“ wählst du „Kompakt“: Die Chatliste ist einzeilig, und im Chat stehen alle Nachrichten untereinander statt in Blasen, mit Avatar, Name und Uhrzeit über jeder Folge.</p>
+        <p>Computer: Das „@“-Schild für Erwähnungen in der Chatliste ist wieder gut zu sehen.</p>
+      </description>
+    </release>
     <release version="0.6.4" date="2026-11-19" type="development">
       <description>
         <p>Erwähnungen mit „@“. Tippst du in einer Gruppe „@“, erscheint eine Liste mit den Leuten im Chat, dazu Gruppen, Teams und „Alle“. Jeder weitere Buchstabe filtert sofort, auch Vor- und Nachname mit Leerzeichen. Am Computer wählst du mit den Pfeiltasten und übernimmst mit Enter oder Tab.</p>
