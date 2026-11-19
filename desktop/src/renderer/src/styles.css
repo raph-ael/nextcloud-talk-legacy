@@ -1167,7 +1167,7 @@ a.file-row:hover .file-name {
   background: rgb(255 255 255 / 0.16);
 }
 /* A click leads to the quoted message (docs/search.md „Zitat antippen“). */
-.quote.link {
+.quote.jumps {
   cursor: pointer;
 }
 /* Search words of the search in this chat: behind the text, whose colour stays. */

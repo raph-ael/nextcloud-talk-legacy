@@ -823,7 +823,7 @@ const MessageRow = memo(function MessageRow({
             )}
             {msg.replyTo && (
               <div
-                className={`quote${msg.replyTo.isOwn ? ' own' : ''}${quoted ? ' link' : ''}`}
+                className={`quote${msg.replyTo.isOwn ? ' own' : ''}${quoted ? ' jumps' : ''}`}
                 // docs/search.md „Zitat antippen“; the quote of a deleted message does nothing.
                 onClick={
                   quoted
