@@ -264,6 +264,8 @@ fun Composer(
         val q = query ?: return
         val chosen = fieldPicks.filter { it.label != c.label } + MentionPick(c.label, c.mentionId)
         val next = acceptMention(field, q, c.label)
+        // Closed for this „@“ as after „Zurück“: a longer name that starts alike („Lena Brandt“) does not open it again.
+        dismissed = mentionQuery(next, chosen)
         if (editing != null) {
             editPicks = chosen
             editValue = next

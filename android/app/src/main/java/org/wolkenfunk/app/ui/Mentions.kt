@@ -127,20 +127,19 @@ data class MentionQuery(val at: Int, val text: String)
 /**
  * What the suggestions search for: from the nearest „@“ before the cursor that stands at the
  * start or after white space, in the same line and at most [QUERY_MAX] characters away.
- * Nothing when a finished mention begins there.
+ * Nothing while the cursor stands in a finished mention or right behind it; further on the
+ * text counts from the „@“ as always („@Lena Br“ finds Lena Brandt although „Lena“ is picked).
  */
 fun mentionQuery(value: TextFieldValue, picks: List<MentionPick>): MentionQuery? {
     if (!value.selection.collapsed) return null
     val text = value.text
     val cursor = value.selection.start.coerceAtMost(text.length)
+    if (fieldMentions(text, picks).any { cursor > it.first && cursor <= it.last + 1 }) return null
     var i = cursor - 1
     while (i >= 0 && cursor - i - 1 <= QUERY_MAX) {
         val c = text[i]
         if (c == '\n') return null
-        if (c == '@' && (i == 0 || text[i - 1].isWhitespace())) {
-            if (fieldMentions(text, picks).any { it.first == i }) return null
-            return MentionQuery(i, text.substring(i + 1, cursor))
-        }
+        if (c == '@' && (i == 0 || text[i - 1].isWhitespace())) return MentionQuery(i, text.substring(i + 1, cursor))
         i--
     }
     return null

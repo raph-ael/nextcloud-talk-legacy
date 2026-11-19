@@ -147,7 +147,11 @@ data class ChatState(
     val rev: Int = 0,
     /** Counts the jumps from a window to the end of the chat: the view follows. */
     val endRev: Int = 0,
-    /** Messages that mention the user and were not seen yet, oldest first: the „@“ button (docs/mentions.md). */
+    /**
+     * Messages that mention the user and were not seen yet, oldest first: the „@“ button
+     * (docs/mentions.md). Merged from every page the chat gets: with many unread messages the
+     * first page knows only the newest mentions.
+     */
     val mentions: List<Long> = emptyList(),
     /** Mentions seen since the chat was opened: a later page does not bring them back. */
     val mentionsSeen: Set<Long> = emptySet(),
@@ -1547,7 +1551,7 @@ class SessionManager(private val context: Context) {
                         hasMore = page.hasMore,
                         oldestId = page.oldestId ?: it.oldestId,
                         loadingOlder = false,
-                    )
+                    ).withMentions(page.unreadMentions)
                 }
             }
         }
@@ -1672,7 +1676,7 @@ class SessionManager(private val context: Context) {
                 loadingNewer = false,
                 rev = rev,
             )
-            if (page.hasNewer) next else atEnd(next, pending)
+            (if (page.hasNewer) next else atEnd(next, pending)).withMentions(page.unreadMentions)
         }
         _state.update { if (it.jump?.seq == seq) it.copy(jump = it.jump.copy(ready = true)) else it }
     }
@@ -1709,7 +1713,7 @@ class SessionManager(private val context: Context) {
                             newestId = page.newestId ?: it.newestId,
                             loadingNewer = false,
                         )
-                        if (page.hasNewer) next else atEnd(next, pending)
+                        (if (page.hasNewer) next else atEnd(next, pending)).withMentions(page.unreadMentions)
                     }
                 }
             }
@@ -1744,7 +1748,7 @@ class SessionManager(private val context: Context) {
                     endRev = c.endRev + 1,
                 ),
                 pending,
-            )
+            ).withMentions(cached.unreadMentions)
         }
         _state.update { if (it.jump?.token == token) it.copy(jump = null) else it }
     }
