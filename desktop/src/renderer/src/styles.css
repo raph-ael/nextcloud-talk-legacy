@@ -2645,6 +2645,50 @@ button.who-row:focus-visible {
 .call-devices {
   position: relative;
 }
+/*
+ * Narrow windows (docs/calls.md): no control is ever squeezed. With „Mehr“ the bar needs 541;
+ * below, „Chats“ loses its word (488), then the controls move together (440, then 360).
+ */
+.call-controls > * {
+  flex-shrink: 0;
+}
+@media (max-width: 560px) {
+  .call-ctl.call-chats {
+    width: 48px;
+    border-radius: 50%;
+    display: grid;
+    padding: 0;
+  }
+  .call-ctl.call-chats span {
+    display: none;
+  }
+  /* The menus hang on the bar, centred in the window: centred on their button they would leave it. */
+  .call-controls .call-devices {
+    position: static;
+  }
+  .call-controls .call-menu {
+    bottom: 88px;
+  }
+}
+@media (max-width: 500px) {
+  .call-controls {
+    gap: 12px;
+  }
+}
+@media (max-width: 440px) {
+  .call-controls {
+    gap: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .call-controls .call-ctl {
+    width: 44px;
+    height: 44px;
+  }
+  .call-controls .call-menu {
+    bottom: 84px;
+  }
+}
 .call-menu {
   position: absolute;
   bottom: 60px;

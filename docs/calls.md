@@ -246,6 +246,9 @@ MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
   - Der Knopf „Chats“ (Sprechblase, am Desktop mit Beschriftung) verkleinert die
     Anrufansicht. Dasselbe tun der Pfeil oben links („Zu den Chats“) und unter Android die
     Zurück-Taste.
+  - Am Desktop verliert „Chats“ in schmalen Fenstern (bis 560 breit) die Beschriftung und wird
+    ein runder Knopf. Darunter rücken die Knöpfe zusammen (bis 500: Abstand 12, bis 440:
+    Knöpfe 44, Abstand 6). Kein Knopf wird gestaucht.
   - Danach ist die App frei bedienbar: Chatliste, jeder Chat, Einstellungen. Der Anruf läuft
     weiter.
   - Über der App steht die Leiste „Zurück zum Anruf“ mit der Dauer. Ein Klick oder Tippen
