@@ -2,8 +2,9 @@
 """Builds every app icon of Wolkenfunk from one source: design/icon/wolkenfunk-symbolic.svg.
 
     python3 design/icon/build-icons.py [desktop] [android] [ios] [website]
+    python3 design/icon/build-icons.py store --out DIR
 
-Without arguments it builds all of them. Results are checked in, so builds (including the
+Without arguments it builds all of them except `store`. Results are checked in, so builds (including the
 Windows CI) need none of the tools. Running it again gives byte-identical files.
 
 Needs rsvg-convert (librsvg2-bin), Python 3 with Pillow and, for the digits of the Windows
@@ -25,6 +26,11 @@ counter, the font DejaVu Sans (fonts-dejavu-core).
   ios/…/LoginIcon.imageset/                 the light app icon for the login screen (72 pt @1–3x,
                                             square: the app rounds the corners)
   website/public/…                          via website/scripts/build-assets.py
+
+`store` writes the Google Play graphics to DIR, not into the repo (font: Noto Sans):
+  icon-512.png                  512, full square and opaque: Play rounds and shades it
+  icon-512-maske-kontrolle.png  the icon under the 30 % and 20 % corner masks, and with the 384 keylines
+  feature-1024x500-<variant>.png  feature graphic without alpha, variants "blau" and "hell"
 """
 from __future__ import annotations
 
@@ -135,7 +141,7 @@ def render(svg: str, size: int) -> Image.Image:
 def save_png(img: Image.Image, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, optimize=True)
-    print(f"{out.relative_to(ROOT)}")
+    print(f"{out.relative_to(ROOT) if out.is_relative_to(ROOT) else out}")
 
 
 def write(out: Path, text: str) -> None:
@@ -279,11 +285,103 @@ def website() -> None:
     subprocess.run([sys.executable, str(ROOT / "website" / "scripts" / "build-assets.py")], check=True)
 
 
+# --- Google Play (not checked in: `store --out DIR`) --------------------------------------
+
+FONT = "Noto Sans"
+# Feature graphic variants: background gradient, glyph, name, tagline. Play advises against
+# pure white, black or dark grey (they blend into its UI), so "hell" is a clear light blue.
+FEATURE = {
+    "blau": ((BLUE_LIGHT, BLUE_DARK), "#FFFFFF", "#FFFFFF", "#FFFFFF"),
+    "hell": (("#E4EEFE", "#C6DAFC"), "#1F63DE", "#142033", "#2B3B55"),
+}
+TAGLINE = "Nachrichten und Anrufe für deine Nextcloud"
+
+
+def text_width(text: str, size: int, bold: bool, spacing: float = 0) -> float:
+    from PIL import ImageFont
+    path = subprocess.run(["fc-match", "-f", "%{file}", f"{FONT}:{'bold' if bold else 'regular'}"],
+                          check=True, capture_output=True, text=True).stdout
+    return ImageFont.truetype(path, size).getlength(text) + spacing * (len(text) - 1)
+
+
+def render_wh(svg: str, w: int, h: int) -> Image.Image:
+    with tempfile.NamedTemporaryFile("w", suffix=".svg", delete=False) as f:
+        f.write(svg)
+        tmp = f.name
+    try:
+        png = subprocess.run(["rsvg-convert", "-w", str(w), "-h", str(h), tmp],
+                             check=True, capture_output=True).stdout
+    finally:
+        Path(tmp).unlink()
+    return Image.open(io.BytesIO(png))
+
+
+def feature_graphic(bg: tuple[str, str], mark: str, name: str, tag: str) -> str:
+    """1024×500: glyph and name side by side, tagline below, all in the middle. The lower
+    middle stays free for the play button Play lays over it when there is a video."""
+    w, h = 1024, 500
+    glyph_px, gap, name_size, tag_size, spacing = 150, 28, 104, 40, -2
+    name_w = text_width("Wolkenfunk", name_size, True, spacing)
+    # The glyph spans about 77 % of its 512 grid; scale so that part is glyph_px tall.
+    scale = glyph_px / (512 * 0.77)
+    row_w = glyph_px + gap + name_w
+    x0 = (w - row_w) / 2
+    cy = 200  # middle of the glyph/name row
+    # The glyph sits centred on its grid (see placed()).
+    gx, gy = x0 + glyph_px / 2 - 256 * scale, cy - 256 * scale
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+        '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
+        f'<stop offset="0" stop-color="{bg[0]}"/><stop offset="1" stop-color="{bg[1]}"/>'
+        f'</linearGradient></defs><rect width="{w}" height="{h}" fill="url(#bg)"/>'
+        f'<g transform="translate({gx:.2f} {gy:.2f}) scale({scale:.4f})">{glyph(mark)}</g>'
+        f'<g font-family="{FONT}, sans-serif">'
+        f'<text x="{x0 + glyph_px + gap:.1f}" y="{cy + name_size * 0.36:.1f}" font-size="{name_size}" '
+        f'font-weight="700" letter-spacing="{spacing}" fill="{name}">Wolkenfunk</text>'
+        f'<text x="{w / 2}" y="{cy + 118}" font-size="{tag_size}" text-anchor="middle" '
+        f'fill="{tag}" fill-opacity="0.92">{TAGLINE}</text></g></svg>')
+
+
+def mask_check(icon: Image.Image) -> Image.Image:
+    """Control sheet: the icon under Play's corner mask (30 % per the current spec, 20 % as
+    asked), and with the 384 px keyline square/circle drawn in."""
+    from PIL import ImageDraw
+    pad, size = 48, 512
+    sheet = Image.new("RGB", (3 * size + 4 * pad, size + 2 * pad), "#E8EAED")
+    for i, radius in enumerate((0.30, 0.20)):
+        m = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(m).rounded_rectangle((0, 0, size - 1, size - 1), radius=size * radius, fill=255)
+        sheet.paste(icon, (pad + i * (size + pad), pad), m)
+    x = pad + 2 * (size + pad)
+    sheet.paste(icon, (x, pad))
+    d = ImageDraw.Draw(sheet)
+    k = (size - 384) / 2
+    d.rectangle((x + k, pad + k, x + size - k, pad + size - k), outline="#FF3B30", width=2)
+    d.ellipse((x + k, pad + k, x + size - k, pad + size - k), outline="#FFCC00", width=2)
+    return sheet
+
+
+def store(out: Path) -> None:
+    icon = render(square_tile(), 512)  # opaque, 32 bit as Play asks; Play rounds and shades
+    save_png(icon, out / "icon-512.png")
+    save_png(mask_check(icon), out / "icon-512-maske-kontrolle.png")
+    for variant, (bg, mark, name, tag) in FEATURE.items():
+        # No alpha channel allowed.
+        save_png(render_wh(feature_graphic(bg, mark, name, tag), 1024, 500).convert("RGB"),
+                 out / f"feature-1024x500-{variant}.png")
+
+
 TARGETS = {"desktop": desktop, "android": android, "ios": ios, "website": website}
 
 if __name__ == "__main__":
-    wanted = sys.argv[1:] or list(TARGETS)
+    args = sys.argv[1:]
+    if args[:1] == ["store"]:
+        if len(args) != 3 or args[1] != "--out":
+            sys.exit("usage: build-icons.py store --out DIR  (Play graphics, not checked in)")
+        store(Path(args[2]).resolve())
+        sys.exit()
+    wanted = args or list(TARGETS)
     for name in wanted:
         if name not in TARGETS:
-            sys.exit(f"unknown target {name!r}, choose from {', '.join(TARGETS)}")
+            sys.exit(f"unknown target {name!r}, choose from {', '.join(TARGETS)} (or store --out DIR)")
         TARGETS[name]()
