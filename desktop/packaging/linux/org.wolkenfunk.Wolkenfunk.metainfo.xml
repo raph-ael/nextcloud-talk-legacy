@@ -81,6 +81,11 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.8" date="2026-11-20" type="development">
+      <description>
+        <p>Während eines Anrufs in andere Chats. In der Steuerleiste des Anrufs steht jetzt der Knopf „Chats“. Er verkleinert den Anruf, du liest und schreibst in anderen Chats, und über die Leiste „Zurück zum Anruf“ kommst du zurück. Der Anruf läuft dabei weiter.</p>
+      </description>
+    </release>
     <release version="0.6.7" date="2026-11-20" type="development">
       <description>
         <p>KI-Agenten im Chat. Arbeitet in deinem Talk ein KI-Agent mit, steht sein Arbeitsstand klein und grau im Chat und schreibt sich fort, ohne „bearbeitet“. Ist die Antwort da, verschwindet er wieder, ohne dass „Diese Nachricht wurde gelöscht.“ zurückbleibt.</p>
