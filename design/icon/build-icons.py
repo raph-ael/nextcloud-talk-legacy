@@ -22,6 +22,8 @@ counter, the font DejaVu Sans (fonts-dejavu-core).
   android/…/drawable/ic_stat_wolkenfunk.xml notification small icon
   ios/…/AppIcon.appiconset/                 light, dark and tinted 1024 icons
   ios/…/CallKitIcon.imageset/               CallKit template glyph (white + alpha, 40 pt @1–3x)
+  ios/…/LoginIcon.imageset/                 the light app icon for the login screen (72 pt @1–3x,
+                                            square: the app rounds the corners)
   website/public/…                          via website/scripts/build-assets.py
 """
 from __future__ import annotations
@@ -262,6 +264,15 @@ def ios() -> None:
     write(kit / "Contents.json", json.dumps(
         {"images": images, "info": {"author": "xcode", "version": 1},
          "properties": {"template-rendering-intent": "template"}}, indent=2) + "\n")
+    # Login screen: the app icon itself, as an image (an appiconset cannot be loaded), 72 pt.
+    login = ROOT / "ios" / "TalkApp" / "Assets.xcassets" / "LoginIcon.imageset"
+    images = []
+    for scale in (1, 2, 3):
+        name = f"LoginIcon@{scale}x.png" if scale > 1 else "LoginIcon.png"
+        save_png(render(square_tile(), 72 * scale).convert("RGB"), login / name)
+        images.append({"idiom": "universal", "filename": name, "scale": f"{scale}x"})
+    write(login / "Contents.json", json.dumps(
+        {"images": images, "info": {"author": "xcode", "version": 1}}, indent=2) + "\n")
 
 
 def website() -> None:

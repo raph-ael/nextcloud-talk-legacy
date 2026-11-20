@@ -21,9 +21,13 @@ struct LoginView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer()
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.tint)
+            // The app icon itself (LoginIcon, built by design/icon/build-icons.py), with the
+            // corner radius of an iOS app icon; the same in light and dark.
+            Image("LoginIcon")
+                .resizable()
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .accessibilityHidden(true)
             Text(adding ? "Konto hinzufügen" : "Willkommen")
                 .font(.largeTitle.bold())
                 .accessibilityAddTraits(.isHeader)

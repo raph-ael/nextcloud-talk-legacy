@@ -209,6 +209,8 @@ final class AccountsTests: XCTestCase {
         app.launch()
         let field = app.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 20), "not signed out at the start")
+        XCTAssertTrue(app.staticTexts["Willkommen"].exists)
+        shot("willkommen")
         field.tap()
         field.typeText(server1)
         app.buttons["Anmelden"].tap()
@@ -226,6 +228,8 @@ final class AccountsTests: XCTestCase {
         app.buttons["Anmelden"].tap()
         // The new account is active; the settings stayed underneath.
         XCTAssertTrue(app.staticTexts["Jonas Richter"].waitForExistence(timeout: 30), "second login failed")
+        // The settings show through while the login cover is still closing; a tap then is lost.
+        XCTAssertTrue(app.buttons["login-cancel"].waitForNonExistence(timeout: 10), "login screen still open")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.buttons["room:Kleingartenverein"].waitForExistence(timeout: 10))
         XCTAssertTrue(avatar.label.hasPrefix("Konten"))
