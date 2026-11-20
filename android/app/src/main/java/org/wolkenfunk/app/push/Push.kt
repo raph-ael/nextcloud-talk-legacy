@@ -22,10 +22,22 @@ object Push {
     fun enabled(context: Context): Boolean =
         proxyUrl.isNotBlank() && runCatching { FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
 
+    /**
+     * The last token request failed: FCM does not reach this device (no Google Play services,
+     * or no token yet and no way to Google).
+     */
+    @Volatile var tokenFailed = false
+        private set
+
+    /** Push is on in this build and FCM reaches this device. */
+    fun delivers(context: Context): Boolean = enabled(context) && !tokenFailed
+
     /** The current FCM registration token. */
     suspend fun token(): String = suspendCancellableCoroutine { cont ->
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            val token = task.result.takeIf { task.isSuccessful }
+            // `result` throws for a failed task, and here nothing would catch it.
+            val token = if (task.isSuccessful) task.result else null
+            tokenFailed = token == null
             if (token != null) cont.resume(token)
             else cont.resumeWithException(task.exception ?: IllegalStateException("no FCM token"))
         }

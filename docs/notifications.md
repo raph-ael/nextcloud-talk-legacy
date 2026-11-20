@@ -8,9 +8,16 @@ Nachrichten, Erwähnungen, Anrufe und verpasste Anrufe kommen auf allen Plattfor
 |---|---|---|
 | **Push** (Server → Push-Proxy → FCM bzw. APNs) | Android, iOS | immer, auch bei beendeter App |
 | **`messageNotices`** aus dem Kern (Abgleich der Chatliste) | Desktop | immer, solange die App läuft |
-| | Android | nur ohne Push (kein Google-Dienst, keine Proxy-Adresse im Build) und nach `onDeletedMessages` |
+| | Android | nur ohne Push (siehe unten) und nach `onDeletedMessages` |
 
 iOS nutzt `messageNotices` nicht. Dort liefert APNs auch bei geöffneter App.
+
+**Android ohne Push** heißt eines von beiden:
+
+- Der Build hat keinen Push: Die Firebase-Konfiguration oder die Proxy-Adresse fehlt.
+- FCM erreicht das Gerät nicht: Der letzte Abruf des FCM-Tokens ist gescheitert. Das ist so auf Geräten ohne Google-Play-Dienste, und solange noch kein Token da ist und Google nicht erreichbar ist.
+
+Dann meldet die App neue Nachrichten über `messageNotices`, also nur, solange sie läuft: vorn sofort, im Hintergrund nur in den ersten Sekunden. Danach hält Android die App an, und die Meldung kommt erst beim nächsten Öffnen. Der Token-Abruf wird mit jedem neuen Netz wiederholt. Gelingt er, gilt wieder Push. Ein gescheiterter Abruf ist kein Fehler für den Benutzer: Die App läuft weiter und zeigt keine Fehlermeldung. Nur die Einstellungen sagen es (unten, „Push testen“).
 
 **Ohne laufende App gibt es am Desktop nichts.** Dafür gibt es „Beim Anmelden starten“.
 
@@ -176,6 +183,7 @@ Beide gehen an das Konto der Benachrichtigung, ohne es aktiv zu machen.
   - Erfolg: „Test angefordert. Die Benachrichtigung sollte in wenigen Sekunden erscheinen.“
   - Fehler: „Der Server hat den Test nicht angenommen.“
   - Build ohne Push: Die Zeile heißt „Diese App-Version hat keinen Push“ und tut nichts.
+  - Android, wenn FCM das Gerät nicht erreicht (siehe „Zwei Wege“): Die Zeile heißt „Dieses Gerät bekommt keinen Push“ und tut nichts. „Push testen“ erscheint dort nur, wenn ein FCM-Token zu bekommen war.
 
 ## iOS: Zähler am App-Symbol bei beendeter App
 

@@ -784,12 +784,12 @@ class SessionManager(private val context: Context) {
 
     /**
      * `messageNotices` of the core. With push the server announces, so they count only
-     * without push in this build and after FCM lost pushes; what came in before the start
-     * is never shown (the app is in front then anyway).
+     * without push (not in this build, or FCM does not reach this device) and after FCM lost
+     * pushes; what came in before the start is never shown (the app is in front then anyway).
      */
     private fun onNotices(rt: Runtime, event: CoreEvent.MessageNotices) {
         if (event.sinceStart) return
-        if (Push.enabled(context) && !rt.catchUp) return
+        if (Push.delivers(context) && !rt.catchUp) return
         scope.launch {
             for (item in event.items) {
                 if (rt.id !in runtimes || chatInFront(rt, item.token)) continue
@@ -865,7 +865,10 @@ class SessionManager(private val context: Context) {
     }
 
     /** This build has push (Firebase config and proxy address). */
-    fun pushAvailable(): Boolean = Push.enabled(context)
+    fun pushInBuild(): Boolean = Push.enabled(context)
+
+    /** This build has push and FCM reaches this device. */
+    fun pushAvailable(): Boolean = Push.delivers(context)
 
     /** „Push testen“ in the active account; `false`: the server did not take it. */
     suspend fun testPush(): Boolean {

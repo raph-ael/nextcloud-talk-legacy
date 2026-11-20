@@ -411,8 +411,12 @@ private fun NotificationsPage(sessions: SessionManager, onBack: () -> Unit) {
                 }
             })
         } else {
-            // A build without Firebase config or proxy address: the row only says so.
-            SettingRow(TalkIcons.Send, "Diese App-Version hat keinen Push")
+            // No Firebase config or proxy address in this build, or FCM does not reach this
+            // device (no Google Play services, no way to Google): the row only says so.
+            SettingRow(
+                TalkIcons.Send,
+                if (sessions.pushInBuild()) "Dieses Gerät bekommt keinen Push" else "Diese App-Version hat keinen Push",
+            )
         }
     }
 }
