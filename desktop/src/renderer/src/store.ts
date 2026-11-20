@@ -401,6 +401,18 @@ export function handleEvent(e: TalkEvent): void {
       }
       refreshHits()
       break
+    case 'messagesRemoved':
+      if (state.chats[e.token]) {
+        const gone = (m: MessageView): boolean => e.ids.includes(m.id)
+        setChat(e.token, (c) => ({
+          ...c,
+          messages: c.messages.filter((m) => !gone(m)),
+          held: c.held.filter((m) => !gone(m)),
+          mentions: c.mentions.filter((id) => !e.ids.includes(id)),
+        }))
+      }
+      refreshHits()
+      break
     case 'readStatus':
       if (state.chats[e.token])
         setChat(e.token, (c) => ({ ...c, lastCommonRead: Math.max(c.lastCommonRead, e.lastCommonRead) }))

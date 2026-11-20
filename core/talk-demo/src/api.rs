@@ -758,6 +758,8 @@ pub async fn demo_incoming(AxState(app): S, p: Params) -> Response {
             m
         }
     };
+    let mut m = m;
+    m.silent = p.str("silent").is_some_and(|v| v != "0" && !v.is_empty());
     let Some(id) = st.push_msg(&token, m) else { return not_found() };
     let r = st.room(&token).unwrap();
     ocs_status(StatusCode::CREATED, st.msg_json(r, r.msg(id).unwrap(), true))

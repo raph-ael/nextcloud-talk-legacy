@@ -244,7 +244,7 @@ Bei einer Datei endet nur die Freigabe für den Chat. Die Datei selbst bleibt be
   - Eine geänderte Antwort behält ihr Zitat und die eigene Reaktion. Der Server schickt beides nicht mit.
   - Antworten auf eine geänderte oder gelöschte Nachricht kommen im selben `MessagesUpdated` mit dem neuen Zitat.
   - Ist es die letzte Nachricht des Chats, kommt `RoomsChanged` mit der neuen Vorschau.
-- Die Anzeige bleibt wie bisher: „bearbeitet ·“ in der Meta-Zeile, „Diese Nachricht wurde gelöscht.“ in der Blase, „Nachricht gelöscht“ im Zitat und in der Chatliste.
+- Die Anzeige bleibt wie bisher: „bearbeitet ·“ in der Meta-Zeile, „Diese Nachricht wurde gelöscht.“ in der Blase, „Nachricht gelöscht“ im Zitat und in der Chatliste. Die Ausnahme steht unter „Stille Nachrichten“.
 - Eine gelöschte Antwort kommt ohne `replyTo`: Sie zeigt kein Zitat mehr.
 
 **Menü der Nachricht**
@@ -296,3 +296,36 @@ Im Testraum mit Bot A und Bot B, unter `bot-lock.sh`. Gegenstelle ist `talk-cli`
 10. Sprachnachricht: nur „Löschen“. Datei: „Bearbeiten“ ändert die Bildunterschrift.
 11. Ohne Netz bearbeiten: Hinweis „Keine Verbindung – Nachricht nicht geändert“, der Text bleibt im Feld.
 12. Desktop: Pfeil nach oben, Esc, Enter.
+
+## Stille Nachrichten
+
+Talk kennt Nachrichten, die ohne Benachrichtigung gesendet werden (`silent`). KI-Agenten nutzen das für ihren Arbeitsstand: Sie senden eine stille Nachricht wie „Arbeitet …“, schreiben sie im Sekundentakt fort und löschen sie, sobald die Antwort als eigene Nachricht da ist. Im Chat soll das wie ein Status aussehen und keine Spur hinterlassen.
+
+Die Regeln gelten für jede stille Nachricht eines anderen, auch von Menschen. Der Kern erkennt keine Agenten. Eigene stille Nachrichten sehen aus wie alle eigenen.
+
+| Punkt | Regel |
+|---|---|
+| Aussehen | Der Text ist kleiner (13 statt 14 bzw. 15) und in `muted`. Die Blase und in der kompakten Ansicht die Zeile bleiben wie bei jeder Nachricht. |
+| Ein Emoji allein | bleibt klein, ohne die große Darstellung. |
+| „bearbeitet“ | entfällt. Das Fortschreiben ist der Zweck der Nachricht. |
+| Fortschreiben | Die Nachricht ändert sich an Ort und Stelle. Steht die Liste am Ende, bleibt sie dort, auch wenn die Nachricht wächst. |
+| Gelöscht | Die Nachricht verschwindet ganz, ohne „Diese Nachricht wurde gelöscht.“ Das gilt live und beim nächsten Öffnen. |
+| Zitat | Eine Antwort auf eine so gelöschte Nachricht zeigt wie bisher „Nachricht gelöscht“. |
+| Chatliste | unverändert: Die Vorschau zeigt die stille Nachricht, solange sie die letzte ist. |
+| Benachrichtigung | keine, wie bisher (docs/notifications.md). |
+
+**Kern-Vertrag**
+- `MessageView.quiet`: Jemand anderes hat die Nachricht still gesendet. Die Plattform zeichnet sie gedämpft und nie groß. `edited` ist bei `quiet` immer `false`.
+- `MessagesRemoved { token, ids }`: Diese Nachrichten gehören nicht mehr in den Chat. Die Plattform nimmt sie aus der Liste, aus zurückgehaltenen Nachrichten eines Fensters und aus den offenen Erwähnungen. Für sie kommt kein `MessagesUpdated` mit `kind == "deleted"`.
+- Seiten (`openChat`, `cachedChat`, ältere Seiten) enthalten solche Nachrichten nicht.
+- Andere gelöschte Nachrichten kommen wie bisher als `MessagesUpdated` (oben „Bearbeiten und Löschen“).
+
+### Test
+Gegen `talk-demo`: `curl -d token=lena -d text=Arbeitet -d silent=1 http://127.0.0.1:8099/demo/incoming`, danach `/demo/edit` und `/demo/delete` mit der `id` aus der Antwort.
+
+1. Die stille Nachricht erscheint gedämpft und klein, ohne Benachrichtigung.
+2. Bearbeiten: Der Text wechselt ohne Flackern, ohne „bearbeitet“, die Liste bleibt am Ende.
+3. Eine normale Nachricht danach sieht normal aus.
+4. Löschen: Die stille Nachricht ist weg, es bleibt keine Blase. Nach Schließen und Öffnen des Chats ebenso.
+5. Eine normale Nachricht löschen: „Diese Nachricht wurde gelöscht.“ bleibt wie bisher.
+6. Eine Nachricht, die per Bearbeiten wächst (nicht still): Die Liste bleibt am Ende, „bearbeitet“ steht da.

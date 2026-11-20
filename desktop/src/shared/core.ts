@@ -159,7 +159,13 @@ export interface MessageView {
   systemMessage: string
   referenceId: string
   isOwn: boolean
+  /** The text was changed. Never for a `quiet` message. */
   edited: boolean
+  /**
+   * Somebody else sent it silently: a status rather than an answer, shown subdued
+   * (docs/chat.md „Stille Nachrichten“).
+   */
+  quiet: boolean
   /** Render `text` as Markdown (Talk's default for chat messages). */
   markdown: boolean
   replyTo: ReplyPreview | null
@@ -376,6 +382,8 @@ export type CoreEvent =
   | { type: 'roomsChanged'; rooms: RoomView[] }
   | { type: 'messagesAdded'; token: string; messages: MessageView[] }
   | { type: 'messagesUpdated'; token: string; messages: MessageView[] }
+  /** These messages are not shown any more (docs/chat.md „Stille Nachrichten“). */
+  | { type: 'messagesRemoved'; token: string; ids: number[] }
   | { type: 'readStatus'; token: string; lastCommonRead: number }
   /** docs/connection.md; a session starts as 'connecting'. */
   | { type: 'connection'; state: ConnectionState }

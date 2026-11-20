@@ -117,7 +117,8 @@ struct Bubble: View {
         let place = msg.kind == .deleted ? nil : msg.location
         // Photos and places: the picture fills the bubble up to a thin edge.
         let media = image || place != nil
-        let jumbo = msg.kind == .text && attachment == nil && place == nil && msg.replyTo == nil
+        // A status stays small, also when it is one emoji.
+        let jumbo = msg.kind == .text && !msg.quiet && attachment == nil && place == nil && msg.replyTo == nil
             && Format.isJumboEmoji(msg.text)
         let big: CGFloat = 18, small: CGFloat = 4
         let shape = own
@@ -125,7 +126,8 @@ struct Bubble: View {
                                      bottomTrailingRadius: last ? big : small, topTrailingRadius: first ? big : small)
             : UnevenRoundedRectangle(topLeadingRadius: first ? big : small, bottomLeadingRadius: last ? big : small,
                                      bottomTrailingRadius: big, topTrailingRadius: big)
-        let textColor = own && !jumbo ? Talk.bubbleOwnText : Talk.bubbleOtherText
+        // Sent silently by somebody else: a status, subdued (docs/chat.md "Stille Nachrichten").
+        let textColor = msg.quiet ? Talk.muted : own && !jumbo ? Talk.bubbleOwnText : Talk.bubbleOtherText
         let inset: CGFloat = media ? 9 : 0
         let metaOnImage = image && msg.text.isEmpty
         let showMeta = last || m.status != nil
@@ -230,8 +232,8 @@ struct Bubble: View {
                             Markdown.render(msg.text, markdown: msg.markdown), msg.mentions, own: own, textColor: textColor
                         )
                         Text(SearchText.mark(rendered, marks))
-                            .font(.system(size: 15))
-                            .lineSpacing(3)
+                            .font(.system(size: msg.quiet ? 13 : 15))
+                            .lineSpacing(msg.quiet ? 2 : 3)
                             .foregroundStyle(textColor)
                             .tint(textColor)
                             .padding(.horizontal, inset)

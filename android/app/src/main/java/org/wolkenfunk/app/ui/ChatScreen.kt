@@ -1060,7 +1060,8 @@ private fun MessageRow(
         val image = attachment?.isImage() == true
         // A place (docs/attachments.md „Blase“): the map like a photo, its name below. `text` is the name.
         val location = msg.location.takeIf { msg.kind != MessageKind.DELETED }
-        val jumbo = msg.kind == MessageKind.TEXT && attachment == null && location == null && msg.replyTo == null && isJumboEmoji(msg.text)
+        // A status stays small, also when it is one emoji.
+        val jumbo = msg.kind == MessageKind.TEXT && !msg.quiet && attachment == null && location == null && msg.replyTo == null && isJumboEmoji(msg.text)
         val audio = attachment != null && !image && (attachment.voiceMessage || attachment.mimetype.startsWith("audio/"))
         // Signal: an audio bubble carries its time in the player's footer row.
         val metaInVoice = audio && msg.text.isEmpty()
@@ -1180,7 +1181,12 @@ private fun MessageRow(
                                     bottom = if (media) 3.dp else 7.dp,
                                 ),
                         ) {
-                            val textColor = if (own && !jumbo) colors.bubbleOwnText else colors.bubbleOtherText
+                            // Sent silently by somebody else: a status, subdued (docs/chat.md „Stille Nachrichten“).
+                            val textColor = when {
+                                msg.quiet -> colors.muted
+                                own && !jumbo -> colors.bubbleOwnText
+                                else -> colors.bubbleOtherText
+                            }
                             if (isGroup && !own && first) {
                                 Text(
                                     msg.author,
@@ -1342,7 +1348,7 @@ private fun MessageRow(
                                     Text(
                                         shown,
                                         color = textColor,
-                                        style = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                                        style = if (msg.quiet) TextStyle(fontSize = 13.sp, lineHeight = 18.sp) else TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
                                         onTextLayout = { layout[0] = it },
                                         modifier = inset
                                             .padding(top = if (image) 6.dp else 0.dp)

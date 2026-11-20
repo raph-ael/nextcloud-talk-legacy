@@ -921,6 +921,15 @@ final class SessionStore {
                 c.mentions.removeAll { deleted.contains($0) }
                 c.seenMentions.formUnion(deleted)
             }
+        case .messagesRemoved(let token, let ids):
+            guard active else { return }
+            let gone = Set(ids)
+            updateChat(token) { c in
+                c.messages.removeAll { $0.status == nil && gone.contains($0.msg.id) }
+                c.held.removeAll { gone.contains($0.id) }
+                c.mentions.removeAll { gone.contains($0) }
+                c.seenMentions.formUnion(gone)
+            }
         case .readStatus(let token, let lastCommonRead):
             guard active else { return }
             updateChat(token) { $0.lastCommonRead = max($0.lastCommonRead, lastCommonRead) }

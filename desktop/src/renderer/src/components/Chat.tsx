@@ -864,7 +864,8 @@ const MessageRow = memo(function MessageRow({
   const image = isImageAttachment(attachment) ? attachment : null
   // A location is drawn as a tile, its text is the name once more.
   const location = deleted ? null : msg.location
-  const jumbo = msg.kind === 'text' && !msg.replyTo && !attachment && !location && isJumboEmoji(msg.text)
+  // A status stays small, also when it is one emoji.
+  const jumbo = msg.kind === 'text' && !msg.quiet && !msg.replyTo && !attachment && !location && isJumboEmoji(msg.text)
   const reactions = Object.entries(msg.reactions)
   const showAuthor = isGroup && !own && first && !compact
   const hasText = !deleted && !location && msg.text.trim() !== ''
@@ -881,6 +882,7 @@ const MessageRow = memo(function MessageRow({
     'bubble',
     jumbo && 'jumbo',
     deleted && 'deleted',
+    msg.quiet && 'quiet',
     image && 'media',
     image && !showAuthor && !msg.replyTo && 'media-top',
     metaOnImage && 'media-bottom',

@@ -65,6 +65,8 @@ pub struct Msg {
     pub edited: Option<(String, i64)>,
     /// Who deleted it. The message stays, as "comment_deleted".
     pub deleted_by: Option<String>,
+    /// Sent without notifying anybody. Stays through edits and the deletion.
+    pub silent: bool,
 }
 
 impl Msg {
@@ -632,6 +634,7 @@ impl State {
                 parent_snapshot: None,
                 edited: None,
                 deleted_by: None,
+                silent: false,
             };
             if let Some(sys) = &m.system {
                 msg.kind = "system".into();
@@ -856,7 +859,7 @@ impl State {
             "reactions": if counts.is_empty() { json!([]) } else { Value::Object(counts) },
             "expirationTimestamp": 0,
             "markdown": m.system.is_empty(),
-            "silent": false,
+            "silent": m.silent,
             "threadId": 0,
         });
         if !own.is_empty() {
@@ -1042,6 +1045,7 @@ impl State {
             parent_snapshot: None,
             edited: None,
             deleted_by: None,
+            silent: false,
         }
     }
 

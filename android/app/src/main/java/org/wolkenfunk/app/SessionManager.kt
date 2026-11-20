@@ -1124,6 +1124,14 @@ class SessionManager(private val context: Context) {
                     mentions = c.mentions.filter { id -> byId[id]?.kind != MessageKind.DELETED },
                 )
             }
+            is CoreEvent.MessagesRemoved -> updateChat(rt.id, event.token) { c ->
+                val gone = event.ids.toSet()
+                c.copy(
+                    messages = c.messages.filter { m -> m.status != null || m.msg.id !in gone },
+                    held = c.held.filter { m -> m.id !in gone },
+                    mentions = c.mentions.filter { id -> id !in gone },
+                )
+            }
             is CoreEvent.ReadStatus -> updateChat(rt.id, event.token) {
                 it.copy(lastCommonRead = maxOf(it.lastCommonRead, event.lastCommonRead))
             }

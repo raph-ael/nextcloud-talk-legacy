@@ -680,7 +680,11 @@ pub struct MessageView {
     pub system_message: String,
     pub reference_id: String,
     pub is_own: bool,
+    /// Never for a `quiet` message.
     pub edited: bool,
+    /// Somebody else sent it silently: a status rather than an answer, shown subdued
+    /// (docs/chat.md „Stille Nachrichten“).
+    pub quiet: bool,
     pub markdown: bool,
     pub reply_to: Option<ReplyPreview>,
     pub reactions: HashMap<String, i64>,
@@ -791,6 +795,7 @@ impl From<core::MessageView> for MessageView {
             reference_id: m.reference_id,
             is_own: m.is_own,
             edited: m.edited,
+            quiet: m.quiet,
             markdown: m.markdown,
             reply_to: m.reply_to.map(|r| ReplyPreview {
                 id: r.id,
@@ -922,6 +927,9 @@ pub enum CoreEvent {
     RoomsChanged { rooms: Vec<RoomView> },
     MessagesAdded { token: String, messages: Vec<MessageView> },
     MessagesUpdated { token: String, messages: Vec<MessageView> },
+    /// These messages are not shown any more: take them out of the chat
+    /// (docs/chat.md „Stille Nachrichten“).
+    MessagesRemoved { token: String, ids: Vec<i64> },
     ReadStatus { token: String, last_common_read: i64 },
     /// docs/connection.md. A session starts as `Connecting`.
     Connection { state: ConnectionState },
@@ -959,6 +967,7 @@ impl From<core::Event> for CoreEvent {
                 token,
                 messages: views(messages),
             },
+            core::Event::MessagesRemoved { token, ids } => Self::MessagesRemoved { token, ids },
             core::Event::ReadStatus {
                 token,
                 last_common_read,

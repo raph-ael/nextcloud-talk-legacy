@@ -984,6 +984,9 @@ impl EventSink for ChangeSink {
             Event::MessagesUpdated { token, messages } if token == self.token => {
                 messages.iter().for_each(|m| eprintln!("geändert: {}", change_line(m)));
             }
+            Event::MessagesRemoved { token, ids } if token == self.token => {
+                ids.iter().for_each(|id| eprintln!("entfernt: [{id}]"));
+            }
             Event::RoomsChanged { rooms } => {
                 let Some(room) = rooms.iter().find(|r| r.token == self.token) else { return };
                 let text = room.last_message.as_ref().map(|m| format!("{}: {:?}", m.author, m.text));

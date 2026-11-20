@@ -975,6 +975,11 @@ body.resizing {
 .bubble.deleted {
   opacity: 0.7;
 }
+/* Sent silently by somebody else: a status rather than an answer (docs/chat.md „Stille Nachrichten“). */
+.bubble.quiet {
+  color: var(--text-muted);
+  font-size: 13px;
+}
 .bubble.failed {
   opacity: 0.6;
   cursor: pointer;
@@ -4112,6 +4117,9 @@ a.settings-row:focus-visible {
 }
 [data-layout='compact'] .bubble.jumbo {
   font-size: 32px;
+}
+[data-layout='compact'] .msg .bubble.quiet {
+  color: var(--text-muted);
 }
 [data-layout='compact'] .meta,
 [data-layout='compact'] .bubble.jumbo .meta {

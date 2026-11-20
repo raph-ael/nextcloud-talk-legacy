@@ -1021,6 +1021,7 @@ impl Engine {
                 reference_id: item.reference_id.clone(),
                 is_own: true,
                 edited: false,
+                quiet: false,
                 markdown: true,
                 reply_to: item.reply_to.clone(),
                 reactions: Default::default(),

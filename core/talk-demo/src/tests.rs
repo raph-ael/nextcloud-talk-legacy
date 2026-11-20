@@ -978,6 +978,67 @@ async fn editing_and_deleting_in_the_engine() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// What an agent does while it works (docs/chat.md „Stille Nachrichten“): a silent status
+/// that changes, and goes once the answer is there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_silent_status_changes_and_goes() {
+    let server = serve().await;
+    let dir = std::env::temp_dir().join(format!("talk-demo-test-{}", uuid::Uuid::new_v4().simple()));
+    let account = Account { server: server.clone(), user: "demo".into(), app_password: "demo".into() };
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account.clone(), Platform::Cli).unwrap(), sink.clone(), Some(dir.clone()));
+    engine.start().await.unwrap();
+    let post = |path: &'static str, form: Vec<(&'static str, String)>| {
+        let url = format!("{server}{path}");
+        async move { assert!(reqwest::Client::new().post(url).form(&form).send().await.unwrap().status().is_success()) }
+    };
+    let removed = |sink: &Sink| -> Vec<i64> {
+        let events = sink.0.lock().unwrap();
+        let all = events.iter().filter_map(|e| match e {
+            Event::MessagesRemoved { ids, .. } => Some(ids.clone()),
+            _ => None,
+        });
+        all.flatten().collect()
+    };
+    engine.open_chat("lena").await.unwrap();
+
+    post("/demo/incoming", vec![("token", "lena".into()), ("text", "Arbeitet …".into()), ("silent", "1".into())]).await;
+    let status = arrived(&sink, "Arbeitet …").await;
+    assert!(status.quiet && !status.edited);
+    // It changes without saying so.
+    post("/demo/edit", vec![("token", "lena".into()), ("id", status.id.to_string()), ("text", "Liest die Datei".into())]).await;
+    until("the next step", || updates(&sink, status.id).last().is_some_and(|m| m.text == "Liest die Datei")).await;
+    let step = updates(&sink, status.id).pop().unwrap();
+    assert!(step.quiet && !step.edited);
+    // The answer is a message like any other.
+    post("/demo/incoming", vec![("token", "lena".into()), ("text", "Fertig.".into())]).await;
+    assert!(!arrived(&sink, "Fertig.").await.quiet);
+    // Deleted, the status leaves the chat: no "deleted" bubble.
+    post("/demo/delete", vec![("token", "lena".into()), ("id", status.id.to_string())]).await;
+    until("the status is gone", || removed(&sink).contains(&status.id)).await;
+    assert!(updates(&sink, status.id).iter().all(|m| m.kind != "deleted"));
+
+    // A message that was not silent leaves its bubble, as before.
+    post("/demo/incoming", vec![("token", "lena".into()), ("text", "Vertippt".into())]).await;
+    let loud = arrived(&sink, "Vertippt").await;
+    post("/demo/delete", vec![("token", "lena".into()), ("id", loud.id.to_string())]).await;
+    until("their deletion", || updates(&sink, loud.id).last().is_some_and(|m| m.kind == "deleted")).await;
+    assert!(!removed(&sink).contains(&loud.id));
+
+    // The same from the cache and from the server.
+    let shown = |messages: &[MessageView]| {
+        (messages.iter().any(|m| m.id == status.id), messages.iter().find(|m| m.id == loud.id).map(|m| m.kind))
+    };
+    engine.close_chat("lena");
+    assert_eq!(shown(&engine.open_chat("lena").await.unwrap().messages), (false, Some("deleted")));
+    engine.shutdown();
+    let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+    let engine = Engine::new(TalkClient::new(account, Platform::Cli).unwrap(), sink, Some(dir.clone()));
+    assert_eq!(shown(&engine.cached_chat("lena").messages), (false, Some("deleted")));
+    engine.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Offline nothing is kept for later: the platform gets the text to show.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn editing_without_the_server() {

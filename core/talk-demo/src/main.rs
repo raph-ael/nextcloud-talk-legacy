@@ -9,6 +9,7 @@
 //!
 //!     cargo run -p talk-demo -- --listen 0.0.0.0:8098 --fixtures core/talk-demo/fixtures-b
 //!     curl -d token=mira -d text=Hallo http://127.0.0.1:8098/demo/incoming
+//!     curl -d token=mira -d text=Arbeitet -d silent=1 http://127.0.0.1:8098/demo/incoming   # sent silently
 //!     curl -d status=dnd http://127.0.0.1:8098/demo/status          # "do not disturb"
 //!     curl -d token=mira http://127.0.0.1:8098/demo/missed-call     # a missed call
 //!     curl -d token=mira -d id=12 -d emoji=👍 http://127.0.0.1:8098/demo/react   # a reaction

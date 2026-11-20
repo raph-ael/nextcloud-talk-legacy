@@ -147,6 +147,9 @@ pub enum Event {
         token: String,
         messages: Vec<MessageView>,
     },
+    /// These messages are not shown any more: take them out of the chat. Somebody else
+    /// deleted a message they had sent silently (docs/chat.md „Stille Nachrichten“).
+    MessagesRemoved { token: String, ids: Vec<i64> },
     /// Highest message id everybody has read (for read receipts).
     ReadStatus { token: String, last_common_read: i64 },
     /// The connection state changed (docs/connection.md). A session starts as `connecting`.
@@ -259,7 +262,11 @@ pub struct MessageView {
     pub system_message: String,
     pub reference_id: String,
     pub is_own: bool,
+    /// The text was changed. Never for a `quiet` message: its changes are the point.
     pub edited: bool,
+    /// Somebody else sent it silently, without notifying anybody: a status rather than
+    /// an answer, shown subdued (docs/chat.md „Stille Nachrichten“).
+    pub quiet: bool,
     pub markdown: bool,
     pub reply_to: Option<ReplyPreview>,
     pub reactions: BTreeMap<String, i64>,
@@ -1530,13 +1537,32 @@ impl Engine {
         let messages = self.update_views(token, &mut updates, &changed);
         self.index_messages(token, &[], &updates, None);
         self.cache.append(token, Vec::new(), updates.clone(), None);
-        self.sink.emit(Event::MessagesUpdated { token: token.to_string(), messages });
+        self.emit_updates(token, messages, &updates);
         let rooms = {
             let mut st = self.state.lock().unwrap();
             self.update_preview(&mut st, token, &updates).then(|| self.sorted_views(&st.rooms))
         };
         if let Some(rooms) = rooms {
             self.sink.emit(Event::RoomsChanged { rooms });
+        }
+    }
+
+    /// Tells the platform about changed messages: `views` of the new versions of
+    /// `updates`, and which of them are not shown any more.
+    fn emit_updates(&self, token: &str, mut views: Vec<MessageView>, updates: &[ChatMessage]) {
+        let gone: Vec<i64> = updates.iter().filter(|m| self.is_gone(m)).map(|m| m.id).collect();
+        views.retain(|v| !gone.contains(&v.id));
+        if !views.is_empty() {
+            self.sink.emit(Event::MessagesUpdated {
+                token: token.to_string(),
+                messages: views,
+            });
+        }
+        if !gone.is_empty() {
+            self.sink.emit(Event::MessagesRemoved {
+                token: token.to_string(),
+                ids: gone,
+            });
         }
     }
 
@@ -1550,8 +1576,14 @@ impl Engine {
         last.reverse();
         *updates = last;
         for m in updates.iter_mut() {
+            if m.parent.is_some() && m.silent {
+                continue;
+            }
+            let Some(old) = self.cache.message(token, m.id) else { continue };
+            // Sent silently stays so, whatever the new version says.
+            m.silent |= old.silent;
             if m.parent.is_none() {
-                m.parent = self.cache.message(token, m.id).and_then(|old| old.parent);
+                m.parent = old.parent;
             }
         }
         // A quoted message that changed with it.
@@ -1567,7 +1599,7 @@ impl Engine {
         for id in rewritten {
             let Some(quote) = quotes.get(id) else { continue };
             for mut reply in self.cache.replies_to(token, *id) {
-                if quotes.contains_key(&reply.id) || !is_visible(&reply) {
+                if quotes.contains_key(&reply.id) || !self.is_shown(&reply) {
                     continue;
                 }
                 reply.parent = Some(Box::new(quote.clone()));
@@ -1592,11 +1624,8 @@ impl Engine {
     fn publish_message(&self, token: &str, m: ChatMessage) {
         let view = self.view(&m);
         self.index_messages(token, &[], std::slice::from_ref(&m), None);
-        self.cache.append(token, Vec::new(), vec![m], None);
-        self.sink.emit(Event::MessagesUpdated {
-            token: token.to_string(),
-            messages: vec![view],
-        });
+        self.cache.append(token, Vec::new(), vec![m.clone()], None);
+        self.emit_updates(token, vec![view], &[m]);
     }
 
     pub async fn mark_read(&self, token: &str, message_id: i64) -> Result<()> {
@@ -1761,6 +1790,17 @@ impl Engine {
         actor_type == "users" && *self.me.read().unwrap() == actor_id
     }
 
+    /// Somebody else deleted a message they had sent silently: a status that is over.
+    /// It leaves no "deleted" bubble behind.
+    fn is_gone(&self, m: &ChatMessage) -> bool {
+        m.silent && m.is_deleted() && !self.is_own(&m.actor_type, &m.actor_id)
+    }
+
+    /// Belongs in the chat as a bubble or a line.
+    fn is_shown(&self, m: &ChatMessage) -> bool {
+        is_visible(m) && !self.is_gone(m)
+    }
+
     fn page(&self, messages: Vec<ChatMessage>, last_common_read: Option<i64>) -> ChatPage {
         let has_more = messages.len() as u32 >= PAGE_SIZE;
         let oldest_id = messages.iter().map(|m| m.id).min();
@@ -1769,7 +1809,7 @@ impl Engine {
             oldest_id,
             messages: messages
                 .iter()
-                .filter(|m| is_visible(m))
+                .filter(|m| self.is_shown(m))
                 .map(|m| self.view_in(m, unlimited))
                 .collect(),
             has_more,
@@ -1791,7 +1831,7 @@ impl Engine {
             oldest_id: messages.iter().map(|m| m.id).min(),
             messages: messages
                 .iter()
-                .filter(|m| is_visible(m) && !(m.expiration_timestamp > 0 && m.expiration_timestamp < now))
+                .filter(|m| self.is_shown(m) && !(m.expiration_timestamp > 0 && m.expiration_timestamp < now))
                 .map(|m| self.view_in(m, unlimited))
                 .collect(),
             has_more,
@@ -1817,6 +1857,7 @@ impl Engine {
     fn view_in(&self, m: &ChatMessage, edit_unlimited: bool) -> MessageView {
         let deleted = m.is_deleted();
         let is_own = self.is_own(&m.actor_type, &m.actor_id);
+        let quiet = m.silent && !is_own && !deleted && !m.is_system();
         // On the server, and neither a system message nor deleted.
         let deletable = m.id > 0 && !deleted && !m.is_system();
         let mentions = match deleted || m.is_system() {
@@ -1841,7 +1882,8 @@ impl Engine {
             system_message: m.system_message.clone(),
             reference_id: m.reference_id.clone(),
             is_own,
-            edited: m.last_edit_timestamp.is_some_and(|t| t > 0),
+            edited: !quiet && m.last_edit_timestamp.is_some_and(|t| t > 0),
+            quiet,
             markdown: m.markdown,
             // A deleted message says nothing, so it quotes nothing either.
             reply_to: m.parent.as_deref().filter(|_| !deleted).map(|p| ReplyPreview {
@@ -1967,17 +2009,12 @@ impl Engine {
         let mut added = Vec::new();
         let mut latest: Option<ChatMessage> = None;
         for m in messages {
-            if is_visible(&m) {
+            if self.is_shown(&m) {
                 added.push(self.view_in(&m, unlimited));
                 latest = Some(m);
             }
         }
-        if !updated.is_empty() {
-            self.sink.emit(Event::MessagesUpdated {
-                token: token.to_string(),
-                messages: updated,
-            });
-        }
+        self.emit_updates(token, updated, &updates);
         if !added.is_empty() {
             let refs: Vec<String> = added.iter().map(|m| m.reference_id.clone()).collect();
             self.sink.emit(Event::MessagesAdded {
