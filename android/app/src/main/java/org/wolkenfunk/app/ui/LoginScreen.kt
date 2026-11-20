@@ -1,6 +1,7 @@
 package org.wolkenfunk.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -39,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import org.wolkenfunk.app.R
 import org.wolkenfunk.app.SessionManager
 import uniffi.talk_ffi.CoreException
 
@@ -91,8 +95,17 @@ fun LoginScreen(sessions: SessionManager, adding: Boolean = false, onCancel: () 
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Box(Modifier.size(72.dp).clip(RoundedCornerShape(20.dp)).background(colors.accent))
-            Text(if (adding) "Konto hinzufügen" else "Willkommen", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            // The launcher icon: its two layers are 108 dp, the launcher shows the middle 72.
+            Box(Modifier.size(72.dp).clip(RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+                Image(painterResource(R.drawable.ic_launcher_background), null, Modifier.requiredSize(108.dp))
+                Image(painterResource(R.drawable.ic_launcher_foreground), null, Modifier.requiredSize(108.dp))
+            }
+            Text(
+                if (adding) "Konto hinzufügen" else "Willkommen",
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+            )
             if (waiting) {
                 Text(
                     "Bestätige die Anmeldung im Browser und kehre dann hierher zurück.",
