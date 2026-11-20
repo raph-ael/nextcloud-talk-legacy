@@ -96,6 +96,22 @@ export function createNcClient({ baseUrl, user, password, fetchImpl = fetch }) {
       };
     },
 
+    /**
+     * Eigener Status mit Emoji und Text (App user_status), ohne Ablauf. Daran erkennen Clients
+     * das Konto als KI-Agenten (docs/agents.md). Gibt false zurück, wenn der Server das nicht kann.
+     */
+    async setUserStatus({ icon, message }) {
+      const res = await ocs("PUT", "/ocs/v2.php/apps/user_status/api/v1/user_status/message/custom", {
+        body: { statusIcon: icon, message, clearAt: null },
+      });
+      return res.status === 200;
+    },
+
+    async clearUserStatus() {
+      const res = await ocs("DELETE", "/ocs/v2.php/apps/user_status/api/v1/user_status/message");
+      return res.status === 200;
+    },
+
     /** Räume des Kontos; mit modifiedSince nur geänderte. */
     async listRooms({ modifiedSince, signal } = {}) {
       const res = await ocs("GET", `${TALK}/v4/room`, { query: { modifiedSince, includeStatus: "false" }, signal });

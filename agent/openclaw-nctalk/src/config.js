@@ -82,6 +82,14 @@ export function resolveNctalkAccount(cfg, accountId) {
     // Stille Quittung im Modus "progress": sofort beim Annehmen, wird zum Live-Status und am Ende gelöscht.
     ackText: sec.streaming?.ack === false ? "" : typeof sec.streaming?.ack === "string" && sec.streaming.ack.trim() ? sec.streaming.ack.trim() : "👀",
     typing: sec.typing !== false,
+    // Status des Kontos: Am Emoji erkennen Clients den Agenten. `userStatus: false` lässt den Status in Ruhe.
+    userStatus:
+      sec.userStatus === false
+        ? null
+        : {
+            icon: typeof sec.userStatus?.icon === "string" && sec.userStatus.icon.trim() ? sec.userStatus.icon.trim() : "🤖",
+            message: typeof sec.userStatus?.message === "string" ? sec.userStatus.message.trim() : "KI-Agent",
+          },
     statusCleanup: sec.statusCleanup === "keep" ? "keep" : "delete",
     textChunkLimit: Number.isInteger(sec.textChunkLimit) ? sec.textChunkLimit : 8000,
     mediaMaxBytes: Math.round((typeof sec.mediaMaxMb === "number" ? sec.mediaMaxMb : 25) * 1024 * 1024),

@@ -50,6 +50,13 @@
             }
           },
           "typing": { "type": "boolean" },
+          "userStatus": {
+            "description": "Status des Agenten-Kontos (Emoji und Text); false lässt ihn unverändert",
+            "anyOf": [
+              { "type": "boolean" },
+              { "type": "object", "additionalProperties": false, "properties": { "icon": { "type": "string" }, "message": { "type": "string" } } }
+            ]
+          },
           "statusCleanup": { "type": "string", "enum": ["delete", "keep"], "description": "Was nach der Antwort mit der Statusnachricht passiert" },
           "markdown": { "type": "object", "additionalProperties": true },
           "textChunkLimit": { "type": "integer", "minimum": 500, "maximum": 32000 },

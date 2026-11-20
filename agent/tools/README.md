@@ -34,6 +34,7 @@ Sie antwortet auf jede Nachricht der Gegenseite. Stichworte in der Nachricht ste
 | `abbruch` | die Statusnachricht bleibt stehen, es kommt nichts mehr (Gateway mitten im Lauf beendet) |
 
 Die Attrappe benutzt `nc-client.js` und `signaling.js` des Plugins, sendet also dieselben Aufrufe.
+Wie das Plugin setzt sie dem Konto den Status 🤖 und nimmt ihn am Ende wieder weg (`SIM_STATUS=0` lässt ihn in Ruhe).
 
 ## Testfahrer
 

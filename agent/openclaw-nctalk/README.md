@@ -57,6 +57,7 @@ Von Hand sieht die Konfiguration so aus (`~/.openclaw/openclaw.json`):
 | `streaming.ack` | `"👀"` | stille Quittung im Modus `progress`: sofort beim Annehmen, wird zum Live-Status und am Ende gelöscht; `false` schaltet sie ab |
 | `streaming.editIntervalMs` | `1500` (`partial`: `2500`) | Mindestabstand zwischen zwei Bearbeitungen; bearbeitet wird nur bei geändertem Text |
 | `typing` | `true` | Tipp-Anzeige senden |
+| `userStatus` | `{ icon: "🤖", message: "KI-Agent" }` | Status, den sich das Konto beim Start setzt. Am Emoji 🤖 erkennen Clients den Agenten (Wolkenfunk: Abschnitt „KI-Agenten“); `false` lässt den Status unverändert |
 | `textChunkLimit` | `8000` | längere Antworten werden geteilt (Talk erlaubt 32000 Zeichen) |
 | `mediaMaxMb` | `25` | Obergrenze für Dateien |
 | `maxWatchedRooms` | `12` | so viele Räume bekommen eine eigene Signaling-Sitzung |

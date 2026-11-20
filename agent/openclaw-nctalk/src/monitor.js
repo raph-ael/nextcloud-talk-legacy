@@ -35,6 +35,10 @@ export async function monitorNctalkProvider({ account, cfg, runtime, abortSignal
   const client = entry.client;
   const self = await client.whoami();
   const caps = await getCapabilities(entry);
+  if (account.userStatus) {
+    const set = await client.setUserStatus(account.userStatus).catch(() => false);
+    if (!set) runtime.log?.("nctalk: Der Status des Kontos ließ sich nicht setzen (App „user_status“ aus?); Clients erkennen den Agenten dann nicht.");
+  }
   if (!caps.features.has("edit-messages") && account.streamingMode !== "off") {
     runtime.log?.("nctalk: Diese Talk-Version kann Nachrichten nicht bearbeiten; Live-Status ist damit wirkungslos (streaming.mode: off empfohlen).");
   }

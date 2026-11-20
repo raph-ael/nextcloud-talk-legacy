@@ -77,9 +77,14 @@ async function sync() {
   }).catch((err) => log('Fehler beim Lesen:', err.message));
   return busy;
 }
+// Wie das Plugin: Am Status-Emoji 🤖 erkennen Clients den Agenten. Am Ende wieder weg, damit das
+// Testkonto für andere Tests ein gewöhnliches Konto bleibt. SIM_STATUS=0 lässt den Status in Ruhe.
+const wearsStatus = process.env.SIM_STATUS !== '0' && (await client.setUserStatus({ icon: '🤖', message: 'KI-Agent' }).catch(() => false));
+log(wearsStatus ? 'Status 🤖 gesetzt' : 'Status nicht gesetzt');
 await sig.start();
 log(`Agenten-Attrappe läuft als ${self.id} in ${token} für ${seconds} s`);
 const poll = setInterval(() => void sync(), 5000);
 await sleep(seconds * 1000);
 clearInterval(poll); typing(false); await busy; await sig.stop();
+if (wearsStatus) await client.clearUserStatus().catch(() => {});
 log('beendet'); process.exit(0);

@@ -61,8 +61,11 @@ Nachricht eines anderen Teilnehmers und brauchen keine Liste von Agenten-Konten:
 3. **Bearbeitungen im Abstand von 1,5–2,5 s**: dieselbe Blase an Ort und Stelle aktualisieren, kein Neuaufbau,
    kein Scroll-Sprung; eine wachsende Nachricht am unteren Rand scrollt mit.
 4. Normale Nachrichten, auch die mitwachsende Antwort in `partial`, bleiben unverändert und tragen „bearbeitet“.
+5. **Agenten erkennen:** Das Konto des Agenten trägt als Status das Emoji 🤖 (unten „Status des Kontos“). Ein Client
+   kann Einzelchats mit solchen Konten zusammenfassen, ohne eine Liste von Agenten zu kennen.
 
-In Wolkenfunk sind 1 bis 3 umgesetzt (`docs/chat.md` „Stille Nachrichten“). Der Talk-Webclient zeigt gelöschte Statusnachrichten als
+In Wolkenfunk sind 1 bis 3 umgesetzt (`docs/chat.md` „Stille Nachrichten“), ebenso 5 als Abschnitt „KI-Agenten“
+in der Chatliste (`docs/categories.md` „KI-Agenten“). Der Talk-Webclient zeigt gelöschte Statusnachrichten als
 „Nachricht vom Autor gelöscht“.
 
 **Tipp-Anzeige:** Der Agent sendet sie, Wolkenfunk stellt sie bisher nicht dar (siehe „Offene Punkte“).
@@ -92,6 +95,17 @@ In Wolkenfunk sind 1 bis 3 umgesetzt (`docs/chat.md` „Stille Nachrichten“). 
 an jede andere Sitzung im Raum, alle 8 s erneut, am Ende `stoppedTyping`. Wer den Raum später betritt, bekommt
 `startedTyping` sofort beim `join`-Ereignis. Beim Empfänger steht der Absender in `message.sender` (`sessionid`, `userid`).
 Der Talk-Webclient lässt die Anzeige ohne Auffrischung nach etwa 15 s verfallen.
+
+### Status des Kontos
+
+Talk hat kein Kennzeichen für Agenten, und die Gruppen eines fremden Kontos kann ein normales Konto nicht lesen.
+Der Agent weist sich deshalb selbst aus: Beim Start setzt das Plugin den Status des Kontos auf das Emoji 🤖 mit
+dem Text „KI-Agent“, ohne Ablauf (`PUT /ocs/v2.php/apps/user_status/api/v1/user_status/message/custom`,
+Einstellung `userStatus`). Die Raumliste liefert ihn mit `includeStatus=true` je Einzelchat als `statusIcon` mit,
+ohne weitere Abfragen. Der Status bleibt stehen, wenn das Gateway stoppt.
+
+Das ist eine Sortierhilfe, kein Schutz: Jedes Konto kann sich diesen Status selbst setzen. Eine Statusänderung
+ändert den Raum nicht; Clients erfahren sie mit dem nächsten vollständigen Abruf der Raumliste.
 
 ### Statusnachricht
 
