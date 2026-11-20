@@ -81,6 +81,12 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.9" date="2026-11-20" type="development">
+      <description>
+        <p>Beim Anmelden und unter „Konto hinzufügen“ steht jetzt das Wolkenfunk-Symbol statt einer Sprechblase. Unter Android ist die Überschrift dort auch im dunklen Design lesbar.</p>
+        <p>Die Steuerleiste des Anrufs passt am Desktop auch in schmale Fenster.</p>
+      </description>
+    </release>
     <release version="0.6.8" date="2026-11-20" type="development">
       <description>
         <p>Während eines Anrufs in andere Chats. In der Steuerleiste des Anrufs steht jetzt der Knopf „Chats“. Er verkleinert den Anruf, du liest und schreibst in anderen Chats, und über die Leiste „Zurück zum Anruf“ kommst du zurück. Der Anruf läuft dabei weiter.</p>
