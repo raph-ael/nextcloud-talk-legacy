@@ -81,6 +81,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.7" date="2026-11-20" type="development">
+      <description>
+        <p>KI-Agenten im Chat. Arbeitet in deinem Talk ein KI-Agent mit, steht sein Arbeitsstand klein und grau im Chat und schreibt sich fort, ohne „bearbeitet“. Ist die Antwort da, verschwindet er wieder, ohne dass „Diese Nachricht wurde gelöscht.“ zurückbleibt.</p>
+        <p>Neuer Abschnitt „KI-Agenten“ in der Chatliste. Einzelchats mit Agenten stehen von selbst dort, direkt unter „Favoriten“. Die App erkennt einen Agenten am Status 🤖 seines Kontos.</p>
+        <p>Dasselbe gilt für jede Nachricht, die dir jemand ohne Benachrichtigung schickt: Sie erscheint kleiner und grau.</p>
+      </description>
+    </release>
     <release version="0.6.6" date="2026-11-19" type="development">
       <description>
         <p>Sortierung der Chatliste. Unter Einstellungen, „Darstellung“, wählst du „Letzte Aktivität“ oder „Name (A–Z)“. Die Wahl gilt in jedem Abschnitt und für dein Konto, also auch auf deinen anderen Geräten und in Talk im Browser.</p>
