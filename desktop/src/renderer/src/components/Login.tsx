@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { cancelAddAccount } from '../store'
 import { toast } from '../call/store'
+import appIcon from '../../../../resources/icons/128x128.png'
 
 /** The first sign-in, and „Konto hinzufügen“ (`adding`) while the other accounts go on. */
 export function Login({ adding = false }: { adding?: boolean }) {
@@ -47,15 +48,7 @@ export function Login({ adding = false }: { adding?: boolean }) {
   return (
     <div className="login">
       <form className="login-card" onSubmit={submit}>
-        <div className="login-logo" aria-hidden>
-          <svg viewBox="0 0 64 64" width="64" height="64">
-            <rect width="64" height="64" rx="16" fill="var(--accent)" />
-            <path
-              d="M19 22h20a8 8 0 0 1 8 8v7a8 8 0 0 1-8 8H27l-8 6 1-6a8 8 0 0 1-7-8v-7a8 8 0 0 1 6-8z"
-              fill="#fff"
-            />
-          </svg>
-        </div>
+        <img className="login-logo" src={appIcon} width={64} height={64} alt="" aria-hidden draggable={false} />
         <h1>{adding ? 'Konto hinzufügen' : 'Willkommen'}</h1>
         {waiting ? (
           <>
