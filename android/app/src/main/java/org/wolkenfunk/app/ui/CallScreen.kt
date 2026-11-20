@@ -406,7 +406,7 @@ private fun InCall(
     var confirmStop by remember { mutableStateOf(false) }
     val tiles = call.isGroup && call.participants.isNotEmpty() && call.state != CallState.ENDED
     val bar: @Composable () -> Unit = {
-        ControlBar(call, routing, onSpeaker = onSpeaker, onPicker = { picker = true }, onCamera = { on -> if (on) openCamera() else onCamera(false) }, onMore = { more = true }, onMute = onMute, onHangUp = onHangUp)
+        ControlBar(call, routing, onChats = onMinimize, onSpeaker = onSpeaker, onPicker = { picker = true }, onCamera = { on -> if (on) openCamera() else onCamera(false) }, onMore = { more = true }, onMute = onMute, onHangUp = onHangUp)
     }
     if (presenting(call)) {
         Presentation(call, title, sessions, feeds, local, onMinimize, bar)
@@ -414,7 +414,7 @@ private fun InCall(
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.CenterStart) {
                 IconButton(onClick = onMinimize) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zu den Chats", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zu den Chats", tint = Color.White)
                 }
                 if (call.state != CallState.ENDED) RecordingIndicator(call, Modifier.align(Alignment.Center))
             }
@@ -475,11 +475,15 @@ private fun InCall(
     ConsentDialog(call, sessions, onHangUp)
 }
 
-/** Output · camera · more · mute · hang up (docs/calls.md "Oberfläche"). */
+/**
+ * Chats · output · camera · more · mute · hang up (docs/calls.md "Oberfläche"). With "more"
+ * there are six buttons: 12 dp apart instead of 20, so they fit a 360 dp screen.
+ */
 @Composable
 private fun ControlBar(
     call: CallView,
     routing: AudioRouting,
+    onChats: () -> Unit,
     onSpeaker: () -> Unit,
     onPicker: () -> Unit,
     onCamera: (Boolean) -> Unit,
@@ -489,9 +493,10 @@ private fun ControlBar(
 ) {
     Row(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+        horizontalArrangement = Arrangement.spacedBy(if (call.canRecord) 12.dp else 20.dp, Alignment.CenterHorizontally),
     ) {
         val speakerOn = routing.current == AudioRoute.SPEAKER
+        ControlButton(TalkIcons.Chat, "Zu den Chats, der Anruf läuft weiter", onClick = onChats)
         ControlButton(
             when (routing.current) {
                 AudioRoute.BLUETOOTH -> TalkIcons.Bluetooth
@@ -564,7 +569,7 @@ private fun Presentation(
     val top: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onMinimize) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zu den Chats", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zu den Chats", tint = Color.White)
             }
             Column(Modifier.weight(1f)) {
                 Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
