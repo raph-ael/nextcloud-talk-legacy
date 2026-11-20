@@ -2627,6 +2627,17 @@ button.who-row:focus-visible {
   background: #fff;
   color: #121212;
 }
+/* „Chats“: the only labelled control, a pill of the same height. */
+.call-ctl.call-chats {
+  width: auto;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+}
 .call-ctl:disabled {
   opacity: 0.5;
   cursor: default;

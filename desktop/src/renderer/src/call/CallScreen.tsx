@@ -203,7 +203,7 @@ function CallScreen({ call }: { call: CallView }) {
         style={{ backgroundImage: `url("${window.talk.avatarUrl(call.token, room?.avatarVersion ?? '', account)}")` }}
       />
       <header className="call-top">
-        <button className="call-icon-btn" onClick={() => minimize(true)} title="Zu den Chats" aria-label="Anruf verkleinern">
+        <button className="call-icon-btn" onClick={() => minimize(true)} title="Zu den Chats" aria-label="Zu den Chats">
           <MinimizeIcon />
         </button>
         {(tiles || soloVideo || presenting) && (
@@ -288,6 +288,17 @@ function CallScreen({ call }: { call: CallView }) {
       </main>
 
       <footer className="call-controls">
+        {/* The visible way to the other chats (docs/calls.md „Während des Anrufs in andere Chats“). */}
+        <button
+          className="call-ctl call-chats"
+          onClick={() => minimize(true)}
+          disabled={ended}
+          title="Zu den Chats, der Anruf läuft weiter"
+          aria-label="Zu den Chats, der Anruf läuft weiter"
+        >
+          <ChatsIcon />
+          <span>Chats</span>
+        </button>
         <DevicesButton disabled={ended} />
         <button
           // Off is the normal state (every call starts without camera): crossed out, not highlighted.
@@ -1109,6 +1120,14 @@ function ExitFullscreenIcon() {
   return (
     <Svg size={20}>
       <path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" />
+    </Svg>
+  )
+}
+
+function ChatsIcon() {
+  return (
+    <Svg>
+      <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
     </Svg>
   )
 }

@@ -237,10 +237,21 @@ MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
 - `degradationPreference: balanced`.
 
 **Oberfläche (alle Plattformen gleich):**
-- **Steuerleiste:** Ausgabe · **Kamera** · Mehr · Stumm · Auflegen.
+- **Steuerleiste:** Chats · Ausgabe · **Kamera** · Mehr · Stumm · Auflegen.
   - Der Kamera-Knopf ist durchgestrichen, solange die Kamera aus ist.
   - Bezeichnung „Kamera einschalten“ / „Kamera ausschalten“.
   - Desktop-Kürzel Strg/⌘+Shift+V.
+  - Am Handy stehen die Knöpfe 20 auseinander, mit „Mehr“ (sechs Knöpfe) 12.
+- **Während des Anrufs in andere Chats:**
+  - Der Knopf „Chats“ (Sprechblase, am Desktop mit Beschriftung) verkleinert die
+    Anrufansicht. Dasselbe tun der Pfeil oben links („Zu den Chats“) und unter Android die
+    Zurück-Taste.
+  - Danach ist die App frei bedienbar: Chatliste, jeder Chat, Einstellungen. Der Anruf läuft
+    weiter.
+  - Über der App steht die Leiste „Zurück zum Anruf“ mit der Dauer. Ein Klick oder Tippen
+    öffnet die Anrufansicht wieder.
+  - Gesperrt bleibt nur der Wechsel in ein anderes Konto (`docs/accounts.md`).
+  - Ein neuer Anruf öffnet immer in der vollen Ansicht.
 - **Jeder Anruf startet ohne Kamera**, auch beim Annehmen. Es gibt keinen eigenen
   „Videoanruf“.
 - **1:1:** Das Video der Gegenseite füllt die Bühne, ohne Video der Avatar wie bisher.
