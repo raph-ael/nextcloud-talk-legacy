@@ -4,7 +4,7 @@
   "description": "OpenClaw-Kanal für Nextcloud Talk: der Agent ist ein echtes Nextcloud-Benutzerkonto (Live-Status per Bearbeiten, Tipp-Anzeige, Dateien).",
   "type": "module",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-or-later",
   "peerDependencies": {
     "openclaw": ">=2026.11.3"
   },

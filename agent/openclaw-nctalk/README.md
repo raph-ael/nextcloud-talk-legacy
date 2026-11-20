@@ -99,3 +99,7 @@ nur bei geändertem Text und höchstens alle 1,5 s (`partial`: 2,5 s) bearbeitet
 
 Siehe `../tools/README.md`: abgeschottetes Test-Gateway (eigenes `OPENCLAW_HOME`), Modell-Attrappe,
 Testfahrer, Agenten-Attrappe für Client-Tests und die Mess-Skripte. Hintergründe stehen in `docs/agents.md`.
+
+## Lizenz
+
+AGPL-3.0-or-later, wie das übrige Repo (`LICENSE` im Repo-Root).
