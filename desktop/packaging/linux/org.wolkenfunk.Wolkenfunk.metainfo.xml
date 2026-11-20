@@ -81,6 +81,12 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.10" date="2026-11-20" type="development">
+      <description>
+        <p>Android: Die App stürzt nicht mehr ab, wenn sie bei Google kein Push-Token bekommt. Das betraf Geräte ohne Google-Dienste bei jedem Start und neue Installationen in Netzen, die Google sperren.</p>
+        <p>Auf solchen Geräten benachrichtigt die App jetzt selbst, solange sie geöffnet ist. In den Einstellungen steht dort „Dieses Gerät bekommt keinen Push“.</p>
+      </description>
+    </release>
     <release version="0.6.9" date="2026-11-20" type="development">
       <description>
         <p>Beim Anmelden und unter „Konto hinzufügen“ steht jetzt das Wolkenfunk-Symbol statt einer Sprechblase. Unter Android ist die Überschrift dort auch im dunklen Design lesbar.</p>
