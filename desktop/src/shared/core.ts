@@ -76,6 +76,8 @@ export interface RoomView {
   lastCommonReadMessage: number
   lastMessage: MessagePreview | null
   isFavorite: boolean
+  /** A 1:1 with a KI agent: listed under „KI-Agenten“ (docs/categories.md). */
+  isAgent: boolean
   isArchived: boolean
   readOnly: boolean
   /** The user may react to messages (docs/chat.md „Reaktionen“). */
@@ -226,7 +228,7 @@ export interface SectionView {
   /** For `toggleSection`; row keys are section id + token (a chat may be in several). */
   id: string
   /** `archived` only in a search: archived chats whose name matches. No category behind it. */
-  kind: 'favorites' | 'custom' | 'other' | 'groups' | 'direct' | 'archived'
+  kind: 'favorites' | 'agents' | 'custom' | 'other' | 'groups' | 'direct' | 'archived'
   /** Empty when it is the only section: then no header. */
   title: string
   collapsed: boolean

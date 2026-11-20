@@ -249,6 +249,29 @@ async fn engine_and_login_flow() {
     engine.set_sort_order("activity").await.unwrap();
     assert_eq!(engine.room_sections("", None, true)[3].rooms.len(), split[3].rooms.len());
 
+    // "KI-Agenten": who wears the status emoji 🤖 has their chat in a section of its own,
+    // below the favourites. The chat list says so with its next full fetch.
+    let person = split.last().unwrap().rooms.iter().find(|r| r.room_type == 1).unwrap().token.clone();
+    let mark = |on: &'static str| {
+        let (url, person) = (format!("{server}/demo/agent"), person.clone());
+        async move { assert!(reqwest::Client::new().post(url).form(&[("user", person.as_str()), ("on", on)]).send().await.unwrap().status().is_success()) }
+    };
+    mark("1").await;
+    engine.refresh_rooms(true).await.unwrap();
+    let with = engine.room_sections("", None, true);
+    let heads: Vec<&str> = with.iter().map(|s| s.title.as_str()).collect();
+    // It was the only chat under "Direktchats": that section is gone with it.
+    assert_eq!(split.last().unwrap().total, 1);
+    assert_eq!(heads, vec!["Favoriten", "KI-Agenten", "Familie & Freunde", "Arbeit", "Gruppen"]);
+    assert_eq!(with[1].rooms.iter().map(|r| r.token.as_str()).collect::<Vec<_>>(), [person.as_str()]);
+    assert!(with[1].rooms[0].is_agent && with[1].kind == "agents");
+    engine.toggle_section("agents").await.unwrap();
+    assert!(engine.room_sections("", None, true)[1].collapsed);
+    engine.toggle_section("agents").await.unwrap();
+    mark("0").await;
+    engine.refresh_rooms(true).await.unwrap();
+    assert_eq!(engine.room_sections("", None, true).len(), split.len());
+
     // Chat menu (docs/settings.md): the default level is resolved, actions show at once.
     let room = |token: &str| engine.rooms().into_iter().find(|r| r.token == token).unwrap();
     assert_eq!(room("lena").notification_level, 1);

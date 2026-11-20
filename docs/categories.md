@@ -27,13 +27,14 @@ Standardmäßig steht statt „Chats“ das Paar **„Gruppen“ | „Direktchat
 **Zuordnung**, wie Talk-Web:
 - Ein Favorit steht unter „Favoriten“.
 - Jede eigene Kategorie enthält die Chats mit ihrer id in `tagIds`. Ein Chat kann in mehreren Kategorien stehen, auch zusätzlich zu „Favoriten“.
-- Ein Chat, der kein Favorit ist und in keiner (vorhandenen) Kategorie steht, kommt unter „Chats“.
+- Ein Einzelchat mit einem KI-Agenten steht unter „KI-Agenten“ (unten „KI-Agenten“).
+- Ein Chat, der kein Favorit ist, kein Agent ist und in keiner (vorhandenen) Kategorie steht, kommt unter „Chats“.
 - Archivierte Chats fehlen, leere Abschnitte ebenso.
 
 **`SectionView`:**
 - `id`
-- `kind`: `favorites`, `custom`, `other`, `groups` oder `direct`
-- `title`: „Favoriten“, der Name, „Chats“, „Gruppen“ bzw. „Direktchats“
+- `kind`: `favorites`, `agents`, `custom`, `other`, `groups` oder `direct`
+- `title`: „Favoriten“, „KI-Agenten“, der Name, „Chats“, „Gruppen“ bzw. „Direktchats“
 - `collapsed`
 - `rooms`: die Zeilen, die angezeigt werden
 - `total`: alle Chats des Abschnitts
@@ -97,6 +98,31 @@ Eine Einstellung je Gerät, standardmäßig an (docs/settings.md, „Darstellung
   - Der Eingeklappt-Zustand von „Chats“ auf dem Server spielt dann keine Rolle.
 
 **Ohne `split`** sieht die Liste aus wie bisher. Die Bindungen nehmen `false` an, wenn der Wert fehlt.
+
+## KI-Agenten
+
+Ein Abschnitt, der sich selbst füllt: Er enthält die Einzelchats mit KI-Agenten. Man legt ihn nicht an und ordnet nichts zu.
+
+**Woran der Kern einen Agenten erkennt:** Talk kennt kein Kennzeichen für Agenten, und die Gruppen eines fremden Kontos sind für normale Konten nicht lesbar. Der Agent weist sich deshalb selbst aus: Sein Konto trägt als Status das Emoji 🤖 (App „Benutzerstatus“ am Server). Der Statustext spielt keine Rolle.
+- Der Kern ruft die Chatliste mit `includeStatus=true` ab. Der Server liefert dann je Einzelchat den Status der Gegenseite mit (`statusIcon`), ohne weitere Abfragen.
+- `RoomView.isAgent`: Einzelchat (`roomType` 1), dessen Gegenseite 🤖 trägt.
+- Jedes Konto kann sich diesen Status selbst setzen. Die Regel ist eine Sortierhilfe, kein Schutz: Ein Mensch mit dem Status 🤖 steht ebenfalls dort.
+
+**Regeln:**
+| Punkt | Regel |
+|---|---|
+| Abschnitt | „KI-Agenten“, `id` und `kind` `agents`. Er steht direkt unter „Favoriten“, vor den eigenen Kategorien. |
+| Ohne Agenten | fehlt der Abschnitt, wie jeder leere Abschnitt. |
+| Favorit, eigene Kategorie | Ein Agent steht zusätzlich unter „Favoriten“ bzw. in seinen Kategorien, wie jeder Chat einer Kategorie. |
+| „Chats“, „Direktchats“ | Dort steht ein Agent nicht. |
+| Gruppen | Eine Gruppe mit einem Agenten bleibt eine Gruppe. |
+| Einklappen | `toggle_section("agents")`, nur auf diesem Gerät und Konto (`collapsed_local`). Der Kopf zählt wie bei jedem Abschnitt. |
+| Sortierung, Suche | wie in jedem Abschnitt. |
+| Seite „Kategorien“ | Der Abschnitt steht dort nicht: Er lässt sich nicht umbenennen, löschen, verschieben oder füllen. |
+
+**Wann es sich ändert:** Setzt oder löscht ein Konto den Status, ändert das den Chat am Server nicht. Die Liste erfährt es mit dem nächsten vollständigen Abruf: bei laufender App nach höchstens einer Minute, sonst beim nächsten Start.
+
+**Test:** gegen `talk-demo` mit `curl -d user=lena http://127.0.0.1:8099/demo/agent` (`on=0` nimmt es zurück), danach die Liste neu laden. Am echten Server setzt die Agenten-Attrappe den Status für die Dauer ihres Laufs (`agent/tools/agent-sim.sh`).
 
 ## Sortierung
 

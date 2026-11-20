@@ -168,6 +168,23 @@ pub async fn demo_status(AxState(app): S, p: Params) -> Response {
     ocs(json!({ "status": status }))
 }
 
+/// Test hook: a person sets or clears the status emoji 🤖, as a KI agent does. `user`,
+/// optionally `on=0`. Like on a real server the chat list tells it with the next full fetch.
+pub async fn demo_agent(AxState(app): S, p: Params) -> Response {
+    let mut st = app.st.lock().unwrap();
+    let user = p.str("user").unwrap_or_default();
+    if user == st.me || !st.people.iter().any(|x| x.id == user) {
+        return bad_request("user");
+    }
+    let on = p.str("on").is_none_or(|v| v != "0");
+    if on {
+        st.agents.insert(user.clone());
+    } else {
+        st.agents.remove(&user);
+    }
+    ocs(json!({ "userId": user, "icon": if on { json!("🤖") } else { Value::Null } }))
+}
+
 /// Test hook: somebody called in a one-to-one conversation and nobody answered. `token`,
 /// optionally `from` and `ago` (seconds in the past, default 0).
 pub async fn demo_missed_call(AxState(app): S, p: Params) -> Response {

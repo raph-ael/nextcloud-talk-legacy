@@ -323,6 +323,8 @@ pub struct RoomView {
     pub last_common_read_message: i64,
     pub last_message: Option<MessagePreview>,
     pub is_favorite: bool,
+    /// A 1:1 with a KI agent (docs/categories.md „KI-Agenten“).
+    pub is_agent: bool,
     pub is_archived: bool,
     pub read_only: bool,
     /// The user may react to messages (docs/chat.md „Reaktionen“).
@@ -364,6 +366,7 @@ impl From<core::RoomView> for RoomView {
             last_common_read_message: r.last_common_read_message,
             last_message: r.last_message.map(Into::into),
             is_favorite: r.is_favorite,
+            is_agent: r.is_agent,
             is_archived: r.is_archived,
             read_only: r.read_only,
             can_react: r.can_react,

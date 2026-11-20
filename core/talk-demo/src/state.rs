@@ -219,6 +219,8 @@ pub struct State {
     pub tags: Vec<Tag>,
     /// The user setting `conversations_sort_order`: `activity` or `alphabetical`.
     pub sort_order: String,
+    /// People whose status emoji is 🤖: KI agents (docs/categories.md „KI-Agenten“).
+    pub agents: std::collections::HashSet<String>,
     pub login_flows: HashMap<String, LoginFlow>,
     pub next_msg: i64,
     pub next_file: i64,
@@ -464,6 +466,7 @@ impl State {
             shares: Vec::new(),
             tags: Vec::new(),
             sort_order: "activity".into(),
+            agents: Default::default(),
             login_flows: HashMap::new(),
             next_msg: 100,
             next_file: 2001,
@@ -915,7 +918,12 @@ impl State {
         } else {
             (r.name.clone(), r.name.clone())
         };
+        let agent = r.kind == 1 && self.agents.contains(&name);
         json!({
+            // As with `includeStatus=true`: the status of the other user of a one-to-one chat.
+            "status": if r.kind == 1 { json!(if agent { "online" } else { "offline" }) } else { Value::Null },
+            "statusIcon": if agent { json!("🤖") } else { Value::Null },
+            "statusMessage": if agent { json!("KI-Agent") } else { Value::Null },
             "id": r.id,
             "token": r.token,
             "type": r.kind,

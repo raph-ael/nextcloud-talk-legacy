@@ -107,6 +107,9 @@ pub struct Room {
     /// Status of the other user in 1:1 conversations (only with `includeStatus=true`).
     #[serde(default)]
     pub status: Option<String>,
+    /// The emoji of that user's status message.
+    #[serde(default)]
+    pub status_icon: Option<String>,
     /// Marked as important: notifies and rings even while the user's status is "do not
     /// disturb" (docs/notifications.md).
     #[serde(default)]

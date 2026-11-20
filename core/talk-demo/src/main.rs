@@ -11,6 +11,7 @@
 //!     curl -d token=mira -d text=Hallo http://127.0.0.1:8098/demo/incoming
 //!     curl -d token=mira -d text=Arbeitet -d silent=1 http://127.0.0.1:8098/demo/incoming   # sent silently
 //!     curl -d status=dnd http://127.0.0.1:8098/demo/status          # "do not disturb"
+//!     curl -d user=lena http://127.0.0.1:8098/demo/agent            # Lena is a KI agent (on=0: no more)
 //!     curl -d token=mira http://127.0.0.1:8098/demo/missed-call     # a missed call
 //!     curl -d token=mira -d id=12 -d emoji=👍 http://127.0.0.1:8098/demo/react   # a reaction
 //!
@@ -62,6 +63,7 @@ pub fn router(app: App) -> Router {
         .route("/index.php/login/v2/poll", post(files::login_poll))
         .route("/demo/incoming", post(api::demo_incoming))
         .route("/demo/status", post(api::demo_status))
+        .route("/demo/agent", post(api::demo_agent))
         .route("/demo/missed-call", post(api::demo_missed_call))
         .route("/demo/edit", post(api::demo_edit))
         .route("/demo/delete", post(api::demo_delete))

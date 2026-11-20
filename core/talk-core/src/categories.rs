@@ -23,6 +23,8 @@ const KIND_ARCHIVED: &str = "archived";
 /// "Chats" split in two (a device setting): kind and id are the same, collapsed only here.
 pub const SECTION_GROUPS: &str = "groups";
 pub const SECTION_DIRECT: &str = "direct";
+/// Id and kind of the automatic section "KI-Agenten".
+pub const SECTION_AGENTS: &str = "agents";
 
 /// How the chats of a section are ordered (Talk's user setting `conversations_sort_order`).
 pub const SORT_ACTIVITY: &str = "activity";
@@ -38,7 +40,7 @@ pub(crate) struct Categories {
     /// From the server (cached), any order.
     tags: Vec<ConversationTag>,
     /// Collapsed sections without a server category behind them ([`LOCAL_FAVORITES`],
-    /// [`LOCAL_OTHER`], [`SECTION_GROUPS`], [`SECTION_DIRECT`]).
+    /// [`LOCAL_OTHER`], [`SECTION_GROUPS`], [`SECTION_DIRECT`], [`SECTION_AGENTS`]).
     local_collapsed: HashSet<String>,
     /// Chats by name instead of by last activity.
     alphabetical: bool,
@@ -76,7 +78,7 @@ impl Categories {
 pub struct SectionView {
     /// Pass to `toggle_section`; also part of the row keys (a chat may be in several).
     pub id: String,
-    /// `favorites`, `custom`, `other`, `groups` or `direct`; in a search also `archived`
+    /// `favorites`, `agents`, `custom`, `other`, `groups` or `direct`; in a search also `archived`
     /// (archived chats whose name matches; it has no category and is never collapsed).
     pub kind: String,
     /// "Favoriten", the category name or "Chats". Empty when it is the only section:
@@ -490,12 +492,19 @@ pub(crate) fn build_sections(
         rooms,
     };
     let mut sections: Vec<SectionView> = Vec::new();
+    // KI agents have their own section right below the favourites: a category that fills
+    // itself. An agent is also in its other categories and under "Favoriten", not under "Chats".
+    let mut agents: Vec<RoomView> = rooms.iter().filter(|r| r.is_agent).cloned().collect();
     for t in tags {
+        if t.kind != KIND_FAVORITES && !agents.is_empty() {
+            let id = SECTION_AGENTS;
+            sections.push(section(id, id, "KI-Agenten".into(), local_collapsed.contains(id), std::mem::take(&mut agents)));
+        }
         let members: Vec<RoomView> = rooms
             .iter()
             .filter(|r| match t.kind.as_str() {
                 KIND_FAVORITES => r.is_favorite,
-                KIND_OTHER => !r.is_favorite && !has_category(r, &custom),
+                KIND_OTHER => !r.is_favorite && !r.is_agent && !has_category(r, &custom),
                 _ => r.tag_ids.contains(&t.id),
             })
             .cloned()
@@ -596,6 +605,7 @@ mod tests {
             last_common_read_message: 0,
             last_message: None,
             is_favorite: fav,
+            is_agent: false,
             is_archived: false,
             read_only: false,
             can_react: true,
@@ -745,6 +755,32 @@ mod tests {
         let off = build_sections(rooms, &server_tags(), &HashSet::new(), "", false, false);
         assert_eq!(off.last().map(|s| s.title.as_str()), Some("Chats"));
         assert_eq!(off.last().unwrap().total, 6);
+    }
+
+    #[test]
+    fn agents_have_their_own_section() {
+        let agent = |token: &str, fav: bool, tags: &[&str]| RoomView { room_type: 1, is_agent: true, ..room(token, fav, tags) };
+        let mut busy = agent("kiki", false, &[]);
+        busy.unread_messages = 2;
+        let rooms = vec![room("fav", true, &[]), agent("favbot", true, &[]), busy, agent("workbot", false, &["3"]), typed("d", 1, false), typed("g", 2, false)];
+        let s = build_sections(rooms.clone(), &server_tags(), &HashSet::new(), "", true, false);
+        let heads: Vec<(&str, &str, &str)> = s.iter().map(|s| (s.id.as_str(), s.kind.as_str(), s.title.as_str())).collect();
+        assert_eq!(heads[..3], [("1", "favorites", "Favoriten"), ("agents", "agents", "KI-Agenten"), ("3", "custom", "Arbeit")]);
+        // A category that fills itself: an agent is also a favourite and in its categories,
+        // and never under "Direktchats".
+        assert_eq!(ids(&s[0]), ["fav", "favbot"]);
+        assert_eq!(ids(&s[1]), ["favbot", "kiki", "workbot"]);
+        assert_eq!(ids(&s[2]), ["workbot"]);
+        assert_eq!(ids(s.iter().find(|s| s.id == SECTION_DIRECT).unwrap()), ["d"]);
+        // Collapsed on this device, the head counts.
+        let collapsed: HashSet<String> = [SECTION_AGENTS.to_string()].into();
+        let s = build_sections(rooms.clone(), &server_tags(), &collapsed, "", false, false);
+        assert!(s[1].collapsed && s[1].rooms.is_empty());
+        assert_eq!((s[1].total, s[1].unread), (3, 2));
+        assert_eq!(ids(s.last().unwrap()), ["d", "g"]);
+        // Without an agent there is no such section.
+        let none = build_sections(vec![typed("d", 1, false)], &server_tags(), &HashSet::new(), "", true, false);
+        assert!(none.iter().all(|s| s.kind != SECTION_AGENTS));
     }
 
     #[test]

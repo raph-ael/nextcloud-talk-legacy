@@ -205,6 +205,9 @@ pub struct RoomView {
     pub last_common_read_message: i64,
     pub last_message: Option<MessagePreview>,
     pub is_favorite: bool,
+    /// A 1:1 with a KI agent: the other account wears the status emoji 🤖
+    /// (docs/categories.md „KI-Agenten“).
+    pub is_agent: bool,
     pub is_archived: bool,
     pub read_only: bool,
     /// The user may react to messages (see docs/chat.md „Reaktionen“).
@@ -1954,6 +1957,7 @@ impl Engine {
             last_common_read_message: r.last_common_read_message,
             last_message: r.last_message.as_ref().map(|m| self.preview(m)),
             is_favorite: r.is_favorite,
+            is_agent: r.room_type == RoomType::OneToOne && is_agent_icon(r.status_icon.as_deref()),
             is_archived: r.is_archived,
             read_only: r.read_only != 0,
             can_react: r.read_only == 0
@@ -2066,6 +2070,14 @@ pub fn preview_text(text: &str) -> String {
         }
     }
     out
+}
+
+/// The status emoji an agent account sets for itself (docs/agents.md).
+pub const AGENT_STATUS_ICON: &str = "🤖";
+
+/// With or without the variation selector some keyboards add.
+fn is_agent_icon(icon: Option<&str>) -> bool {
+    icon.is_some_and(|i| i.trim().trim_end_matches('\u{fe0f}') == AGENT_STATUS_ICON)
 }
 
 fn is_visible(m: &ChatMessage) -> bool {

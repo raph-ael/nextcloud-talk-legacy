@@ -218,7 +218,8 @@ impl TalkClient {
     /// Room list. `modified_since` enables incremental sync (deletions are not reported,
     /// so do a full fetch periodically). `background` avoids marking the user online.
     pub async fn rooms(&self, modified_since: Option<i64>, background: bool) -> Result<RoomsBatch> {
-        let mut rb = self.request(Method::GET, &format!("{SPREED}/v4/room"));
+        // The status of the other user of a 1:1: who is a KI agent (docs/categories.md „KI-Agenten“).
+        let mut rb = self.request(Method::GET, &format!("{SPREED}/v4/room")).query(&[("includeStatus", "true")]);
         if let Some(ts) = modified_since {
             rb = rb.query(&[("modifiedSince", ts)]);
         }
