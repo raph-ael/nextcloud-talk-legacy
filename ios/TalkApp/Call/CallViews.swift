@@ -236,7 +236,7 @@ struct ActiveCallView: View {
     }
 }
 
-/// "Zurück zum Chat": the call goes on in the bar above the app.
+/// "Zu den Chats": the call goes on in the bar above the app.
 struct MinimizeButton: View {
     var body: some View {
         Button {
@@ -247,13 +247,13 @@ struct MinimizeButton: View {
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
         }
-        .accessibilityLabel("Zurück zum Chat")
+        .accessibilityLabel("Zu den Chats")
         .accessibilityIdentifier("call-minimize")
     }
 }
 
-/// Audio output · camera · more (recording) · mute · hang up (docs/calls.md "Video").
-/// 48 pt buttons, 20 pt apart.
+/// Chats · audio output · camera · more (recording) · mute · hang up (docs/calls.md "Video").
+/// 48 pt buttons, 20 pt apart; with "more" there are six, then 12 pt so they fit 375 pt.
 struct CallControls: View {
     let call: CallView
     private var audio: CallAudio { .shared }
@@ -263,7 +263,11 @@ struct CallControls: View {
 
     var body: some View {
         let ended = call.state == .ended
-        HStack(spacing: 20) {
+        HStack(spacing: call.canRecord ? 12 : 20) {
+            // The visible way to the other chats; same as the arrow at the top.
+            CallButton(symbol: "bubble.left.fill", label: "Zu den Chats, der Anruf läuft weiter", id: "call-chats") {
+                controller.presented = false
+            }
             AudioOutputButton()
             // Crossed out while off; white while on.
             CallButton(

@@ -76,6 +76,16 @@ final class CallFlowTests: XCTestCase {
         bar.tap()
         XCTAssertTrue(app.buttons["call-hangup"].firstMatch.waitForExistence(timeout: 5))
 
+        // "Chats" in the control bar does the same: the chat is usable, the call goes on.
+        shot("call-controls")
+        let chats = app.buttons["call-chats"].firstMatch
+        XCTAssertEqual(chats.label, "Zu den Chats, der Anruf läuft weiter")
+        chats.tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["call-button"].firstMatch.isHittable, "the chat is not usable while the call is minimised")
+        bar.tap()
+        XCTAssertTrue(app.buttons["call-hangup"].firstMatch.waitForExistence(timeout: 5))
+
         // Hang up: end state, then the screen closes and the bar is gone.
         app.buttons["call-hangup"].firstMatch.tap()
         let gone = NSPredicate(format: "exists == false")
