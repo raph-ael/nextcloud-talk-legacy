@@ -36,6 +36,7 @@ NC_USER=…             NC_PASS=…           # eigener Account   (-a me)
 BOT_A_USER=…          BOT_A_PASS=…        # Test-Account A    (-a a)
 BOT_B_USER=…          BOT_B_PASS=…        # Test-Account B    (-a b)
 TEST_ROOM_TOKEN=…                          # gemeinsamer Testraum
+CALL_TEST_ROOM_TOKEN=…                     # 1:1 der beiden Test-Accounts (Anrufe, KI-Agenten)
 ```
 
 Als Passwort am besten ein App-Passwort verwenden (Einstellungen → Sicherheit).

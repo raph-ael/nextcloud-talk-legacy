@@ -1,0 +1,69 @@
+{
+  "id": "nctalk",
+  "name": "Nextcloud Talk (Benutzerkonto)",
+  "description": "Nextcloud Talk als Kanal, bei dem der Agent ein echtes Nextcloud-Benutzerkonto ist.",
+  "categories": ["channels"],
+  "channels": ["nctalk"],
+  "activation": { "onStartup": false },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "nctalk": {
+      "label": "Nextcloud Talk (Benutzerkonto)",
+      "description": "Agent als echtes Nextcloud-Konto in Talk.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "name": { "type": "string" },
+          "baseUrl": { "type": "string", "description": "Adresse der Nextcloud, z. B. https://cloud.example.org" },
+          "user": { "type": "string", "description": "Benutzername des Agenten-Kontos" },
+          "password": { "description": "App-Passwort des Agenten-Kontos (besser: passwordFile)" },
+          "passwordFile": { "type": "string", "description": "Datei mit dem App-Passwort (chmod 600)" },
+          "dmPolicy": { "type": "string", "enum": ["pairing", "allowlist", "open", "disabled"] },
+          "allowFrom": { "type": "array", "items": { "type": "string" } },
+          "groupPolicy": { "type": "string", "enum": ["allowlist", "open", "disabled"] },
+          "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+          "rooms": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "requireMention": { "type": "boolean" },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "systemPrompt": { "type": "string" },
+                "skills": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "streaming": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "mode": { "type": "string", "enum": ["off", "partial", "progress"] }
+            }
+          },
+          "typing": { "type": "boolean" },
+          "statusCleanup": { "type": "string", "enum": ["delete", "keep"], "description": "Was nach der Antwort mit der Statusnachricht passiert" },
+          "markdown": { "type": "object", "additionalProperties": true },
+          "textChunkLimit": { "type": "integer", "minimum": 500, "maximum": 32000 },
+          "mediaMaxMb": { "type": "number", "minimum": 1 },
+          "discoveryIntervalSeconds": { "type": "number", "minimum": 2 },
+          "maxWatchedRooms": { "type": "integer", "minimum": 1, "maximum": 64 },
+          "backlogMaxAgeSeconds": { "type": "integer", "minimum": 0 },
+          "configWrites": { "type": "boolean" }
+        }
+      },
+      "uiHints": {
+        "password": { "label": "App-Passwort", "sensitive": true },
+        "passwordFile": { "label": "Datei mit App-Passwort" }
+      }
+    }
+  }
+}

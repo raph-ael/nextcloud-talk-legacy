@@ -1,0 +1,35 @@
+{
+  "gateway": { "mode": "local", "port": 19111, "bind": "loopback", "auth": { "mode": "token", "token": "dev-only-local-token" } },
+  "agents": {
+    "defaults": {
+      "workspace": "REPLACE_WITH_ABSOLUTE_PATH/dev-gateway/home/workspace",
+      "model": { "primary": "mock/mock-1" },
+      "heartbeat": { "every": "0m" }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "mock": {
+        "baseUrl": "http://127.0.0.1:19112/v1",
+        "apiKey": "mock",
+        "api": "openai-completions",
+        "models": [
+          { "id": "mock-1", "name": "Mock", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 64000, "maxTokens": 4096 }
+        ]
+      }
+    }
+  },
+  "plugins": { "load": { "paths": ["REPLACE_WITH_ABSOLUTE_PATH/../openclaw-nctalk"] }, "entries": { "nctalk": { "enabled": true } } },
+  "channels": {
+    "nctalk": {
+      "enabled": true,
+      "baseUrl": "https://cloud.example.org",
+      "user": "agent-testkonto",
+      "dmPolicy": "allowlist",
+      "allowFrom": ["test-account-a"],
+      "streaming": { "mode": "progress" },
+      "backlogMaxAgeSeconds": 20
+    }
+  }
+}

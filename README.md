@@ -208,12 +208,14 @@ android/       Kotlin + Jetpack Compose
 ios/           Swift (SwiftUI + UIKit)
 desktop/       Electron + React + TypeScript
 push-proxy/    Push-Proxy (FCM/APNs) für das Nextcloud-Push-Protokoll
+agent/         Anbindung von KI-Agenten (OpenClaw) an Talk, mit Testwerkzeugen
 design/        Icon und Design-Tokens
 website/       wolkenfunk.org
 ```
 
 - [Bauen und entwickeln](docs/development.md): Voraussetzungen, Befehle je Plattform, Eigenheiten des Servers
 - [Releases](docs/release.md): Kanäle, Updates und der Weg zu einer neuen Version
+- [KI-Agenten in Talk](docs/agents.md): wie Agenten angebunden sind und was die Clients dafür können
 - Wie sich die Apps verhalten:
   [Chat](docs/chat.md) ·
   [Anhänge](docs/attachments.md) ·

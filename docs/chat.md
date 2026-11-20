@@ -299,7 +299,7 @@ Im Testraum mit Bot A und Bot B, unter `bot-lock.sh`. Gegenstelle ist `talk-cli`
 
 ## Stille Nachrichten
 
-Talk kennt Nachrichten, die ohne Benachrichtigung gesendet werden (`silent`). KI-Agenten nutzen das für ihren Arbeitsstand: Sie senden eine stille Nachricht wie „Arbeitet …“, schreiben sie im Sekundentakt fort und löschen sie, sobald die Antwort als eigene Nachricht da ist. Im Chat soll das wie ein Status aussehen und keine Spur hinterlassen.
+Talk kennt Nachrichten, die ohne Benachrichtigung gesendet werden (`silent`). KI-Agenten (docs/agents.md) nutzen das für ihren Arbeitsstand: Sie senden eine stille Nachricht wie „Arbeitet …“, schreiben sie im Sekundentakt fort und löschen sie, sobald die Antwort als eigene Nachricht da ist. Im Chat soll das wie ein Status aussehen und keine Spur hinterlassen.
 
 Die Regeln gelten für jede stille Nachricht eines anderen, auch von Menschen. Der Kern erkennt keine Agenten. Eigene stille Nachrichten sehen aus wie alle eigenen.
 

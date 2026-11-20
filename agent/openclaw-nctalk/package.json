@@ -1,0 +1,33 @@
+{
+  "name": "openclaw-nctalk",
+  "version": "0.1.0",
+  "description": "OpenClaw-Kanal für Nextcloud Talk: der Agent ist ein echtes Nextcloud-Benutzerkonto (Live-Status per Bearbeiten, Tipp-Anzeige, Dateien).",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "openclaw": ">=2026.11.3"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": { "optional": true }
+  },
+  "files": ["index.js", "setup-entry.js", "src/**", "openclaw.plugin.json", "README.md"],
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "setupEntry": "./setup-entry.js",
+    "channel": {
+      "id": "nctalk",
+      "label": "Nextcloud Talk (Benutzerkonto)",
+      "selectionLabel": "Nextcloud Talk (Agent als Benutzerkonto)",
+      "blurb": "Agent als echtes Nextcloud-Konto: Live-Status, Tipp-Anzeige, Dateien, Sprachnachrichten.",
+      "aliases": ["talk"],
+      "order": 66
+    },
+    "compat": {
+      "pluginApi": ">=2026.11.3"
+    },
+    "build": {
+      "openclawVersion": "2026.11.3"
+    }
+  }
+}
