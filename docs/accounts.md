@@ -71,7 +71,7 @@ Die Zahl ist die Summe von `badge().chats` der anderen Konten, also die Chats mi
   - Knöpfe „Abmelden“ (in `danger`) und „Abbrechen“.
   - iOS zeigt sie als Alert, nicht als `confirmationDialog`: Der hat als Popover kein „Abbrechen“.
 - Abgemeldet wird nur dieses Konto: Push abmelden (`unregisterPush`), `logout()`, dann seinen Eintrag, sein Geheimnis, seinen Push-Schlüssel und seinen Datenordner löschen. Die anderen Konten bleiben unberührt, auch ihre Benachrichtigungen und ihr Postausgang.
-- Danach wird das erste verbleibende Konto aktiv. Ist keines mehr da, erscheint die Anmeldung.
+- Danach wird das erste verbleibende Konto aktiv. Ist keines mehr da, erscheint die Anmeldung, am Desktop ohne die Einrichtung des ersten Starts (`docs/settings.md`, „Einrichtung beim ersten Start“).
 
 ### Anmeldung abgelaufen
 

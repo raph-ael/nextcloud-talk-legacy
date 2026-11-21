@@ -113,6 +113,47 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
   - Unterseiten gleiten innerhalb davon herein. Die Zurück-Taste geht eine Ebene zurück.
 - **iOS:** Push in den bestehenden `NavigationStack`, mit Routen für die Startseite und je Unterseite, in einer gruppierten Liste.
 
+## Einrichtung beim ersten Start (Desktop)
+
+Wer Wolkenfunk am Desktop zum ersten Mal startet, wählt vor der Anmeldung Akzentfarbe, Design und Ansicht. Android und iOS zeigen wie bisher gleich die Anmeldung.
+
+### Wann sie erscheint
+
+- Nur wenn **kein Konto** angemeldet ist **und** die Einrichtung auf diesem Gerät noch nicht erledigt ist (`setupDone` fehlt oder ist `false`).
+- Erledigt ist sie mit „Weiter“ in Schritt 1 oder sobald ein Konto angemeldet ist, auch bei einem Entwicklungsstart mit `TALK_DEV_*`.
+- Gibt es beim Start schon ein Konto, gilt sie als erledigt. Wer Wolkenfunk schon nutzt, sieht sie nach einem Update nie.
+- Danach kommt sie nicht wieder, auch nicht nach dem Abmelden des letzten Kontos. Dann erscheint die Anmeldung allein.
+- Wird die App in Schritt 1 beendet, erscheint die Einrichtung beim nächsten Start wieder. Was bis dahin gewählt wurde, bleibt.
+- „Konto hinzufügen“ zeigt sie nie.
+
+### Schritt 1: Darstellung
+
+Eine Karte in der Mitte des Fensters, wie die Anmeldung, aber breiter (420, höchstens 92 % der Fensterbreite). Von oben nach unten:
+
+1. Das App-Icon in 64 und der Titel **„Willkommen bei Wolkenfunk“**.
+2. Gedämpft: „Such dir aus, wie Wolkenfunk aussehen soll.“
+3. Die **Vorschau** aus „Darstellung“: eine fremde und eine eigene Nachricht, in der gewählten Ansicht.
+4. **„Akzentfarbe“**: dieselben zehn Farbfelder wie in „Darstellung“, fünf je Reihe.
+5. **„Design“**: „System“, „Hell“, „Dunkel“ als drei gleich breite Knöpfe in einer Reihe.
+6. **„Ansicht“**: „Sprechblasen“, „Kompakt“ als zwei gleich breite Knöpfe in einer Reihe, ohne Untertitel.
+7. Der Knopf **„Weiter“** in der Akzentfarbe.
+8. Gedämpft und klein: „Das kannst du später in den Einstellungen unter „Darstellung“ ändern.“
+
+- Die Knöpfe einer Reihe sind eine Radiogruppe. Der gewählte hat einen Rand in der Akzentfarbe und eine blasse Fläche in der Akzentfarbe, die anderen den normalen Rand.
+- Jede Auswahl gilt sofort und wird gespeichert wie in „Darstellung“. Die Vorgaben sind Blau, System und Sprechblasen.
+- Enter drückt „Weiter“, solange kein anderer Knopf den Fokus hat. Beim Öffnen hat „Weiter“ den Fokus.
+- Ist das Fenster niedriger als die Karte, scrollt der Bildschirm. Nichts wird abgeschnitten, auch nicht im kleinsten Fenster (380 × 480).
+
+### Schritt 2: Anmelden
+
+- Die Anmeldekarte wie bisher, mit dem Titel „Anmelden“ statt „Willkommen“.
+- Unter „Anmelden“ steht der Knopf **„Zurück“** (wie „Abbrechen“ bei „Konto hinzufügen“). Er führt zu Schritt 1, die Auswahl steht noch da. Während auf die Bestätigung im Browser gewartet wird, fehlt er.
+- Esc führt ebenfalls zurück, außer während des Wartens.
+
+### Schrittanzeige
+
+Unter der Karte stehen in beiden Schritten zwei Punkte (8 groß, Abstand 8): der aktuelle in der Akzentfarbe, der andere in der Randfarbe. Sie sind nicht bedienbar und tragen zusammen die Bezeichnung „Schritt 1 von 2“ bzw. „Schritt 2 von 2“.
+
 ## Speicherung
 
 Die Einstellungen gelten nur für das Gerät. Sie gehören nicht zum Konto und bleiben beim Abmelden erhalten.
@@ -121,7 +162,7 @@ Die Ausnahme ist die „Sortierung“: Sie gehört zum Konto und liegt auf dem S
 
 | Plattform | Ort | Schlüssel |
 |---|---|---|
-| Desktop | `settings.json` im Datenordner (Main-Prozess) | `theme`: `system`, `light` oder `dark`; `accent`: Farb-id; `layout`: `bubbles` oder `compact`; `splitChats`: `true`/`false` |
+| Desktop | `settings.json` im Datenordner (Main-Prozess) | `theme`: `system`, `light` oder `dark`; `accent`: Farb-id; `layout`: `bubbles` oder `compact`; `splitChats`: `true`/`false`; `setupDone`: `true`, sobald die Einrichtung erledigt ist |
 | Android | SharedPreferences `ui` | `theme`, `accent`, `split_chats` |
 | iOS | UserDefaults | `appearance.theme`, `appearance.accent`, `chatlist.split` |
 
@@ -133,7 +174,8 @@ Fehlt der Wert oder ist er unbekannt, gelten `system`, `blau`, `bubbles` bzw. `t
   - `setAppearance(theme, accent)`
   - `setLayout(layout)`
   - `setSplitChats(on)`
-- Jede Änderung meldet das Ereignis `appearanceChanged`.
+  - `setupDone()` mit `true` oder `false` und `finishSetup()` für die Einrichtung beim ersten Start
+- Jede Änderung der Darstellung meldet das Ereignis `appearanceChanged`.
 - Der Renderer setzt `data-layout` auf `<html>`.
 
 ## Akzentfarben
@@ -251,6 +293,7 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
 | Farbfeld | „{Farbname}“ bzw. „{Farbname}, ausgewählt“ |
 | Design-Auswahl | Radiogruppe „Design“ |
 | Ansicht-Auswahl (Desktop) | Radiogruppe „Ansicht“ |
+| Schrittanzeige der Einrichtung (Desktop) | „Schritt 1 von 2“ bzw. „Schritt 2 von 2“ |
 | „Gruppen und Direktchats trennen“ | Schalter mit Titel und Zustand (Desktop `role="switch"`, Android `Switch`, iOS `Toggle`) |
 | Sortierung | Radiogruppe „Sortierung“ |
 | Zahnrad oben in der Chatliste (Desktop) | „Einstellungen“ |
@@ -268,6 +311,7 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
   - Design umschalten: System, Hell, Dunkel; auch mit offenem Sheet.
   - Alle 10 Farben in hell und dunkel: Knöpfe, eigene Blase, Schalter, Badge, Links.
   - Nach einem Neustart sind die Werte noch da.
+  - Einrichtung beim ersten Start (Desktop), mit einem leeren Datenordner: Sie erscheint, die Vorschau folgt jeder Auswahl, „Weiter“ und „Zurück“ wechseln die Schritte. Nach „Weiter“ und einem Neustart kommt nur die Anmeldung, ohne „Weiter“ kommt die Einrichtung wieder. Mit einem vorhandenen Konto erscheint sie nie, auch nicht nach dem Abmelden.
   - Das Chat-Menü komplett, jeder Eintrag.
   - Stumm-Anzeige und Badge-Zählung wie in der Tabelle oben.
 - **Kern:** `cargo test -p talk-core -p talk-demo` (Ende-zu-Ende gegen den Demo-Server).
