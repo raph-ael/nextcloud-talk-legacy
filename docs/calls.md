@@ -477,6 +477,10 @@ stopScreen()                                nur Desktop (Bildschirmfreigabe)
   ohne Erfolg kompletter Neuaufbau.
 - Subscriber: `requestoffer` alle 8 s wiederholen. Bei `failed` → neue Subscription.
 
+## Wo sich ein Anruf starten lässt
+
+Den Anruf-Knopf im Chat-Kopf gibt es nur bei Einzelchats (`roomType` 1), Gruppen (2) und öffentlichen Unterhaltungen (3). Bei Talk-Updates (4), ehemaligen Einzelchats (5) und „Notizen an mich“ (6) erscheint er nicht, die Suche im Kopf bleibt. Einen anderen Weg, einen Anruf zu starten, haben die Clients nicht.
+
 ## Plattform-Integration
 
 **Android** (selbst verwaltet wie Signal, ohne Telecom):
