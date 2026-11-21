@@ -1464,6 +1464,8 @@ private fun MessageMeta(m: UiMessage, own: Boolean, read: Boolean, color: androi
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun CallButton(sessions: SessionManager, room: uniffi.talk_ffi.RoomView) {
+    // 1:1, groups and public conversations; not changelog, former 1:1 or notes to self.
+    if (room.roomType.toInt() !in setOf(1, 2, 3)) return
     val context = androidx.compose.ui.platform.LocalContext.current
     val withPermissions = rememberCallPermissions()
     val debug = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
