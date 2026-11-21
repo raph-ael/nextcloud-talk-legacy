@@ -329,3 +329,18 @@ Gegen `talk-demo`: `curl -d token=lena -d text=Arbeitet -d silent=1 http://127.0
 4. Löschen: Die stille Nachricht ist weg, es bleibt keine Blase. Nach Schließen und Öffnen des Chats ebenso.
 5. Eine normale Nachricht löschen: „Diese Nachricht wurde gelöscht.“ bleibt wie bisher.
 6. Eine Nachricht, die per Bearbeiten wächst (nicht still): Die Liste bleibt am Ende, „bearbeitet“ steht da.
+
+## Bild von „Notizen an mich“
+
+Für den Chat „Notizen an mich“ liefert der Server ein Emoji-Bild. Die Clients zeigen stattdessen ein eigenes und rufen dafür nichts vom Server ab.
+
+**Bedingung:** `roomType == 6`, sonst nichts. `hasCustomAvatar` hilft hier nicht: Der Server setzt das Emoji-Bild beim Anlegen des Chats als eigenes Raumbild und meldet deshalb immer `true`. Ein selbst gesetztes Bild für diesen Chat wird dadurch nicht gezeigt.
+
+**Aussehen:** ein Kreis in der Akzentfarbe (die gewählte, auf dem Desktop `--accent`), darauf ein weißes Notiz-Symbol in Linien. Hell und dunkel sind gleich aufgebaut.
+
+**Symbol** im 24er-Raster, nur Linien, Strichstärke 1.8, runde Enden und Ecken:
+- Blatt: abgerundetes Rechteck bei x 5, y 3.5, Breite 14, Höhe 17, Radius 2.5.
+- Zeilen: (8.5, 8.5)–(15.5, 8.5), (8.5, 12)–(15.5, 12) und (8.5, 15.5)–(12.5, 15.5).
+- Das 24er-Feld ist halb so groß wie der Durchmesser des Avatars und sitzt mittig.
+
+**Wo:** überall, wo das Bild eines Chats über sein Token gezeigt wird, also Chatliste, Chat-Kopf, Suche, Weiterleiten, Auswahl der Chats einer Kategorie und Erwähnungen. Jede Plattform löst das an einer Stelle (Desktop: `Avatar`).

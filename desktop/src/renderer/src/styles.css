@@ -736,6 +736,13 @@ body.resizing {
   color: #fff;
   font-weight: 600;
 }
+/* „Notizen an mich“: white sheet on the accent colour (docs/chat.md). */
+.avatar-notes {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: var(--accent);
+}
 
 /* ---------- chat ---------- */
 .chat {
