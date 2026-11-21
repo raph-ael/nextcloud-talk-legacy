@@ -2119,6 +2119,13 @@ class SessionManager(private val context: Context) {
         }
     }
 
+    /**
+     * „Notizen an mich“ (room type 6): the app draws that avatar itself. The server sets an emoji
+     * picture when it creates the room, so `hasCustomAvatar` is always true there and says nothing.
+     */
+    fun hasNotesAvatar(token: String, account: String? = null): Boolean =
+        runtimeFor(account)?.rooms?.any { it.token == token && it.roomType.toInt() == 6 } == true
+
     /** Already decoded avatar, for drawing the first frame without the initials flashing. */
     fun cachedAvatar(token: String, version: String, dark: Boolean, account: String? = null): ImageBitmap? =
         runtimeFor(account)?.let { avatars.get(avatarKey(it.id, token, version, dark)) }
