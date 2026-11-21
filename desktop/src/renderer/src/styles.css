@@ -254,30 +254,13 @@ button {
 .setup-card {
   width: min(420px, 92vw);
 }
-.setup-card .appearance-preview,
-.setup-card .swatches,
-.view-cards {
-  align-self: stretch;
-}
-.setup-card .appearance-preview {
-  text-align: left;
-}
-.setup-card .swatches {
-  justify-content: space-between;
-  gap: 16px 0;
-  padding: 0 0 4px;
-}
-.setup-card .swatch.on {
-  box-shadow:
-    0 0 0 3px var(--bg),
-    0 0 0 5px currentColor;
-}
 .login-card .setup-note {
   margin: 0;
   font-size: 12px;
 }
-/* The two views as cards (step 1). Border and padding add up to the same in both states. */
+/* The two views as cards. Border and padding add up to the same in both states. */
 .view-cards {
+  align-self: stretch;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;

@@ -80,11 +80,11 @@ export function ThemeChoice({ labelledBy }: { labelledBy: string }) {
   )
 }
 
-/** „Akzentfarbe“: the ten colours, five in a row; named by a heading or by `label`. */
-export function AccentSwatches({ labelledBy, label }: { labelledBy?: string; label?: string }) {
+/** „Akzentfarbe“: the ten colours, five in a row. */
+export function AccentSwatches({ labelledBy }: { labelledBy: string }) {
   const { theme, accent, dark } = useAppearance()
   return (
-    <div className="swatches" role="group" aria-labelledby={labelledBy} aria-label={label}>
+    <div className="swatches" role="group" aria-labelledby={labelledBy}>
       {ACCENTS.map((a) => {
         const on = a.id === accent
         const color = dark ? a.dark.accent : a.light.accent

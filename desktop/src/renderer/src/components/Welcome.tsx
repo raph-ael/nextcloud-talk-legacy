@@ -1,30 +1,28 @@
-// The setup of the first start (docs/settings.md): one question per step – the view, the
-// accent, then the sign-in. It shows only while no account is signed in and the setup is
+// The setup of the first start (docs/settings.md): one question, the view, then the sign-in. It shows only while no account is signed in and the setup is
 // not done on this device.
 
 import { useCallback, useEffect, useState } from 'react'
 import type { Layout } from '@shared/core'
 import { setLayout, useAppearance } from '../appearance'
-import { AccentSwatches, AppearancePreview, LAYOUTS } from './AppearanceControls'
+import { LAYOUTS } from './AppearanceControls'
 import { Login } from './Login'
 import appIcon from '../../../../resources/icons/128x128.png'
 
 export function Welcome() {
-  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [step, setStep] = useState<1 | 2>(1)
   const toView = useCallback(() => setStep(1), [])
-  const toAccent = useCallback(() => setStep(2), [])
   const toLogin = useCallback(() => {
     // Done from here on: the next start shows the sign-in alone.
     void window.talk.finishSetup()
-    setStep(3)
+    setStep(2)
   }, [])
 
   return (
     <div className="welcome">
       <div className="welcome-body">
-        {step === 1 ? <ViewStep onNext={toAccent} /> : step === 2 ? <AccentStep onNext={toLogin} onBack={toView} /> : <Login onBack={toAccent} />}
-        <div className="steps" role="img" aria-label={`Schritt ${step} von 3`}>
-          {[1, 2, 3].map((n) => (
+        {step === 1 ? <ViewStep onNext={toLogin} /> : <Login onBack={toView} />}
+        <div className="steps" role="img" aria-label={`Schritt ${step} von 2`}>
+          {[1, 2].map((n) => (
             <span key={n} className={n === step ? 'on' : undefined} />
           ))}
         </div>
@@ -33,26 +31,19 @@ export function Welcome() {
   )
 }
 
-/** Enter presses „Weiter“ unless another button has the focus (it presses itself); Esc goes back. */
-function useStepKeys(onNext: () => void, onBack?: () => void) {
+/** The view, as two cards with a drawn picture each. */
+function ViewStep({ onNext }: { onNext: () => void }) {
+  const { layout } = useAppearance()
+  // Enter presses „Weiter“ unless another button has the focus (it presses itself).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.defaultPrevented) return
-      if (e.key === 'Escape') onBack?.()
-      else if (e.key === 'Enter' && !(document.activeElement instanceof HTMLButtonElement)) {
-        e.preventDefault()
-        onNext()
-      }
+      if (e.key !== 'Enter' || e.defaultPrevented || document.activeElement instanceof HTMLButtonElement) return
+      e.preventDefault()
+      onNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onNext, onBack])
-}
-
-/** Step 1: the view, as two cards with a drawn picture each. */
-function ViewStep({ onNext }: { onNext: () => void }) {
-  const { layout } = useAppearance()
-  useStepKeys(onNext)
+  }, [onNext])
   return (
     <div className="login-card setup-card">
       <img className="login-logo" src={appIcon} width={64} height={64} alt="" aria-hidden draggable={false} />
@@ -74,26 +65,6 @@ function ViewStep({ onNext }: { onNext: () => void }) {
       </div>
       <button className="button-primary" autoFocus onClick={onNext}>
         Weiter
-      </button>
-      <p className="muted setup-note">Das kannst du später in den Einstellungen ändern.</p>
-    </div>
-  )
-}
-
-/** Step 2: the accent, with the preview of „Darstellung“ in the chosen view. */
-function AccentStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  useStepKeys(onNext, onBack)
-  return (
-    <div className="login-card setup-card">
-      <h1>Wähle deine Farbe</h1>
-      <p className="muted">Sie färbt Knöpfe, Links und deine Nachrichten.</p>
-      <AppearancePreview />
-      <AccentSwatches label="Akzentfarbe" />
-      <button className="button-primary" autoFocus onClick={onNext}>
-        Weiter
-      </button>
-      <button className="button-secondary" onClick={onBack}>
-        Zurück
       </button>
       <p className="muted setup-note">Das kannst du später in den Einstellungen ändern.</p>
     </div>
