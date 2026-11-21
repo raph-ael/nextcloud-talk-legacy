@@ -1,6 +1,6 @@
 // The parts of „Darstellung“ (docs/settings.md): preview, design, accent and view. The
-// settings show the choices as lists, the setup of the first start in one row (`row`).
-// Every change applies at once and is saved by the main process.
+// setup of the first start shows the preview and the accents too. Every change applies at
+// once and is saved by the main process.
 
 import type { Layout, Theme } from '@shared/core'
 import { ACCENTS } from '../accents'
@@ -14,7 +14,7 @@ const THEMES: { theme: Theme; label: string }[] = [
 ]
 
 /** „Ansicht“ (docs/compact-view.md). */
-const LAYOUTS: { layout: Layout; label: string; sub?: string }[] = [
+export const LAYOUTS: { layout: Layout; label: string; sub?: string }[] = [
   { layout: 'bubbles', label: 'Sprechblasen' },
   { layout: 'compact', label: 'Kompakt', sub: 'Einzeilige Chatliste, Nachrichten untereinander' },
 ]
@@ -65,50 +65,9 @@ export function AppearancePreview() {
   )
 }
 
-interface ChoiceProps {
-  /** The id of the heading that names the radio group. */
-  labelledBy: string
-  /** Equally wide buttons in one row, without subtitles. */
-  row?: boolean
-}
-
-/** One radio group as a row of buttons. */
-function ChoiceRow<T extends string>(props: {
-  labelledBy: string
-  options: { value: T; label: string }[]
-  value: T
-  onChoose: (value: T) => void
-}) {
-  return (
-    <div className="choice-row" role="radiogroup" aria-labelledby={props.labelledBy}>
-      {props.options.map((o) => (
-        <button
-          key={o.value}
-          role="radio"
-          aria-checked={props.value === o.value}
-          className={`choice-pill${props.value === o.value ? ' on' : ''}`}
-          onClick={() => props.onChoose(o.value)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 /** „Design“: System, Hell, Dunkel. */
-export function ThemeChoice({ labelledBy, row }: ChoiceProps) {
+export function ThemeChoice({ labelledBy }: { labelledBy: string }) {
   const { theme, accent } = useAppearance()
-  if (row) {
-    return (
-      <ChoiceRow
-        labelledBy={labelledBy}
-        options={THEMES.map((t) => ({ value: t.theme, label: t.label }))}
-        value={theme}
-        onChoose={(t) => setAppearance(t, accent)}
-      />
-    )
-  }
   return (
     <div className="choice-list settings-choices" role="radiogroup" aria-labelledby={labelledBy}>
       {THEMES.map((t) => (
@@ -121,11 +80,11 @@ export function ThemeChoice({ labelledBy, row }: ChoiceProps) {
   )
 }
 
-/** „Akzentfarbe“: the ten colours, five in a row. */
-export function AccentSwatches({ labelledBy }: { labelledBy: string }) {
+/** „Akzentfarbe“: the ten colours, five in a row; named by a heading or by `label`. */
+export function AccentSwatches({ labelledBy, label }: { labelledBy?: string; label?: string }) {
   const { theme, accent, dark } = useAppearance()
   return (
-    <div className="swatches" role="group" aria-labelledby={labelledBy}>
+    <div className="swatches" role="group" aria-labelledby={labelledBy} aria-label={label}>
       {ACCENTS.map((a) => {
         const on = a.id === accent
         const color = dark ? a.dark.accent : a.light.accent
@@ -151,18 +110,8 @@ export function AccentSwatches({ labelledBy }: { labelledBy: string }) {
 }
 
 /** „Ansicht“: Sprechblasen, Kompakt. */
-export function LayoutChoice({ labelledBy, row }: ChoiceProps) {
+export function LayoutChoice({ labelledBy }: { labelledBy: string }) {
   const { layout } = useAppearance()
-  if (row) {
-    return (
-      <ChoiceRow
-        labelledBy={labelledBy}
-        options={LAYOUTS.map((l) => ({ value: l.layout, label: l.label }))}
-        value={layout}
-        onChoose={setLayout}
-      />
-    )
-  }
   return (
     <div className="choice-list settings-choices" role="radiogroup" aria-labelledby={labelledBy}>
       {LAYOUTS.map((l) => (

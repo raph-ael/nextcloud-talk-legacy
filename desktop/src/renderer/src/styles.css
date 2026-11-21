@@ -243,79 +243,92 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   margin: auto;
-  padding: 8px 0;
+  padding: 16px 0;
 }
 .welcome .login {
   display: block;
   height: auto;
 }
-/* Tighter than the sign-in: the card fits into the window as it opens (1100 × 760, less its title bar). */
 .setup-card {
   width: min(420px, 92vw);
-  gap: 10px;
-  padding: 22px 28px;
-}
-.setup-card h1,
-.setup-card p {
-  margin: 0;
 }
 .setup-card .appearance-preview,
-.setup-group {
+.setup-card .swatches,
+.view-cards {
   align-self: stretch;
-  text-align: left;
 }
 .setup-card .appearance-preview {
-  padding: 6px 14px;
-}
-.setup-group h2 {
-  margin: 0 0 6px;
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 600;
+  text-align: left;
 }
 .setup-card .swatches {
   justify-content: space-between;
-  gap: 10px 0;
-  padding: 0;
+  gap: 16px 0;
+  padding: 0 0 4px;
 }
 .setup-card .swatch.on {
   box-shadow:
     0 0 0 3px var(--bg),
     0 0 0 5px currentColor;
 }
-.setup-card .button-primary {
-  margin-top: 2px;
-}
-.setup-note {
+.login-card .setup-note {
+  margin: 0;
   font-size: 12px;
-  text-wrap: balance;
 }
-/* A radio group in one row: equally wide buttons, the chosen one in the accent. */
-.choice-row {
+/* The two views as cards (step 1). Border and padding add up to the same in both states. */
+.view-cards {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
-.choice-pill {
+.view-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   min-width: 0;
-  min-height: 36px;
-  padding: 6px;
-  border-radius: 10px;
+  padding: 10px 10px 8px;
+  border-radius: 14px;
   border: 1px solid var(--border);
 }
-.choice-pill:hover {
+.view-card:hover {
   background: var(--fill);
 }
-.choice-pill.on {
-  border-color: var(--accent);
+.view-card.on {
+  padding: 9px 9px 7px;
+  border: 2px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 600;
 }
-.choice-pill:focus-visible {
+.view-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+.view-art {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.art-window {
+  fill: var(--bg);
+  stroke: var(--border);
+}
+.art-line {
+  fill: none;
+  stroke: var(--border);
+}
+.art-shape {
+  fill: var(--bubble-other);
+}
+.art-own {
+  fill: var(--bubble-own);
+}
+.art-bar {
+  fill: var(--text-muted);
+  opacity: 0.3;
+}
+.art-bar.strong {
+  opacity: 0.55;
 }
 .steps {
   display: flex;
