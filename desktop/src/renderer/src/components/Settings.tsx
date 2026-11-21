@@ -3,11 +3,11 @@
 // list and an open chat stay mounted underneath (draft, scroll position); a call goes on.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AppInfo, Layout, SortOrder, Theme, UpdateCheck } from '@shared/core'
+import type { AppInfo, SortOrder, UpdateCheck } from '@shared/core'
 import { closeSettings, MAX_ACCOUNTS, setSettingsPage, setSortOrder, startAddAccount, useStore, type SettingsPage } from '../store'
 import { toast } from '../call/store'
-import { ACCENTS } from '../accents'
-import { setAppearance, setLayout, setSplitChats, useAppearance } from '../appearance'
+import { setSplitChats, useAppearance } from '../appearance'
+import { AccentSwatches, AppearancePreview, LayoutChoice, ThemeChoice } from './AppearanceControls'
 import { Avatar } from './Avatar'
 import { Categories } from './Categories'
 import { ConfirmDialog } from './Modal'
@@ -22,41 +22,11 @@ const TITLES: Record<Exclude<SettingsPage, 'categories'>, string> = {
   about: 'Über Wolkenfunk',
 }
 
-const THEMES: { theme: Theme; label: string }[] = [
-  { theme: 'system', label: 'System' },
-  { theme: 'light', label: 'Hell' },
-  { theme: 'dark', label: 'Dunkel' },
-]
-
 /** „Sortierung“ of the chat list (docs/categories.md). */
 const SORTS: { order: SortOrder; label: string }[] = [
   { order: 'activity', label: 'Letzte Aktivität' },
   { order: 'alphabetical', label: 'Name (A–Z)' },
 ]
-
-/** „Ansicht“ (docs/compact-view.md). */
-const LAYOUTS: { layout: Layout; label: string; sub?: string }[] = [
-  { layout: 'bubbles', label: 'Sprechblasen' },
-  { layout: 'compact', label: 'Kompakt', sub: 'Einzeilige Chatliste, Nachrichten untereinander' },
-]
-
-/** The preview of „Darstellung“ in the compact view: two runs with their heads. */
-function CompactPreviewRow({ name, text, time }: { name: string; text: string; time: string }) {
-  return (
-    <div className="msg other first last">
-      <div className="msg-avatar">
-        <Avatar name={name} size={36} />
-      </div>
-      <div className="msg-col">
-        <div className="msg-head">
-          <span className="msg-name">{name}</span>
-          <span className="msg-time">{time}</span>
-        </div>
-        <div className="bubble">{text}</div>
-      </div>
-    </div>
-  )
-}
 
 export function Settings() {
   const page = useStore((s) => s.settings) ?? 'appearance'
@@ -289,92 +259,28 @@ function GeneralPage() {
 
 /** „Darstellung“: preview, design, accent, view and chat list; every change applies at once. */
 function AppearancePage() {
-  const { theme, accent, dark, layout, splitChats } = useAppearance()
+  const { splitChats } = useAppearance()
   const sortOrder = useStore((s) => s.sortOrder)
   return (
     <>
-      <div className="appearance-preview" aria-hidden>
-        {layout === 'compact' ? (
-          <>
-            <CompactPreviewRow name="Lena" time="14:02" text="Wie gefällt dir die neue Farbe?" />
-            <CompactPreviewRow name="Du" time="14:03" text="Sieht gut aus!" />
-          </>
-        ) : (
-          <>
-            <div className="msg other first last">
-              <div className="msg-col">
-                <div className="bubble">Wie gefällt dir die neue Farbe?</div>
-              </div>
-            </div>
-            <div className="msg own first last">
-              <div className="msg-col">
-                <div className="bubble">Sieht gut aus!</div>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
+      <AppearancePreview />
       <section className="settings-section">
         <h3 className="settings-heading" id="settings-theme">
           Design
         </h3>
-        <div className="choice-list settings-choices" role="radiogroup" aria-labelledby="settings-theme">
-          {THEMES.map((t) => (
-            <button
-              key={t.theme}
-              role="radio"
-              aria-checked={theme === t.theme}
-              className="choice"
-              onClick={() => setAppearance(t.theme, accent)}
-            >
-              <span className={`radio${theme === t.theme ? ' on' : ''}`} aria-hidden />
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <ThemeChoice labelledBy="settings-theme" />
       </section>
       <section className="settings-section">
         <h3 className="settings-heading" id="settings-accent">
           Akzentfarbe
         </h3>
-        <div className="swatches" role="group" aria-labelledby="settings-accent">
-          {ACCENTS.map((a) => {
-            const on = a.id === accent
-            const color = dark ? a.dark.accent : a.light.accent
-            return (
-              <button
-                key={a.id}
-                className={`swatch${on ? ' on' : ''}`}
-                style={{ background: color, color }}
-                aria-label={on ? `${a.name}, ausgewählt` : a.name}
-                title={a.name}
-                onClick={() => setAppearance(theme, a.id)}
-              >
-                {on && (
-                  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-                    <path fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" d="M6 12.5l4 4 8-9" />
-                  </svg>
-                )}
-              </button>
-            )
-          })}
-        </div>
+        <AccentSwatches labelledBy="settings-accent" />
       </section>
       <section className="settings-section">
         <h3 className="settings-heading" id="settings-layout">
           Ansicht
         </h3>
-        <div className="choice-list settings-choices" role="radiogroup" aria-labelledby="settings-layout">
-          {LAYOUTS.map((l) => (
-            <button key={l.layout} role="radio" aria-checked={layout === l.layout} className="choice" onClick={() => setLayout(l.layout)}>
-              <span className={`radio${layout === l.layout ? ' on' : ''}`} aria-hidden />
-              <span className="settings-text">
-                <span>{l.label}</span>
-                {l.sub && <span className="person-sub wrap">{l.sub}</span>}
-              </span>
-            </button>
-          ))}
-        </div>
+        <LayoutChoice labelledBy="settings-layout" />
       </section>
       <section className="settings-section">
         <h3 className="settings-heading">Chatliste</h3>

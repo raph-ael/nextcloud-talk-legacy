@@ -3,8 +3,11 @@ import { cancelAddAccount } from '../store'
 import { toast } from '../call/store'
 import appIcon from '../../../../resources/icons/128x128.png'
 
-/** The first sign-in, and „Konto hinzufügen“ (`adding`) while the other accounts go on. */
-export function Login({ adding = false }: { adding?: boolean }) {
+/**
+ * The first sign-in, „Konto hinzufügen“ (`adding`) while the other accounts go on, and the
+ * second step of the setup of the first start (`onBack`, docs/settings.md).
+ */
+export function Login({ adding = false, onBack }: { adding?: boolean; onBack?: () => void }) {
   const [server, setServer] = useState('')
   const [waiting, setWaiting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,21 +38,22 @@ export function Login({ adding = false }: { adding?: boolean }) {
     }
   }
 
-  // Esc leads back to the chats like „Abbrechen“.
+  // Esc leads back like „Abbrechen“ (to the chats) and „Zurück“ (to the setup; not while waiting).
+  const back = adding ? cancelAddAccount : waiting ? undefined : onBack
   useEffect(() => {
-    if (!adding) return
+    if (!back) return
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !e.defaultPrevented) cancelAddAccount()
+      if (e.key === 'Escape' && !e.defaultPrevented) back?.()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [adding])
+  }, [back])
 
   return (
     <div className="login">
       <form className="login-card" onSubmit={submit}>
         <img className="login-logo" src={appIcon} width={64} height={64} alt="" aria-hidden draggable={false} />
-        <h1>{adding ? 'Konto hinzufügen' : 'Willkommen'}</h1>
+        <h1>{adding ? 'Konto hinzufügen' : onBack ? 'Anmelden' : 'Willkommen'}</h1>
         {waiting ? (
           <>
             <p className="muted">Bestätige die Anmeldung im Browser-Fenster, das sich gerade geöffnet hat.</p>
@@ -74,10 +78,16 @@ export function Login({ adding = false }: { adding?: boolean }) {
               Anmelden
             </button>
             {error && <p className="error">{error}</p>}
-            {adding && (
+            {adding ? (
               <button type="button" className="button-secondary" onClick={cancelAddAccount}>
                 Abbrechen
               </button>
+            ) : (
+              onBack && (
+                <button type="button" className="button-secondary" onClick={onBack}>
+                  Zurück
+                </button>
+              )
             )}
           </>
         )}

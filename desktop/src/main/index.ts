@@ -215,6 +215,8 @@ interface Settings {
   layout: Layout
   /** „Gruppen und Direktchats trennen“ (docs/categories.md). */
   splitChats: boolean
+  /** The setup of the first start is done (docs/settings.md); it never comes back. */
+  setupDone: boolean
 }
 
 const THEMES: readonly Theme[] = ['system', 'light', 'dark']
@@ -228,6 +230,7 @@ function loadSettings(): Settings {
     openAtLogin: false,
     layout: 'bubbles',
     splitChats: true,
+    setupDone: false,
   }
   try {
     const stored = { ...defaults, ...(JSON.parse(readFileSync(settingsFile, 'utf8')) as Partial<Settings>) }
@@ -236,6 +239,7 @@ function loadSettings(): Settings {
     stored.openAtLogin = stored.openAtLogin === true
     if (!LAYOUTS.includes(stored.layout)) stored.layout = 'bubbles'
     stored.splitChats = stored.splitChats !== false
+    stored.setupDone = stored.setupDone === true
     return stored
   } catch {
     return defaults
@@ -251,6 +255,13 @@ function saveSettings(): void {
   } catch (err) {
     console.warn('saving settings failed:', (err as Error).message)
   }
+}
+
+/** With „Weiter“ in the setup, or as soon as there is an account (docs/settings.md). */
+function finishSetup(): void {
+  if (settings.setupDone) return
+  settings.setupDone = true
+  saveSettings()
 }
 
 /**
@@ -693,6 +704,7 @@ async function addAccount(server: string): Promise<'added' | 'duplicate'> {
       stale.secret = persist ? encrypt(creds.appPassword) : ''
       stale.loginName = creds.loginName
       saveAccounts()
+      finishSetup()
       bootRuntime(createRuntime(stale, creds.appPassword), creds.appPassword)
       switchTo(stale.id, true)
       updateBadges()
@@ -713,6 +725,7 @@ async function addAccount(server: string): Promise<'added' | 'duplicate'> {
     }
     list.accounts.push(stored)
     saveAccounts()
+    finishSetup()
     bootRuntime(createRuntime(stored, creds.appPassword), creds.appPassword)
     switchTo(id, true)
     updateBadges()
@@ -1656,6 +1669,8 @@ function registerIpc(): void {
   ipcMain.handle('talk:appearance', () => appearance())
   ipcMain.handle('talk:setAppearance', (_e, theme: Theme, accent: string) => setAppearance(theme, accent))
   ipcMain.handle('talk:setLayout', (_e, layout: Layout) => setLayout(layout))
+  ipcMain.handle('talk:setupDone', () => settings.setupDone)
+  ipcMain.handle('talk:finishSetup', () => finishSetup())
   ipcMain.handle('talk:setSplitChats', (_e, on: boolean) => setSplitChats(on))
   ipcMain.handle('talk:closeToTray', () => settings.closeToTray)
   ipcMain.handle('talk:setCloseToTray', (_e, on: boolean) => setCloseToTray(!!on))
@@ -1988,6 +2003,8 @@ if (!app.requestSingleInstanceLock()) {
     const dev = devAccounts()
     if (dev.length) startDevAccounts(dev)
     else startStoredAccounts()
+    // Who uses the app already never sees the setup of the first start.
+    if (list.accounts.length > 0) finishSetup()
     installAutoUpdate()
     if (process.platform === 'linux' && settings.openAtLogin) applyOpenAtLogin()
     // Without a tray nothing would bring a hidden window back.

@@ -231,6 +231,106 @@ button {
   margin: 0 0 6px;
 }
 
+/* ---------- setup of the first start (docs/settings.md) ---------- */
+.welcome {
+  height: 100%;
+  display: flex;
+  overflow-y: auto;
+  background: var(--bg-elev);
+}
+/* `margin: auto` centres; a window lower than the card scrolls from the card's top. */
+.welcome-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: auto;
+  padding: 8px 0;
+}
+.welcome .login {
+  display: block;
+  height: auto;
+}
+/* Tighter than the sign-in: the card fits into the window as it opens (1100 × 760, less its title bar). */
+.setup-card {
+  width: min(420px, 92vw);
+  gap: 10px;
+  padding: 22px 28px;
+}
+.setup-card h1,
+.setup-card p {
+  margin: 0;
+}
+.setup-card .appearance-preview,
+.setup-group {
+  align-self: stretch;
+  text-align: left;
+}
+.setup-card .appearance-preview {
+  padding: 6px 14px;
+}
+.setup-group h2 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.setup-card .swatches {
+  justify-content: space-between;
+  gap: 10px 0;
+  padding: 0;
+}
+.setup-card .swatch.on {
+  box-shadow:
+    0 0 0 3px var(--bg),
+    0 0 0 5px currentColor;
+}
+.setup-card .button-primary {
+  margin-top: 2px;
+}
+.setup-note {
+  font-size: 12px;
+  text-wrap: balance;
+}
+/* A radio group in one row: equally wide buttons, the chosen one in the accent. */
+.choice-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 8px;
+}
+.choice-pill {
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.choice-pill:hover {
+  background: var(--fill);
+}
+.choice-pill.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.choice-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.steps {
+  display: flex;
+  gap: 8px;
+}
+.steps span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.steps span.on {
+  background: var(--accent);
+}
+
 /* ---------- layout ---------- */
 .app {
   position: relative;

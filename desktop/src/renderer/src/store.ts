@@ -93,6 +93,8 @@ export function countsAsUnread(m: UiMessage, from: number): boolean {
 
 export interface State {
   session: 'loading' | 'loggedOut' | 'ready'
+  /** The setup of the first start comes before the sign-in (docs/settings.md), until an account is there. */
+  firstRun: boolean
   /** The account shown (docs/accounts.md). */
   account: AccountInfo | null
   /** All signed-in accounts in the order of signing in, with their numbers. */
@@ -139,6 +141,7 @@ export type SettingsPage = 'general' | 'appearance' | 'categories' | 'about'
 
 let state: State = {
   session: 'loading',
+  firstRun: false,
   account: null,
   accounts: [],
   adding: false,
@@ -350,7 +353,8 @@ export function handleEvent(e: TalkEvent): void {
         window.clearTimeout(connectionTimer)
         connectionTimer = 0
         resetSearch()
-        set({ ...EMPTY, session: 'loggedOut', account: null, accounts: [], adding: false, settings: null, connection: 'connecting', connectionHeld: false })
+        // Signed out of the last account: the sign-in alone, never the setup again.
+        set({ ...EMPTY, session: 'loggedOut', firstRun: false, account: null, accounts: [], adding: false, settings: null, connection: 'connecting', connectionHeld: false })
       } else if (state.account?.id === e.account.id) setConnection(e.connection, { session: 'ready', account: e.account })
       else {
         // Another account (docs/accounts.md „Wechseln“): its list at once, nothing of the
@@ -756,12 +760,13 @@ export async function boot(): Promise<void> {
     window.talk.networkLost()
     window.talk.networkChanged()
   })
-  const [shown, accounts] = await Promise.all([window.talk.account(), window.talk.accounts()])
+  const [shown, accounts, setupDone] = await Promise.all([window.talk.account(), window.talk.accounts(), window.talk.setupDone()])
   if (state.accounts.length === 0) set({ accounts: accounts.accounts })
   // An event may have been quicker (a switch, the start finishing).
   if (state.session !== 'loading') return
   if (!shown) {
-    set({ session: 'loggedOut' })
+    // In one step: the sign-in never flashes before the setup.
+    set({ session: 'loggedOut', firstRun: !setupDone })
     return
   }
   setConnection(shown.connection, { session: 'ready', account: shown.account, rooms: shown.rooms })

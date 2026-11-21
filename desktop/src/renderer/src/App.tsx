@@ -3,6 +3,7 @@ import { closeRoom, closeSettings, focusSearch, getState, openCompose, openSetti
 import { GroupInfo } from './components/GroupInfo'
 import { Settings } from './components/Settings'
 import { Login } from './components/Login'
+import { Welcome } from './components/Welcome'
 import { cycleRoom, Sidebar } from './components/Sidebar'
 import { Chat } from './components/Chat'
 import { CallLayer, ReturnToCallBar } from './call/CallScreen'
@@ -76,6 +77,7 @@ export function App() {
   const groupInfo = useStore((s) => s.groupInfo)
   const settings = useStore((s) => s.settings)
   const adding = useStore((s) => s.adding)
+  const firstRun = useStore((s) => s.firstRun)
   // Tokens of different servers overlap: another account means another chat.
   const accountKey = useStore((s) => s.account?.id ?? '')
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -128,7 +130,8 @@ export function App() {
   }, [])
 
   if (session === 'loading') return <div className="splash" />
-  if (session === 'loggedOut') return <Login />
+  // The setup of the first start comes before the sign-in (docs/settings.md).
+  if (session === 'loggedOut') return firstRun ? <Welcome /> : <Login />
   if (adding) {
     // „Konto hinzufügen“: the other accounts go on, a call keeps its view.
     return (

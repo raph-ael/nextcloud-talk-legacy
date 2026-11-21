@@ -826,6 +826,9 @@ export interface TalkApi {
   /** Both answer with `appearanceChanged` too. */
   setLayout(layout: Layout): Promise<void>
   setSplitChats(on: boolean): Promise<void>
+  /** The setup of the first start (docs/settings.md): done, and „Weiter“ in its first step. */
+  setupDone(): Promise<boolean>
+  finishSetup(): Promise<void>
   closeToTray(): Promise<boolean>
   setCloseToTray(on: boolean): Promise<void>
   /** „Beim Anmelden starten“ (docs/notifications.md); null where there is no such switch (Flatpak). */
