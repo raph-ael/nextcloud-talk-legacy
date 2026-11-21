@@ -449,7 +449,7 @@ struct ChatView: View {
                 .accessibilityLabel("Im Chat suchen")
                 .accessibilityIdentifier("chat-search")
         } }
-        if !searching { ToolbarItem(placement: .topBarTrailing) {
+        if !searching, room?.canCall == true { ToolbarItem(placement: .topBarTrailing) {
             let inCall = CallController.shared.call?.token == token
             Button {
                 CallController.shared.start(token: token, name: room?.name ?? "")

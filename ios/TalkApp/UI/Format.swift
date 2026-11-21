@@ -180,4 +180,7 @@ extension MessageView {
 extension RoomView {
     /// One-to-one (1) and note-to-self (6) conversations show no author names.
     var isGroup: Bool { roomType != 1 && roomType != 6 }
+    /// The call button: one-to-one, groups and public conversations (1, 2, 3); not the
+    /// changelog (4), a former one-to-one (5) or note-to-self (6), as on the desktop.
+    var canCall: Bool { [1, 2, 3].contains(roomType) }
 }
