@@ -49,8 +49,10 @@ const DISCONNECTED_GRACE: Duration = Duration::from_secs(4);
 const OFFER_RETRY: Duration = Duration::from_secs(8);
 /// A failed `requestoffer` (publisher not ready on the MCU) is repeated after this.
 const OFFER_RETRY_AFTER_ERROR: Duration = Duration::from_secs(1);
-/// Somebody who just joined is still setting up their publisher; subscribing right away
-/// makes the HPB wait 10 s and fail (race in its "publisher connected" waiter).
+/// Somebody who just joined is still setting up their publisher. A signaling server before
+/// 2.2 loses a subscription asked for in that moment: it waits 10 s and fails (race in its
+/// "publisher connected" waiter). Newer ones answer as soon as the publisher sends
+/// (`proto::waits_for_publisher`, docs/calls.md "Ablauf").
 const NEWCOMER_SUBSCRIBE_DELAY: Duration = Duration::from_millis(1500);
 const MESH_OFFER_FALLBACK: Duration = Duration::from_secs(10);
 /// The HPB closes a stopped screen publisher one second after `unshareScreen`; a new one
@@ -308,6 +310,8 @@ pub(crate) struct Actor {
     resume_id: String,
     nc_session: String,
     mcu: bool,
+    /// The signaling server holds a subscription until the publisher sends.
+    waits_for_publisher: bool,
     msg_seq: u64,
     queued: Vec<Value>,
     last_rx: Instant,
@@ -435,6 +439,7 @@ impl Actor {
             resume_id: String::new(),
             nc_session: String::new(),
             mcu: false,
+            waits_for_publisher: false,
             msg_seq: 0,
             queued: Vec::new(),
             last_rx: now,
@@ -651,6 +656,7 @@ impl Actor {
             .as_array()
             .map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
+        self.waits_for_publisher = proto::waits_for_publisher(welcome["welcome"]["version"].as_str().unwrap_or_default());
         self.ws = Some(ws);
         self.last_rx = Instant::now();
         self.ping_sent = None;
@@ -664,13 +670,7 @@ impl Actor {
         let settings = self
             .abortable(async move { client.signaling_settings(Some(&token)).await })
             .await??;
-        if settings.signaling_mode != "external" {
-            return Err(Stop::Err(Error::Call {
-                code: "no-hpb".into(),
-                message: "Der Server hat kein High Performance Backend".into(),
-            }));
-        }
-        Ok(settings)
+        hpb_settings(settings)
     }
 
     fn ice_servers(&self) -> Vec<IceServer> {
@@ -682,9 +682,14 @@ impl Actor {
 
     /// New signaling session, room and call. `first`: initial setup (checks, ringing).
     async fn connect_full(&mut self, first: bool) -> Step<()> {
-        if first {
+        let mut settings = if first {
+            // Both at once: each is a round trip to the server before anything rings.
             let client = self.client.clone();
-            if let Ok(caps) = self.abortable(async move { client.capabilities().await }).await? {
+            let token = self.token();
+            let (caps, settings) = self
+                .abortable(async move { tokio::join!(client.capabilities(), client.signaling_settings(Some(&token))) })
+                .await?;
+            if let Ok(caps) = caps {
                 let call = &caps["capabilities"]["spreed"]["config"]["call"];
                 if call["end-to-end-encryption"].as_bool() == Some(true) {
                     return Err(Stop::End(failed(
@@ -699,8 +704,10 @@ impl Actor {
                 self.consent_config = call["recording-consent"].as_i64().unwrap_or(0);
             }
             self.fetch_names();
-        }
-        let mut settings = self.fetch_settings().await?;
+            hpb_settings(settings?)?
+        } else {
+            self.fetch_settings().await?
+        };
         let url = proto::signaling_url(&settings.server)
             .ok_or_else(|| Stop::Err(signaling_err("no signaling server in settings")))?;
         let backend = format!(
@@ -1330,7 +1337,7 @@ impl Actor {
                         .unwrap_or_default();
                     let not_before = self
                         .in_call_since
-                        .filter(|t| t.elapsed() > Duration::from_secs(1))
+                        .filter(|t| !self.waits_for_publisher && t.elapsed() > Duration::from_secs(1))
                         .map(|_| Instant::now() + NEWCOMER_SUBSCRIBE_DELAY);
                     self.others.insert(sid.clone(), Other::new(u, name, not_before));
                     self.ever_joined = true;
@@ -2560,6 +2567,17 @@ impl MediaEngine for NoMedia {
     fn set_camera_enabled(&self, _: bool) {}
     fn start_audio(&self, _: String) {}
     fn stop_audio(&self, _: String) {}
+}
+
+/// Calls need the High Performance Backend.
+fn hpb_settings(settings: SignalingSettings) -> Step<SignalingSettings> {
+    if settings.signaling_mode != "external" {
+        return Err(Stop::Err(Error::Call {
+            code: "no-hpb".into(),
+            message: "Der Server hat kein High Performance Backend".into(),
+        }));
+    }
+    Ok(settings)
 }
 
 fn signaling_err(message: &str) -> Error {

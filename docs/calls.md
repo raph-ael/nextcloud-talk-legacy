@@ -453,7 +453,7 @@ stopScreen()                                nur Desktop (Bildschirmfreigabe)
 ## Ablauf (zur Orientierung, macht alles der Kern)
 
 **Ausgehend mit MCU:**
-1. Signaling-Settings holen (frische TURN-Daten).
+1. Signaling-Settings (frische TURN-Daten) und Capabilities zugleich holen.
 2. Websocket `hello`.
 3. `POST room/{t}/participants/active`.
 4. WS `room`, auf Bestätigung warten.
@@ -463,6 +463,11 @@ stopScreen()                                nur Desktop (Bildschirmfreigabe)
 7. Für jede Session mit Ton im Anruf: `requestoffer` → Offer vom MCU →
    `createPeer(subscriber)` + `setRemoteDescription(offer)` + `createAnswer` → Answer an den
    MCU.
+8. Kommt jemand neu dazu, baut er seinen Publisher erst auf:
+   - Signaling-Server ab 2.2 (Version im `welcome` des Websockets): `requestoffer` geht
+     sofort hinaus. Der Server hält die Anfrage und antwortet, sobald der Publisher sendet.
+   - Ältere oder unbekannte Version: `requestoffer` erst nach 1,5 s. Diese Server verlieren
+     eine so frühe Anfrage, warten 10 s und melden einen Fehler.
 
 **Eingehend:**
 1. Push, notify_push oder Raumliste melden den Anruf → `incoming`.

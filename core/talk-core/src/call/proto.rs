@@ -10,6 +10,18 @@ pub(crate) const ROOM_TYPE: &str = "video";
 /// Room type of screen shares (a second stream per session).
 pub(crate) const SCREEN: &str = "screen";
 
+/// Whether a signaling server of this version (from its `welcome`) holds a subscription
+/// to a publisher that is not sending yet and answers once it does. Seen with 2.2.0;
+/// older or unknown versions get the request a moment later instead.
+pub(crate) fn waits_for_publisher(version: &str) -> bool {
+    let mut parts = version.trim_start_matches('v').split(|c: char| !c.is_ascii_digit());
+    let mut number = || parts.next().and_then(|p| p.parse::<u32>().ok());
+    match (number(), number()) {
+        (Some(major), Some(minor)) => (major, minor) >= (2, 2),
+        _ => false,
+    }
+}
+
 pub(crate) fn hello_v2(id: &str, backend_url: &str, token: &str) -> Value {
     json!({"id": id, "type": "hello", "hello": {
         "version": "2.0",
@@ -232,6 +244,17 @@ pub(crate) fn call_users(list: &Value) -> Vec<CallUser> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newer_signaling_servers_wait_for_a_publisher() {
+        assert!(waits_for_publisher("2.2.0~docker"));
+        assert!(waits_for_publisher("v2.3.1"));
+        assert!(waits_for_publisher("3.0.0"));
+        assert!(!waits_for_publisher("2.1.1~docker"));
+        assert!(!waits_for_publisher("1.3.2"));
+        assert!(!waits_for_publisher(""));
+        assert!(!waits_for_publisher("unknown"));
+    }
 
     #[test]
     fn signaling_url_forms() {
