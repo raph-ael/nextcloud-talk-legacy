@@ -81,6 +81,14 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.11" date="2026-11-21" type="development">
+      <description>
+        <p>Die App lädt den Verlauf für die Suche nicht mehr endlos nach. In Chats mit importierten Nachrichten fragte sie den Server mehrmals pro Sekunde, solange sie offen war. Das ist behoben.</p>
+        <p>Neue Konten: Meldest du dich mit einem frisch angelegten Konto zuerst in Wolkenfunk an, entstehen „Notizen an mich“ und die Beispiel-Chats nicht mehr doppelt.</p>
+        <p>Anrufe: Nach dem Annehmen hört der Anrufer die andere Seite gut eine Sekunde früher.</p>
+        <p>„Notizen an mich“ hat ein eigenes Bild. Bei Notizen, Talk-Updates und ehemaligen Einzelchats gibt es keinen Anruf-Knopf mehr.</p>
+      </description>
+    </release>
     <release version="0.6.10" date="2026-11-20" type="development">
       <description>
         <p>Android: Die App stürzt nicht mehr ab, wenn sie bei Google kein Push-Token bekommt. Das betraf Geräte ohne Google-Dienste bei jedem Start und neue Installationen in Netzen, die Google sperren.</p>
