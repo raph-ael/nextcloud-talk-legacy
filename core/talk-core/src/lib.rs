@@ -34,6 +34,8 @@ pub mod outbox;
 pub mod push;
 mod push_l10n;
 pub mod search;
+#[cfg(test)]
+pub(crate) mod testing;
 pub mod voice;
 
 pub use accounts::{AccountIdentity, BadgeView, account_key, resolve_account, revoke_app_password, server_key};

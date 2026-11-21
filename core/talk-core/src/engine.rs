@@ -415,6 +415,9 @@ pub struct Engine {
     pub(crate) call_mark: Mutex<Option<i64>>,
     /// One look at the notifications at a time, so two triggers do not report twice.
     pub(crate) incoming_lock: tokio::sync::Mutex<()>,
+    /// One request for the chat list at a time until the first list is there
+    /// (docs/connection.md, "Die erste Chatliste").
+    first_list: tokio::sync::Mutex<()>,
     /// Runtime of `start`, for spawning from synchronous calls.
     pub(crate) runtime: OnceLock<tokio::runtime::Handle>,
     weak: Weak<Self>,
@@ -472,6 +475,7 @@ impl Engine {
             refresh_again: AtomicBool::new(false),
             call_mark: Mutex::new(call_mark),
             incoming_lock: tokio::sync::Mutex::new(()),
+            first_list: tokio::sync::Mutex::new(()),
             runtime: OnceLock::new(),
             weak: weak.clone(),
         })
@@ -500,6 +504,7 @@ impl Engine {
             }
         });
         self.await_first_answer();
+        let first_list = self.first_list_gate().await;
         // User id, room list and server features in parallel: saves round trips on cold start.
         let (user, rooms, caps, tags, _) = tokio::join!(
             self.client.current_user(),
@@ -519,6 +524,7 @@ impl Engine {
         // empty list means "still loading" to the platform (docs/connection.md).
         let user = user.map(|u| self.set_user(u));
         let first = rooms.map(|batch| self.apply_rooms(batch, true));
+        drop(first_list);
         self.track(&user);
         self.track(&first);
         if first.is_err() && (user.is_err() || !self.list_known()) {
@@ -823,7 +829,21 @@ impl Engine {
         self.sorted_views(&st.rooms)
     }
 
+    /// Held while the first chat list of this account is fetched. A server asked twice
+    /// at once by a new account creates its default chats twice ("Notizen an mich", the
+    /// sample conversation): it looks whether they exist and creates them without a lock.
+    /// Once a list is known, requests may overlap again, so a retry never waits behind a
+    /// request that hangs.
+    async fn first_list_gate(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        if self.list_known() {
+            return None;
+        }
+        Some(self.first_list.lock().await)
+    }
+
     pub async fn refresh_rooms(&self, full: bool) -> Result<()> {
+        // Before `since`: whoever waited here asks only for what changed after the first list.
+        let _first_list = self.first_list_gate().await;
         let since = if full {
             None
         } else {
@@ -2331,5 +2351,45 @@ mod tests {
         let forbidden = Error::Http { status: 403, message: String::new() };
         assert_eq!(reaction_error_text(&forbidden), "Keine Berechtigung für Reaktionen");
         assert_eq!(reaction_error_text(&Error::Decode("x".into())), "Reaktion fehlgeschlagen");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_first_chat_list_is_asked_for_once_at_a_time() {
+        use crate::testing::{Reply, param};
+        use std::sync::atomic::AtomicUsize;
+
+        // A server that takes its time with the list, as one does that creates the default
+        // chats of a new account, and counts who asks at the same time.
+        let asking = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let (a, m) = (asking.clone(), most.clone());
+        let server = crate::testing::serve(move |path| {
+            if path.contains("/v4/room?") {
+                m.fetch_max(a.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(200));
+                a.fetch_sub(1, Ordering::SeqCst);
+                return Reply::ocs(serde_json::json!([])).header("X-Nextcloud-Talk-Modified-Before", 100);
+            }
+            if path.contains("/cloud/user") {
+                return Reply::ocs(serde_json::json!({ "id": "me", "displayname": "Me" }));
+            }
+            Reply::status(404)
+        });
+        let engine = crate::testing::engine(&server, None);
+        // The window comes to the front while the session starts.
+        let (started, refreshed) = tokio::join!(engine.start(), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            engine.refresh_rooms(false).await
+        });
+        assert!(started.is_ok() && refreshed.is_ok());
+        assert_eq!(most.load(Ordering::SeqCst), 1);
+        // The one who waited asks for what changed since the first list.
+        let lists = server.seen("/v4/room?");
+        assert_eq!(lists.iter().map(|p| param(p, "modifiedSince")).collect::<Vec<_>>(), [None, Some("100".into())]);
+
+        // With a list the requests overlap again: a retry never waits behind one that hangs.
+        let _ = tokio::join!(engine.refresh_rooms(true), engine.refresh_rooms(true));
+        assert_eq!(most.load(Ordering::SeqCst), 2);
+        engine.shutdown();
     }
 }

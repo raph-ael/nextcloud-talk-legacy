@@ -28,6 +28,14 @@ Eine Sitzung beginnt als `connecting`. Dafür kommt kein Ereignis: Die Plattform
 - Der Kern meldet `online` nie ohne Chatliste: Er trägt erst die Liste ein (`roomsChanged`) und meldet dann `online`, beim Start wie bei jedem Neuversuch. Antwortet ein anderer Abruf früher, bleibt der Zustand stehen, bis die Liste da ist. Eine leere Liste bei `online` heißt also wirklich „keine Chats“.
 - Kommt in den ersten 8 s nach dem Start gar keine Antwort, meldet er `offline`.
 
+### Die erste Chatliste
+Solange ein Konto noch keine Chatliste hat (weder vom Server noch aus dem Cache), läuft immer nur ein Abruf der Liste. Jeder weitere wartet, bis der erste eingetragen ist, und fragt dann nur noch nach dem, was sich seither geändert hat.
+
+- **Warum:** Nextcloud Talk legt die Standard-Chats eines neuen Kontos („Notizen an mich“, die Beispiel-Unterhaltung „Los geht's!“) beim ersten Abruf der Liste an. Es prüft dabei ohne Sperre, ob es sie schon gibt. Zwei Abrufe zur selben Zeit legen beide an, das Konto hat sie dann doppelt.
+- **Wie es dazu kam:** Der Start der Sitzung holt die Liste. Kommt in diesem Moment das Fenster nach vorn (nach der Anmeldung im Browser ist das die Regel), holt `networkChanged()` sie auch.
+- Sobald eine Liste da ist, dürfen sich Abrufe wieder überschneiden. Ein Neuversuch wartet so nie hinter einem Abruf, der hängt.
+- Chats, die schon doppelt sind, bleiben es. Sie lassen sich wie jeder Chat löschen.
+
 ### Was die Plattform beisteuert
 - `networkChanged()` bei jedem Netzwechsel und immer, wenn die App in den Vordergrund kommt. Nach dem Aufwachen sind offene Verbindungen oft tot; der Abruf zeigt das sofort, und der Neuversuch läuft, bevor jemand etwas sieht.
 - `networkLost()`, wenn das System meldet, dass kein Netz mehr da ist (Flugmodus, WLAN aus ohne Mobilfunk). Nicht bei einem Wechsel von einem Netz ins andere. Der Aufruf fasst Anrufe und Postausgang nicht an.
