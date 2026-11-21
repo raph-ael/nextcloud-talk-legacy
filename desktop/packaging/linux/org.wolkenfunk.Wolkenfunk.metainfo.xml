@@ -81,6 +81,12 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.12" date="2026-11-21" type="development">
+      <description>
+        <p>Desktop: Beim ersten Start fragt Wolkenfunk vor der Anmeldung, wie deine Chats aussehen sollen: als Sprechblasen oder kompakt. Zwei kleine Bilder zeigen den Unterschied.</p>
+        <p>Wer Wolkenfunk schon nutzt, sieht die Frage nicht. Die Ansicht lässt sich wie bisher in den Einstellungen unter „Darstellung“ ändern.</p>
+      </description>
+    </release>
     <release version="0.6.11" date="2026-11-21" type="development">
       <description>
         <p>Die App lädt den Verlauf für die Suche nicht mehr endlos nach. In Chats mit importierten Nachrichten fragte sie den Server mehrmals pro Sekunde, solange sie offen war. Das ist behoben.</p>
