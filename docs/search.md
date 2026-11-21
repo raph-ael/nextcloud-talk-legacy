@@ -92,6 +92,8 @@ Ein Antippen des Zitats in einer Blase springt zur zitierten Nachricht, nach den
 
 - Der Kern lädt den Verlauf aller Chats im Hintergrund, die zuletzt aktiven zuerst. Es läuft immer nur eine Anfrage (200 Nachrichten), mit einer kurzen Pause danach, und keine während eines Anrufs.
 - Der Stand bleibt gespeichert. Nach einem Neustart macht der Kern dort weiter, und was schon geladen ist, ist sofort durchsuchbar.
+- **Reihenfolge:** Der Server blättert nach der Zeit, nicht nach der ID. Meist ist das dasselbe. In einem Chat mit importiertem Verlauf nicht: Dort haben ältere Nachrichten höhere IDs. Der Kern setzt die nächste Seite deshalb dort an, wo der Server die letzte beendet hat (`X-Chat-Last-Given`), und merkt sich diese Stelle. Früher setzte er an der kleinsten geladenen ID an und fragte in solchen Chats dieselbe Seite ohne Ende neu ab.
+- **Sicherheitsnetz:** Ändert eine Anfrage am Index nichts, gibt der Kern den Chat bis zum nächsten Start der App auf, statt sie zu wiederholen.
 - Gespeichert wird je Nachricht nur, was die Suche braucht: Text, Absender und Zeit. Die Datei `search.sqlite` liegt im Datenordner des Kontos neben dem Cache, im privaten App-Speicher und außerhalb von Backups. Sie ist wie der Cache nicht verschlüsselt.
 - Neue Nachrichten sind sofort durchsuchbar: im offenen Chat mit der Nachricht selbst, sonst mit dem nächsten Blick auf die Chatliste.
 - Bearbeiten und Löschen wirken im offenen Chat sofort. In einem Chat, der nicht offen ist, kommen sie mit seiner nächsten Nachricht an, spätestens beim nächsten Start der App.

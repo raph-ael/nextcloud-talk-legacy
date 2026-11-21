@@ -9,6 +9,8 @@
 //!   word finds the word.
 //! - `cover`: the id ranges of a chat that are indexed without a gap. What is missing
 //!   follows from it, and a worker fetches it in the background ([`Engine::search_step`]).
+//! - `older`: where the server ended the last page below a range. The server pages by
+//!   time, and that is not always the order of the ids (imported history).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -291,6 +293,12 @@ enum Op {
         cover: Option<(i64, i64)>,
     },
     Capped(String),
+    /// Below the range that starts at `below`, the next page starts after message `id`.
+    Older {
+        token: String,
+        below: i64,
+        id: i64,
+    },
     Forget(String),
     /// Forget every conversation that is not in the list.
     Keep(Vec<String>),
@@ -381,6 +389,31 @@ impl Index {
 
     pub fn set_capped(&self, token: &str) {
         self.send(Op::Capped(token.to_string()));
+    }
+
+    /// The server ended the page below the range starting at `below` with message `id`.
+    pub fn set_older(&self, token: &str, below: i64, id: i64) {
+        self.send(Op::Older { token: token.to_string(), below, id });
+    }
+
+    /// Everything a step of the worker goes by, after all writes: two steps in a row that
+    /// start from the same answer got nowhere.
+    pub(crate) async fn progress(&self, token: &str, look: bool) -> (bool, Vec<(i64, i64)>, Option<i64>, i64) {
+        self.flush().await;
+        let ranges = self.cover(token);
+        let older = ranges.first().and_then(|(lo, _)| self.older(token, *lo));
+        (look, ranges, older, self.count(token))
+    }
+
+    /// The message the next older page starts after, if the last page was fetched for the
+    /// range that starts at `below`. A range that grew since by other means (it met a
+    /// lower one) starts over at its lowest id.
+    pub fn older(&self, token: &str, below: i64) -> Option<i64> {
+        self.read(|c| {
+            c.prepare_cached("SELECT id FROM older WHERE token = ?1 AND below = ?2")?
+                .query_row(params![token, below], |r| r.get(0))
+                .optional()
+        })
     }
 
     /// The conversation is gone or its history was cleared.
@@ -549,6 +582,7 @@ fn open_db(file: &Path) -> rusqlite::Result<Connection> {
              DROP TABLE IF EXISTS fts;
              DROP TABLE IF EXISTS cover;
              DROP TABLE IF EXISTS capped;
+             DROP TABLE IF EXISTS older;
              CREATE TABLE docs (
                  rowid INTEGER PRIMARY KEY, token TEXT NOT NULL, id INTEGER NOT NULL, ts INTEGER NOT NULL,
                  actor_type TEXT NOT NULL, actor_id TEXT NOT NULL, actor TEXT NOT NULL,
@@ -565,6 +599,12 @@ fn open_db(file: &Path) -> rusqlite::Result<Connection> {
         )?;
         c.pragma_update(None, "user_version", SCHEMA)?;
     }
+    // Added later, and nothing else depends on it: an index made before keeps its content.
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS older (
+             token TEXT PRIMARY KEY, below INTEGER NOT NULL, id INTEGER NOT NULL
+         ) WITHOUT ROWID;",
+    )?;
     // Fails loudly on a corrupt file instead of on the first real query.
     c.query_row("SELECT count(*) FROM cover", [], |_| Ok(()))?;
     Ok(c)
@@ -611,6 +651,7 @@ fn forget(tx: &rusqlite::Transaction, token: &str) -> rusqlite::Result<()> {
     remove_where(tx, "token = ?1", &token)?;
     tx.execute("DELETE FROM cover WHERE token = ?1", [token])?;
     tx.execute("DELETE FROM capped WHERE token = ?1", [token])?;
+    tx.execute("DELETE FROM older WHERE token = ?1", [token])?;
     Ok(())
 }
 
@@ -682,6 +723,10 @@ fn apply(conn: &mut Connection, op: Op) -> rusqlite::Result<()> {
         Op::Capped(token) => {
             tx.execute("INSERT OR IGNORE INTO capped (token) VALUES (?1)", [token])?;
         }
+        Op::Older { token, below, id } => {
+            tx.prepare_cached("INSERT OR REPLACE INTO older (token, below, id) VALUES (?1, ?2, ?3)")?
+                .execute(params![token, below, id])?;
+        }
         Op::Forget(token) => forget(&tx, &token)?,
         Op::Keep(tokens) => {
             let keep: HashSet<&str> = tokens.iter().map(String::as_str).collect();
@@ -695,7 +740,7 @@ fn apply(conn: &mut Connection, op: Op) -> rusqlite::Result<()> {
         }
         Op::Purge(now) => remove_where(&tx, "expires > 0 AND expires <= ?1", &now)?,
         Op::Clear => {
-            tx.execute_batch("DELETE FROM docs; DELETE FROM fts; DELETE FROM cover; DELETE FROM capped;")?;
+            tx.execute_batch("DELETE FROM docs; DELETE FROM fts; DELETE FROM cover; DELETE FROM capped; DELETE FROM older;")?;
         }
     }
     tx.commit()
@@ -907,6 +952,8 @@ impl Engine {
                     if skip.contains(&room.token) {
                         continue;
                     }
+                    // What the index knew of the chat before the last request.
+                    let mut before = None;
                     loop {
                         let Some(engine) = weak.upgrade() else { return };
                         // A call needs the line and the processor.
@@ -916,6 +963,16 @@ impl Engine {
                             continue;
                         }
                         let look = looked.insert(room.token.clone());
+                        // A request that left the index as it was would be made again and
+                        // again, every 150 ms: whatever the reason, this chat waits for
+                        // the next run of the app.
+                        let known = engine.search.progress(&room.token, look).await;
+                        if before.as_ref() == Some(&known) {
+                            tracing::warn!(token = %room.token, "search: the last request changed nothing, giving up on this chat");
+                            skip.insert(room.token.clone());
+                            break;
+                        }
+                        before = Some(known);
                         match engine.search_step(&room.token, look).await {
                             Ok(Step::Done) => break,
                             Ok(Step::Fetched) => {}
@@ -963,7 +1020,10 @@ impl Engine {
             match (ids.clone().min(), ids.max()) {
                 (Some(oldest), Some(newest)) => {
                     let oldest = batch.last_given.map_or(oldest, |given| given.min(oldest));
-                    self.index_batch(token, &batch.messages, (oldest, newest.max(target)));
+                    self.index_batch(token, &batch.messages, Some((oldest, newest.max(target))));
+                    if let Some(end) = page_end(&batch) {
+                        self.search.set_older(token, oldest, end);
+                    }
                 }
                 // An empty chat.
                 _ => self.search.put(token, &[], &[], Some((0, target))),
@@ -974,7 +1034,7 @@ impl Engine {
             let batch = self.guard(self.client.newer_messages(token, hi, SYNC_PAGE as usize - 1).await)?;
             let newest = batch.messages.iter().map(|m| m.id).max().into_iter().chain(batch.last_given).max();
             match newest {
-                Some(newest) => self.index_batch(token, &batch.messages, (hi + 1, newest)),
+                Some(newest) => self.index_batch(token, &batch.messages, Some((hi + 1, newest))),
                 // The list names a message the chat does not hand out: nothing to wait for.
                 None => self.search.put(token, &[], &[], Some((hi + 1, target))),
             }
@@ -990,23 +1050,44 @@ impl Engine {
             self.search.set_capped(token);
             return Ok(Step::Done);
         }
-        let batch = self.guard(self.client.history(token, Some(lo), SYNC_PAGE).await)?;
-        match batch.messages.iter().map(|m| m.id).min() {
-            Some(oldest) => {
-                let oldest = batch.last_given.map_or(oldest, |given| given.min(oldest));
-                self.index_batch(token, &batch.messages, (oldest, lo - 1));
-            }
+        // The server hands out the page before a message in time. Mostly that is the order
+        // of the ids too. In a chat with imported history it is not: an older message can
+        // have a higher id. So the next page starts where the server ended the last one,
+        // not at the lowest id (which asked for the same page for ever).
+        let from = self.search.older(token, lo).unwrap_or(lo);
+        let batch = self.guard(self.client.history(token, Some(from), SYNC_PAGE).await)?;
+        let Some(end) = page_end(&batch).filter(|end| *end != from) else {
             // Nothing older: this is the beginning.
-            None => self.search.put(token, &[], &[], Some((0, lo - 1))),
+            self.index_batch(token, &batch.messages, Some((0, lo - 1)));
+            return Ok(Step::Fetched);
+        };
+        let ids = batch.messages.iter().map(|m| m.id);
+        let lowest = ids.clone().min().map_or(end, |id| id.min(end));
+        let highest = ids.max().map_or(end, |id| id.max(end));
+        if highest < lo {
+            // In the order of the ids as well: the range grows downwards.
+            self.index_batch(token, &batch.messages, Some((lowest, lo - 1)));
+            self.search.set_older(token, lowest, end);
+        } else {
+            // Ids from above the range: the page says nothing about what lies below it.
+            // The range stays, the walk goes on in the server's order to the beginning.
+            self.index_batch(token, &batch.messages, None);
+            self.search.set_older(token, lo, end);
         }
         Ok(Step::Fetched)
     }
 
     /// A page of history with what it says about earlier messages (edits, deletions).
-    fn index_batch(&self, token: &str, messages: &[ChatMessage], cover: (i64, i64)) {
+    fn index_batch(&self, token: &str, messages: &[ChatMessage], cover: Option<(i64, i64)>) {
         let updates = crate::engine::parent_updates(messages);
-        self.index_messages(token, messages, &updates, Some(cover));
+        self.index_messages(token, messages, &updates, cover);
     }
+}
+
+/// The message a page of history ends with on the server: the oldest one in time. The
+/// server names it (it may be one the user does not get to see).
+fn page_end(batch: &crate::client::ChatBatch) -> Option<i64> {
+    batch.last_given.or_else(|| batch.messages.iter().min_by_key(|m| (m.timestamp, m.id)).map(|m| m.id))
 }
 
 /// The sender of a hit from the server. It only gives a title, "{user}" in a one-to-one
@@ -1050,6 +1131,86 @@ mod tests {
 
     fn text(parts: &[SnippetPart]) -> String {
         parts.iter().map(|p| if p.hit { format!("[{}]", p.text) } else { p.text.clone() }).collect()
+    }
+
+    /// A chat as a server hands it out: pages of three, the newest first, in the order
+    /// of time. `ids` are the messages from the oldest to the newest.
+    fn chat_server(ids: &'static [i64]) -> crate::testing::Server {
+        use crate::testing::{Reply, param};
+        crate::testing::serve(move |path| {
+            if !path.contains("/chat/t?") || param(path, "lookIntoFuture").as_deref() != Some("0") {
+                return Reply::status(304);
+            }
+            let known = param(path, "lastKnownMessageId").and_then(|id| id.parse::<i64>().ok());
+            let end = match known {
+                Some(id) => ids.iter().position(|i| *i == id).unwrap_or(0),
+                None => ids.len(),
+            };
+            let page: Vec<_> = (end.saturating_sub(3)..end).rev().collect();
+            let Some(last) = page.last() else { return Reply::status(304) };
+            let messages: Vec<_> = page
+                .iter()
+                .map(|at| {
+                    serde_json::json!({
+                        "id": ids[*at], "token": "t", "actorType": "users", "actorId": "jonas", "actorDisplayName": "Jonas",
+                        "timestamp": 1000 + *at as i64, "message": format!("Nachricht {}", ids[*at]), "messageType": "comment"
+                    })
+                })
+                .collect();
+            Reply::ocs(messages.into()).header("X-Chat-Last-Given", ids[*last])
+        })
+    }
+
+    /// Runs the worker's steps on chat "t" until nothing is missing.
+    async fn fill(engine: &Engine) -> usize {
+        for steps in 0..50 {
+            if engine.search_step("t", false).await.unwrap() == Step::Done {
+                return steps;
+            }
+        }
+        panic!("the worker asks for ever");
+    }
+
+    #[tokio::test]
+    async fn history_in_the_order_of_the_ids_is_fetched_page_by_page() {
+        let server = chat_server(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let engine = crate::testing::engine(&server, Some(crate::testing::data_dir("search-plain")));
+        // Three pages and the request that finds nothing older.
+        assert_eq!(fill(&engine).await, 4);
+        assert_eq!((engine.search.count("t"), engine.search.cover("t")), (8, vec![(0, 8)]));
+        let asked: Vec<_> = server.seen("/chat/t").iter().map(|p| crate::testing::param(p, "lastKnownMessageId")).collect();
+        assert_eq!(asked, [None, Some("6".into()), Some("3".into()), Some("1".into())]);
+    }
+
+    #[tokio::test]
+    async fn imported_history_reaches_the_beginning() {
+        // The oldest messages were imported later: they have higher ids than the ones
+        // that follow them in time. The page before message 10 holds ids above it only.
+        let server = chat_server(&[20, 21, 22, 23, 24, 25, 10, 11, 12, 13, 30, 31, 32, 33]);
+        let engine = crate::testing::engine(&server, Some(crate::testing::data_dir("search-imported")));
+        assert_eq!(fill(&engine).await, 6);
+        assert_eq!((engine.search.count("t"), engine.search.cover("t")), (14, vec![(0, 33)]));
+        // Every page once, each from where the server ended the one before.
+        let asked: Vec<_> = server.seen("/chat/t").iter().map(|p| crate::testing::param(p, "lastKnownMessageId")).collect();
+        let from = |id: i64| Some(id.to_string());
+        assert_eq!(asked, [None, from(31), from(12), from(25), from(22), from(20)]);
+    }
+
+    #[tokio::test]
+    async fn the_walk_through_imported_history_goes_on_after_a_restart() {
+        let server = chat_server(&[20, 21, 22, 23, 24, 25, 10, 11, 12, 13, 30, 31, 32, 33]);
+        let dir = crate::testing::data_dir("search-restart");
+        {
+            let engine = crate::testing::engine(&server, Some(dir.clone()));
+            for _ in 0..4 {
+                assert_eq!(engine.search_step("t", false).await.unwrap(), Step::Fetched);
+            }
+            engine.search.flush().await;
+        }
+        let engine = crate::testing::engine(&server, Some(dir));
+        assert_eq!(fill(&engine).await, 2);
+        assert_eq!((engine.search.count("t"), engine.search.cover("t")), (14, vec![(0, 33)]));
+        assert_eq!(server.seen("/chat/t").len(), 6);
     }
 
     #[test]
