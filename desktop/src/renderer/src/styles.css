@@ -325,7 +325,8 @@ button {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--border);
+  /* The border colour is too faint for a dot on its own in the dark design. */
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
 }
 .steps span.on {
   background: var(--accent);

@@ -152,7 +152,7 @@ Eine Karte in der Mitte des Fensters, wie die Anmeldung, aber breiter (420, höc
 
 ### Schrittanzeige
 
-Unter der Karte stehen in beiden Schritten zwei Punkte (8 groß, Abstand 8): der aktuelle in der Akzentfarbe, der andere in der Randfarbe. Sie sind nicht bedienbar und tragen zusammen die Bezeichnung „Schritt 1 von 2“ bzw. „Schritt 2 von 2“.
+Unter der Karte stehen in beiden Schritten zwei Punkte (8 groß, Abstand 8): der aktuelle in der Akzentfarbe, der andere gedämpft (die gedämpfte Textfarbe mit 45 % Deckkraft). Sie sind nicht bedienbar und tragen zusammen die Bezeichnung „Schritt 1 von 2“ bzw. „Schritt 2 von 2“.
 
 ## Speicherung
 
