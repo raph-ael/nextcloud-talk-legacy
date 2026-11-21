@@ -115,44 +115,71 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
 
 ## Einrichtung beim ersten Start (Desktop)
 
-Wer Wolkenfunk am Desktop zum ersten Mal startet, wählt vor der Anmeldung Akzentfarbe, Design und Ansicht. Android und iOS zeigen wie bisher gleich die Anmeldung.
+Wer Wolkenfunk am Desktop zum ersten Mal startet, wählt vor der Anmeldung in zwei kurzen Schritten Ansicht und Akzentfarbe. Jeder Schritt fragt nur eine Sache. Android und iOS zeigen wie bisher gleich die Anmeldung.
 
 ### Wann sie erscheint
 
 - Nur wenn **kein Konto** angemeldet ist **und** die Einrichtung auf diesem Gerät noch nicht erledigt ist (`setupDone` fehlt oder ist `false`).
-- Erledigt ist sie mit „Weiter“ in Schritt 1 oder sobald ein Konto angemeldet ist, auch bei einem Entwicklungsstart mit `TALK_DEV_*`.
+- Erledigt ist sie mit „Weiter“ in Schritt 2 oder sobald ein Konto angemeldet ist, auch bei einem Entwicklungsstart mit `TALK_DEV_*`.
 - Gibt es beim Start schon ein Konto, gilt sie als erledigt. Wer Wolkenfunk schon nutzt, sieht sie nach einem Update nie.
 - Danach kommt sie nicht wieder, auch nicht nach dem Abmelden des letzten Kontos. Dann erscheint die Anmeldung allein.
-- Wird die App in Schritt 1 beendet, erscheint die Einrichtung beim nächsten Start wieder. Was bis dahin gewählt wurde, bleibt.
+- Wird die App in Schritt 1 oder 2 beendet, beginnt die Einrichtung beim nächsten Start wieder mit Schritt 1. Was bis dahin gewählt wurde, bleibt.
 - „Konto hinzufügen“ zeigt sie nie.
 
-### Schritt 1: Darstellung
+### Gemeinsames
 
-Eine Karte in der Mitte des Fensters, wie die Anmeldung, aber breiter (420, höchstens 92 % der Fensterbreite). Von oben nach unten:
-
-1. Das App-Icon in 64 und der Titel **„Willkommen bei Wolkenfunk“**.
-2. Gedämpft: „Such dir aus, wie Wolkenfunk aussehen soll.“
-3. Die **Vorschau** aus „Darstellung“: eine fremde und eine eigene Nachricht, in der gewählten Ansicht.
-4. **„Akzentfarbe“**: dieselben zehn Farbfelder wie in „Darstellung“, fünf je Reihe.
-5. **„Design“**: „System“, „Hell“, „Dunkel“ als drei gleich breite Knöpfe in einer Reihe.
-6. **„Ansicht“**: „Sprechblasen“, „Kompakt“ als zwei gleich breite Knöpfe in einer Reihe, ohne Untertitel.
-7. Der Knopf **„Weiter“** in der Akzentfarbe.
-8. Gedämpft und klein: „Das kannst du später in den Einstellungen unter „Darstellung“ ändern.“
-
-- Die Knöpfe einer Reihe sind eine Radiogruppe. Der gewählte hat einen Rand in der Akzentfarbe und eine blasse Fläche in der Akzentfarbe, die anderen den normalen Rand.
-- Jede Auswahl gilt sofort und wird gespeichert wie in „Darstellung“. Die Vorgaben sind Blau, System und Sprechblasen.
-- Enter drückt „Weiter“, solange kein anderer Knopf den Fokus hat. Beim Öffnen hat „Weiter“ den Fokus.
+- Jeder Schritt ist eine Karte in der Mitte des Fensters, wie die Anmeldung. Die Karten von Schritt 1 und 2 sind 420 breit, höchstens 92 % der Fensterbreite.
+- Jede Auswahl gilt sofort und wird gespeichert wie in „Darstellung“. Die Vorgaben sind Sprechblasen und Blau.
+- Das Design (System, Hell, Dunkel) fragt die Einrichtung nicht ab. Es folgt dem System und lässt sich in „Darstellung“ ändern.
+- Enter drückt „Weiter“, solange kein anderer Knopf den Fokus hat. Beim Öffnen eines Schritts hat „Weiter“ den Fokus.
 - Ist das Fenster niedriger als die Karte, scrollt der Bildschirm. Nichts wird abgeschnitten, auch nicht im kleinsten Fenster (380 × 480).
 
-### Schritt 2: Anmelden
+### Schritt 1: Ansicht
+
+Von oben nach unten:
+
+1. Das App-Icon in 64 und der Titel **„Willkommen bei Wolkenfunk“**.
+2. Gedämpft: „Wie sollen deine Chats aussehen?“
+3. Zwei **Bildkarten** nebeneinander, gleich breit, mit 12 Abstand: links „Sprechblasen“, rechts „Kompakt“. Jede zeigt oben ein schematisches Bild und darunter ihren Namen.
+4. Der Knopf **„Weiter“** in der Akzentfarbe.
+5. Gedämpft und klein: „Das kannst du später in den Einstellungen ändern.“
+
+**Die Bildkarten:**
+- Beide zusammen sind die Radiogruppe „Ansicht“, jede Karte ist als Ganzes ein Knopf.
+- Die gewählte Karte hat einen 2 starken Rand in der Akzentfarbe und eine blasse Fläche in der Akzentfarbe (12 %). Die andere hat den normalen Rand, 1 stark, und keine Fläche. Die Karte ändert ihre Größe beim Wählen nicht.
+- Der Name steht mittig unter dem Bild, in der gewählten Karte halbfett.
+
+**Die Bilder** sind gezeichnet (SVG), ohne Schrift und ohne echte Inhalte. Sie zeigen ein kleines Fenster mit Chatliste links (etwa ein Drittel) und Chat rechts, getrennt durch eine feine Linie. Alle Flächen kommen aus den Farben der App, sodass die Bilder dem Design und der Akzentfarbe folgen:
+
+| | „Sprechblasen“ | „Kompakt“ |
+|---|---|---|
+| Chatliste | drei Zeilen: ein Kreis, daneben zwei Balken übereinander (Name und Vorschau) | fünf Zeilen: ein kleiner Kreis und ein Balken in einer Zeile |
+| Chat | drei Blasen mit runden Ecken: links eine graue, rechts eine in der Akzentfarbe, links wieder eine graue, unterschiedlich breit | drei Nachrichten untereinander, alle linksbündig: ein kleiner Kreis, daneben ein kurzer kräftigerer Balken (Name) und darunter ein langer Balken (Text); keine Blasen, keine Akzentfläche |
+
+- Graue Flächen nutzen die Füllfarbe der fremden Blase, Balken die gedämpfte Textfarbe mit geringer Deckkraft, die eigene Blase `--bubble-own`.
+- Die Bilder sind für die Bedienhilfe ausgeblendet. Die Bezeichnung der Karte ist ihr Name.
+
+### Schritt 2: Akzentfarbe
+
+Von oben nach unten:
+
+1. Der Titel **„Wähle deine Farbe“**, ohne App-Icon.
+2. Gedämpft: „Sie färbt Knöpfe, Links und deine Nachrichten.“
+3. Die **Vorschau** aus „Darstellung“: eine fremde und eine eigene Nachricht, in der gewählten Ansicht.
+4. Dieselben zehn **Farbfelder** wie in „Darstellung“, fünf je Reihe, ohne Überschrift. Die Gruppe trägt die Bezeichnung „Akzentfarbe“.
+5. Der Knopf **„Weiter“** in der Akzentfarbe.
+6. Der Knopf **„Zurück“** (wie „Abbrechen“ bei „Konto hinzufügen“). Er führt zu Schritt 1. Esc tut dasselbe.
+7. Gedämpft und klein: „Das kannst du später in den Einstellungen ändern.“
+
+### Schritt 3: Anmelden
 
 - Die Anmeldekarte wie bisher, mit dem Titel „Anmelden“ statt „Willkommen“.
-- Unter „Anmelden“ steht der Knopf **„Zurück“** (wie „Abbrechen“ bei „Konto hinzufügen“). Er führt zu Schritt 1, die Auswahl steht noch da. Während auf die Bestätigung im Browser gewartet wird, fehlt er.
+- Unter „Anmelden“ steht der Knopf **„Zurück“**. Er führt zu Schritt 2, die Auswahl steht noch da. Während auf die Bestätigung im Browser gewartet wird, fehlt er.
 - Esc führt ebenfalls zurück, außer während des Wartens.
 
 ### Schrittanzeige
 
-Unter der Karte stehen in beiden Schritten zwei Punkte (8 groß, Abstand 8): der aktuelle in der Akzentfarbe, der andere gedämpft (die gedämpfte Textfarbe mit 45 % Deckkraft). Sie sind nicht bedienbar und tragen zusammen die Bezeichnung „Schritt 1 von 2“ bzw. „Schritt 2 von 2“.
+Unter der Karte stehen in allen Schritten drei Punkte (8 groß, Abstand 8): der aktuelle in der Akzentfarbe, die anderen gedämpft (die gedämpfte Textfarbe mit 45 % Deckkraft). Sie sind nicht bedienbar und tragen zusammen die Bezeichnung „Schritt 1 von 3“, „Schritt 2 von 3“ bzw. „Schritt 3 von 3“.
 
 ## Speicherung
 
@@ -293,7 +320,8 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
 | Farbfeld | „{Farbname}“ bzw. „{Farbname}, ausgewählt“ |
 | Design-Auswahl | Radiogruppe „Design“ |
 | Ansicht-Auswahl (Desktop) | Radiogruppe „Ansicht“ |
-| Schrittanzeige der Einrichtung (Desktop) | „Schritt 1 von 2“ bzw. „Schritt 2 von 2“ |
+| Schrittanzeige der Einrichtung (Desktop) | „Schritt 1 von 3“ bis „Schritt 3 von 3“ |
+| Bildkarten der Einrichtung (Desktop) | Radiogruppe „Ansicht“, jede Karte mit ihrem Namen |
 | „Gruppen und Direktchats trennen“ | Schalter mit Titel und Zustand (Desktop `role="switch"`, Android `Switch`, iOS `Toggle`) |
 | Sortierung | Radiogruppe „Sortierung“ |
 | Zahnrad oben in der Chatliste (Desktop) | „Einstellungen“ |
@@ -311,7 +339,7 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
   - Design umschalten: System, Hell, Dunkel; auch mit offenem Sheet.
   - Alle 10 Farben in hell und dunkel: Knöpfe, eigene Blase, Schalter, Badge, Links.
   - Nach einem Neustart sind die Werte noch da.
-  - Einrichtung beim ersten Start (Desktop), mit einem leeren Datenordner: Sie erscheint, die Vorschau folgt jeder Auswahl, „Weiter“ und „Zurück“ wechseln die Schritte. Nach „Weiter“ und einem Neustart kommt nur die Anmeldung, ohne „Weiter“ kommt die Einrichtung wieder. Mit einem vorhandenen Konto erscheint sie nie, auch nicht nach dem Abmelden.
+  - Einrichtung beim ersten Start (Desktop), mit einem leeren Datenordner: Sie erscheint mit Schritt 1, Bildkarten und Vorschau folgen jeder Auswahl, „Weiter“ und „Zurück“ wechseln die Schritte. Nach „Weiter“ in Schritt 2 und einem Neustart kommt nur die Anmeldung, davor kommt die Einrichtung wieder. Mit einem vorhandenen Konto erscheint sie nie, auch nicht nach dem Abmelden.
   - Das Chat-Menü komplett, jeder Eintrag.
   - Stumm-Anzeige und Badge-Zählung wie in der Tabelle oben.
 - **Kern:** `cargo test -p talk-core -p talk-demo` (Ende-zu-Ende gegen den Demo-Server).
