@@ -2,16 +2,25 @@
 // 425 Hz, 1 s on / 4 s off), connected and hang-up. Loops are scheduled far ahead on the audio
 // clock, so a hidden (throttled) window cannot stretch the rhythm.
 
-import { applySink, speakerId } from './devices'
+import { addOutput, speakerId } from './devices'
 
 let ctx: AudioContext | null = null
-let sink = ''
 
+/**
+ * One context for all tones. It starts on the speaker in use and is registered as an output
+ * of the calls, so a new choice moves it at once and not only with the next tone (the test
+ * tone of the settings would begin on the old speaker).
+ */
 function context(): AudioContext {
-  if (!ctx) ctx = new AudioContext({ latencyHint: 'interactive' })
-  if (sink !== speakerId()) {
-    sink = speakerId()
-    void applySink(ctx, sink)
+  if (!ctx) {
+    const sinkId = speakerId()
+    try {
+      ctx = new AudioContext({ latencyHint: 'interactive', ...(sinkId ? { sinkId } : {}) })
+    } catch {
+      // The device is gone: the system default plays.
+      ctx = new AudioContext({ latencyHint: 'interactive' })
+    }
+    addOutput(ctx)
   }
   if (ctx.state === 'suspended') void ctx.resume()
   return ctx

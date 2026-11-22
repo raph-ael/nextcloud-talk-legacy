@@ -855,6 +855,11 @@ export interface TalkApi {
   /** Camera on/off in the running call; false when the system refused the camera (macOS). */
   setCameraEnabled(on: boolean): Promise<boolean>
   /**
+   * The system's permission before a test in „Audio und Video“ (docs/settings.md): macOS asks
+   * and explains a refusal itself, then `false`. Elsewhere always `true`.
+   */
+  ensureMedia(kind: 'microphone' | 'camera'): Promise<boolean>
+  /**
    * What can be shared, with thumbnails, for the own picker; `null`: the system shows its
    * own dialog instead (Linux/Wayland portal), `getDisplayMedia` right away; `false`: the
    * system does not allow screen recording (macOS), main already explained it.

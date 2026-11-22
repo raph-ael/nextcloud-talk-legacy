@@ -1,11 +1,11 @@
 // Call UI in the main window, after Signal Desktop: incoming-call bar on top, full call view
 // (1:1 big avatar or their video, group tiles), own camera preview, control bar, "back to
-// call" bar while minimized, device menu like Google Meet; screen sharing like Meet (picker
-// with thumbnails, presentation view with the participants beside it).
+// call" bar while minimized, device choice at „Stumm“ and „Kamera“ like Google Meet; screen
+// sharing like Meet (picker with thumbnails, presentation view with the participants beside it).
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import type { CallParticipant, CallScreen as SharedScreen, CallView, RoomView, ScreenSource } from '@shared/core'
-import { useStore } from '../store'
+import { getState, openSettings, setSettingsPage, useStore } from '../store'
 import { Avatar } from '../components/Avatar'
 import {
   accept,
@@ -26,21 +26,8 @@ import {
 } from './store'
 import { cancelScreenPicker, refreshScreenSources, shareScreen, stopScreenShare, useScreenShare } from './screen'
 import { useRemoteVideo } from './engine'
-import {
-  chooseCamera,
-  chooseMicrophone,
-  cameraText,
-  chooseSpeaker,
-  currentTrack,
-  listDevices,
-  mediaState,
-  openCameraPreview,
-  retryCamera,
-  retryMicrophone,
-  subscribeMedia,
-  type DeviceProblem,
-  type Devices,
-} from './devices'
+import { chooseCamera, chooseMicrophone, chooseSpeaker, retryCamera, retryMicrophone, type DeviceProblem } from './devices'
+import { CameraPreview, deviceOptions, MicLevel, useDevices, useMedia } from './DeviceControls'
 import { playTestTone } from './tones'
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -168,10 +155,15 @@ function IncomingCallBar({ call }: { call: CallView }) {
 function CallScreen({ call }: { call: CallView }) {
   const room = useCallRoom(call)
   const account = useCall((s) => s.account) ?? undefined
-  const media = useSyncExternalStore(subscribeMedia, mediaState)
+  const media = useMedia()
   const tiles = call.isGroup && call.participants.length > 0
   const ended = call.state === 'ended'
   const [confirmStop, setConfirmStop] = useState(false)
+  // At most one menu of the bar is open; none after the call ended.
+  const [menu, setMenu] = useState<BarMenu | null>(null)
+  const openMenu = ended ? null : menu
+  const toggleMenu = (m: BarMenu) => setMenu((now) => (now === m ? null : m))
+  const closeMenu = () => setMenu(null)
   const consent = call.recordingConsentPending && !ended
   // 1:1: the other side's video fills the stage while it shows pictures.
   const other = tiles ? null : (call.participants.find((p) => p.video) ?? call.participants[0] ?? null)
@@ -299,18 +291,26 @@ function CallScreen({ call }: { call: CallView }) {
           <ChatsIcon />
           <span>Chats</span>
         </button>
-        <DevicesButton disabled={ended} />
-        <button
-          // Off is the normal state (every call starts without camera): crossed out, not highlighted.
-          className="call-ctl"
-          onClick={toggleCamera}
+        <SplitControl
+          arrowLabel="Kamera wählen"
+          open={openMenu === 'camera'}
           disabled={ended}
-          title={`${call.cameraOn ? 'Kamera ausschalten' : 'Kamera einschalten'} (${MOD}+Umschalt+V)`}
-          aria-label={call.cameraOn ? 'Kamera ausschalten' : 'Kamera einschalten'}
-          aria-pressed={call.cameraOn}
+          onToggle={() => toggleMenu('camera')}
+          onClose={closeMenu}
+          menu={<CameraMenu onClose={closeMenu} />}
         >
-          {call.cameraOn ? <CameraIcon /> : <CameraOffIcon />}
-        </button>
+          <button
+            // Off is the normal state (every call starts without camera): crossed out, not highlighted.
+            className="call-ctl"
+            onClick={toggleCamera}
+            disabled={ended}
+            title={`${call.cameraOn ? 'Kamera ausschalten' : 'Kamera einschalten'} (${MOD}+Umschalt+V)`}
+            aria-label={call.cameraOn ? 'Kamera ausschalten' : 'Kamera einschalten'}
+            aria-pressed={call.cameraOn}
+          >
+            {call.cameraOn ? <CameraIcon /> : <CameraOffIcon />}
+          </button>
+        </SplitControl>
         <button
           className={`call-ctl${sharing ? ' active' : ''}${call.canShareScreen || sharing ? '' : ' unavailable'}`}
           onClick={toggleScreenShare}
@@ -328,17 +328,35 @@ function CallScreen({ call }: { call: CallView }) {
         >
           {sharing ? <StopShareIcon /> : <ShareScreenIcon />}
         </button>
-        {call.canRecord && !ended && <MoreButton call={call} onStop={() => setConfirmStop(true)} />}
-        <button
-          className={`call-ctl${call.muted ? ' active' : ''}`}
-          onClick={toggleMute}
+        {call.canRecord && !ended && (
+          <MoreButton
+            call={call}
+            open={openMenu === 'more'}
+            onToggle={() => toggleMenu('more')}
+            onClose={closeMenu}
+            onStop={() => setConfirmStop(true)}
+          />
+        )}
+        <SplitControl
+          end
+          arrowLabel="Mikrofon und Lautsprecher wählen"
+          open={openMenu === 'audio'}
           disabled={ended}
-          title={`${call.muted ? 'Stummschaltung aufheben' : 'Stummschalten'} (${MOD}+Umschalt+M)`}
-          aria-label={call.muted ? 'Stummschaltung aufheben' : 'Stummschalten'}
-          aria-pressed={call.muted}
+          onToggle={() => toggleMenu('audio')}
+          onClose={closeMenu}
+          menu={<AudioMenu onClose={closeMenu} />}
         >
-          {call.muted ? <MicOffIcon /> : <MicIcon />}
-        </button>
+          <button
+            className={`call-ctl${call.muted ? ' active' : ''}`}
+            onClick={toggleMute}
+            disabled={ended}
+            title={`${call.muted ? 'Stummschaltung aufheben' : 'Stummschalten'} (${MOD}+Umschalt+M)`}
+            aria-label={call.muted ? 'Stummschaltung aufheben' : 'Stummschalten'}
+            aria-pressed={call.muted}
+          >
+            {call.muted ? <MicOffIcon /> : <MicIcon />}
+          </button>
+        </SplitControl>
         <button
           className="call-ctl call-hangup"
           onClick={hangUp}
@@ -409,19 +427,19 @@ function RecordingIndicator({ call }: { call: CallView }) {
 }
 
 /** „Mehr“ (⋯): start (audio/video) or stop the recording. */
-function MoreButton({ call, onStop }: { call: CallView; onStop: () => void }) {
-  const [open, setOpen] = useState(false)
-  const ref = usePopover(open, () => setOpen(false))
+function MoreButton(p: { call: CallView; open: boolean; onToggle: () => void; onClose: () => void; onStop: () => void }) {
+  const { call, open, onStop } = p
+  const ref = usePopover(open, p.onClose)
   const running = call.recording !== 'off' && call.recording !== 'failed'
   const pick = (f: () => void) => () => {
-    setOpen(false)
+    p.onClose()
     f()
   }
   return (
     <div className="call-devices" ref={ref}>
       <button
         className={`call-ctl${open ? ' active' : ''}`}
-        onClick={() => setOpen((o) => !o)}
+        onClick={p.onToggle}
         title="Mehr"
         aria-label="Mehr"
         aria-haspopup="menu"
@@ -816,39 +834,65 @@ function useFullscreen(): boolean {
   return full
 }
 
-// --- Devices ----------------------------------------------------------------------------
+// --- Devices (docs/calls.md, „Gerätewahl an Stumm und Kamera“) --------------------------
 
-function DevicesButton({ disabled }: { disabled: boolean }) {
-  const [open, setOpen] = useState(false)
-  const ref = usePopover(open, () => setOpen(false))
+/** The menus of the control bar; at most one is open. */
+type BarMenu = 'camera' | 'audio' | 'more'
+
+/**
+ * A control with the device choice: the round button and a narrow arrow as one form. The
+ * button (`children`) switches as before, the arrow opens `menu` above the bar.
+ */
+function SplitControl(p: {
+  arrowLabel: string
+  open: boolean
+  disabled: boolean
+  /** The last one before „Auflegen“: its menu ends with the bar instead of leaving the window. */
+  end?: boolean
+  onToggle: () => void
+  onClose: () => void
+  menu: ReactNode
+  children: ReactNode
+}) {
+  const arrow = useRef<HTMLButtonElement>(null)
+  const ref = usePopover(p.open, (byKey) => {
+    // Esc out of the menu: the focus goes back to where the menu came from.
+    if (byKey && ref.current?.contains(document.activeElement)) arrow.current?.focus()
+    p.onClose()
+  })
   return (
-    <div className="call-devices" ref={ref}>
+    <div className={`call-split${p.end ? ' end' : ''}`} ref={ref}>
+      {p.children}
       <button
-        className={`call-ctl${open ? ' active' : ''}`}
-        onClick={() => setOpen((o) => !o)}
-        disabled={disabled}
-        title="Mikrofon, Lautsprecher und Kamera"
-        aria-label="Mikrofon, Lautsprecher und Kamera"
-        aria-expanded={open}
+        ref={arrow}
+        className={`call-ctl-arrow${p.open ? ' open' : ''}`}
+        onClick={p.onToggle}
+        disabled={p.disabled}
+        title={p.arrowLabel}
+        aria-label={p.arrowLabel}
+        aria-haspopup="menu"
+        aria-expanded={p.open}
       >
-        <SpeakerIcon />
+        <span>
+          <ArrowUpIcon />
+        </span>
       </button>
-      {open && <DevicesMenu />}
+      {p.open && p.menu}
     </div>
   )
 }
 
-/** Closes an open popover on a click outside or Escape. */
-function usePopover(open: boolean, close: () => void) {
+/** Closes an open popover on a click outside or Escape (`byKey`). */
+function usePopover(open: boolean, close: (byKey: boolean) => void) {
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef(close)
   closeRef.current = close
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) closeRef.current()
+      if (!ref.current?.contains(e.target as Node)) closeRef.current(false)
     }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current()
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current(true)
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
     return () => {
@@ -859,145 +903,82 @@ function usePopover(open: boolean, close: () => void) {
   return ref
 }
 
-function DevicesMenu() {
-  const media = useSyncExternalStore(subscribeMedia, mediaState)
-  const [devices, setDevices] = useState<Devices | null>(null)
-  useEffect(() => {
-    let live = true
-    const load = () =>
-      void listDevices()
-        .then((d) => live && setDevices(d))
-        .catch(() => undefined)
-    load()
-    navigator.mediaDevices.addEventListener('devicechange', load)
-    return () => {
-      live = false
-      navigator.mediaDevices.removeEventListener('devicechange', load)
-    }
-  }, [])
-  const section = (
-    title: string,
-    list: MediaDeviceInfo[] | undefined,
-    current: string,
-    choose: (id: string) => void,
-    extra: ReactNode,
-  ) => (
-    <div className="call-menu-section" role="group" aria-label={title}>
-      <div className="call-menu-title">{title}</div>
-      {[{ deviceId: '', label: 'Systemstandard' }, ...(list ?? [])].map((d, i) => (
+/** „Systemstandard“ and the devices of one kind; the chosen one has the check mark. */
+function DeviceSection(p: { title: string; list: MediaDeviceInfo[] | undefined; current: string; choose: (id: string) => void; children?: ReactNode }) {
+  return (
+    <div className="call-menu-section" role="group" aria-label={p.title}>
+      <div className="call-menu-title">{p.title}</div>
+      {deviceOptions(p.list).map((d) => (
         <button
-          key={d.deviceId || 'default'}
+          key={d.id || 'default'}
           className="call-menu-item"
           role="menuitemradio"
-          aria-checked={current === d.deviceId}
-          onClick={() => choose(d.deviceId)}
+          aria-checked={p.current === d.id}
+          onClick={() => p.choose(d.id)}
         >
-          <span className="call-menu-check">{current === d.deviceId ? '✓' : ''}</span>
-          <span className="ellipsis">{d.label || `Gerät ${i}`}</span>
+          <span className="call-menu-check">{p.current === d.id ? '✓' : ''}</span>
+          <span className="ellipsis">{d.label}</span>
         </button>
       ))}
-      {extra}
+      {p.children}
     </div>
   )
+}
+
+/** Last entry of both menus: to „Audio und Video“ in the settings; the call goes on behind its bar. */
+function MediaSettingsEntry({ onClose }: { onClose: () => void }) {
   return (
-    <div className="call-menu" role="menu">
-      {section('Mikrofon', devices?.microphones, media.microphoneId, chooseMicrophone, <MicLevel />)}
-      {section(
-        'Lautsprecher',
-        devices?.speakers,
-        media.speakerId,
-        chooseSpeaker,
+    <div className="call-menu-foot">
+      <button
+        className="call-menu-item"
+        role="menuitem"
+        onClick={() => {
+          onClose()
+          minimize(true)
+          // Settings that are already open stay open and change to the page.
+          if (getState().settings) setSettingsPage('media')
+          else openSettings('media')
+        }}
+      >
+        <span className="call-menu-check" />
+        Audio- und Videoeinstellungen
+      </button>
+    </div>
+  )
+}
+
+/** At „Stumm“: microphone with its level, speaker with the test tone. */
+function AudioMenu({ onClose }: { onClose: () => void }) {
+  const media = useMedia()
+  const devices = useDevices()
+  return (
+    <div className="call-menu" role="menu" aria-label="Mikrofon und Lautsprecher">
+      <DeviceSection title="Mikrofon" list={devices?.microphones} current={media.microphoneId} choose={chooseMicrophone}>
+        <MicLevel />
+      </DeviceSection>
+      <DeviceSection title="Lautsprecher" list={devices?.speakers} current={media.speakerId} choose={chooseSpeaker}>
         <button className="call-menu-action" onClick={playTestTone}>
           <SpeakerIcon size={16} />
           Testton abspielen
-        </button>,
-      )}
-      {section('Kamera', devices?.cameras, media.cameraId, chooseCamera, <CameraPreview />)}
-    </div>
-  )
-}
-
-/** Live level of the microphone the call sends (silent while muted). */
-function MicLevel() {
-  useSyncExternalStore(subscribeMedia, mediaState)
-  const track = currentTrack('audio')
-  const bar = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!track) return
-    const ctx = new AudioContext()
-    const analyser = ctx.createAnalyser()
-    analyser.fftSize = 512
-    ctx.createMediaStreamSource(new MediaStream([track])).connect(analyser)
-    const data = new Float32Array(analyser.fftSize)
-    let raf = 0
-    const tick = () => {
-      analyser.getFloatTimeDomainData(data)
-      let sum = 0
-      for (const x of data) sum += x * x
-      // RMS on a speech-friendly scale (about -50…0 dBFS).
-      const db = 20 * Math.log10(Math.sqrt(sum / data.length) || 1e-6)
-      const level = Math.min(1, Math.max(0, (db + 50) / 50))
-      if (bar.current) bar.current.style.transform = `scaleX(${level})`
-      raf = requestAnimationFrame(tick)
-    }
-    tick()
-    return () => {
-      cancelAnimationFrame(raf)
-      void ctx.close()
-    }
-  }, [track])
-  if (!track) return null
-  return (
-    <div className="call-meter" aria-hidden>
-      <div className="call-meter-bar" ref={bar} />
-    </div>
-  )
-}
-
-/**
- * The running camera; while it is off a preview only on request (the camera light should
- * not go on just because the menu opened).
- */
-function CameraPreview() {
-  const media = useSyncExternalStore(subscribeMedia, mediaState)
-  /** Clicks on „Vorschau anzeigen“ (0: none yet); each one tries again after an error. */
-  const [wanted, setWanted] = useState(0)
-  const [preview, setPreview] = useState<MediaStream | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const running = media.camera
-  useEffect(() => {
-    if (running || wanted === 0) return
-    let live = true
-    let stream: MediaStream | null = null
-    setError(null)
-    openCameraPreview(media.cameraId)
-      .then((s) => {
-        if (live) {
-          stream = s
-          setPreview(s)
-        } else s.getTracks().forEach((t) => t.stop())
-      })
-      .catch((err) => live && setError(cameraText(err)))
-    return () => {
-      live = false
-      stream?.getTracks().forEach((t) => t.stop())
-      setPreview(null)
-    }
-  }, [running, wanted, media.cameraId])
-  const stream = running ?? preview
-  const [ref] = useVideoLive(stream)
-  if (!stream) {
-    return (
-      <>
-        {error && <div className="call-menu-error">{error}</div>}
-        <button className="call-menu-action" onClick={() => setWanted((n) => n + 1)} disabled={wanted > 0 && !error}>
-          <CameraIcon size={16} />
-          Vorschau anzeigen
         </button>
-      </>
-    )
-  }
-  return <video ref={ref} className="call-menu-preview mirrored" autoPlay muted playsInline />
+      </DeviceSection>
+      <MediaSettingsEntry onClose={onClose} />
+    </div>
+  )
+}
+
+/** At „Kamera“: the cameras and the preview. */
+function CameraMenu({ onClose }: { onClose: () => void }) {
+  const media = useMedia()
+  const devices = useDevices()
+  return (
+    <div className="call-menu" role="menu" aria-label="Kamera">
+      <DeviceSection title="Kamera" list={devices?.cameras} current={media.cameraId} choose={chooseCamera}>
+        <CameraPreview icon={<CameraIcon size={16} />} />
+      </DeviceSection>
+      <MediaSettingsEntry onClose={onClose} />
+    </div>
+  )
 }
 
 // --- Icons (own drawings) ---------------------------------------------------------------
@@ -1128,6 +1109,14 @@ function ChatsIcon() {
   return (
     <Svg>
       <path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
+    </Svg>
+  )
+}
+
+function ArrowUpIcon() {
+  return (
+    <Svg size={14}>
+      <path d="M6 14.5l6-6 6 6" strokeWidth="2.4" />
     </Svg>
   )
 }

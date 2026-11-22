@@ -65,11 +65,11 @@ let current: SystemCall | null = null
 const MIC_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
 
 /**
- * Makes sure we may use the microphone before a call or a voice message starts. On macOS
+ * Makes sure we may use the microphone before a call, a voice message or a test starts. On macOS
  * this asks once (system prompt) and explains a refusal with a link into System Settings.
  * Elsewhere Chromium's own permission handler decides.
  */
-export async function ensureMicrophone(purpose: 'call' | 'voice'): Promise<boolean> {
+export async function ensureMicrophone(purpose: 'call' | 'voice' | 'test'): Promise<boolean> {
   if (!mac) return true
   // Unpackaged test runs with Chromium's fake microphone need no macOS permission.
   if (!app.isPackaged && app.commandLine.hasSwitch('use-fake-device-for-media-stream')) return true
@@ -82,7 +82,7 @@ export async function ensureMicrophone(purpose: 'call' | 'voice'): Promise<boole
     type: 'warning',
     message: 'Kein Zugriff auf das Mikrofon',
     detail:
-      (purpose === 'call' ? 'Für Anrufe' : 'Für Sprachnachrichten') +
+      (purpose === 'call' ? 'Für Anrufe' : purpose === 'voice' ? 'Für Sprachnachrichten' : 'Für den Test') +
       ' braucht Wolkenfunk das Mikrofon. Erlaube es unter Systemeinstellungen › Datenschutz & Sicherheit › Mikrofon.',
     buttons: ['Systemeinstellungen öffnen', 'Abbrechen'],
     defaultId: 0,

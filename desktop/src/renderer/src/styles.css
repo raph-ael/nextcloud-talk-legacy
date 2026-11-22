@@ -2750,8 +2750,64 @@ button.who-row:focus-visible {
   position: relative;
 }
 /*
- * Narrow windows (docs/calls.md): no control is ever squeezed. With „Mehr“ the bar needs 541;
- * below, „Chats“ loses its word (488), then the controls move together (440, then 360).
+ * „Kamera“ and „Stumm“ with the device choice (docs/calls.md): the round button and a
+ * narrow arrow in one pill. The state stays on the round button, the arrow lights up while
+ * its menu is open.
+ */
+.call-split {
+  position: relative;
+  display: flex;
+  border-radius: 24px;
+  background: rgb(255 255 255 / 0.08);
+}
+.call-ctl-arrow {
+  width: 28px;
+  display: grid;
+  place-items: center;
+  padding-right: 4px;
+  border-radius: 0 24px 24px 0;
+  color: #fff;
+}
+.call-ctl-arrow span {
+  width: 22px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+}
+.call-ctl-arrow:hover:not(:disabled) span {
+  background: var(--call-ctl-hover);
+}
+.call-ctl-arrow.open span,
+.call-ctl-arrow.open:hover span {
+  background: #fff;
+  color: #121212;
+}
+.call-ctl-arrow:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.call-split > .call-ctl:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+/* The ring of the arrow lies around its small pill, not around the half of the form. */
+.call-ctl-arrow:focus-visible {
+  outline: none;
+}
+.call-ctl-arrow:focus-visible span {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+/* The menu at „Stumm“ ends with the bar („Auflegen“ and its gap lie right of it). */
+.call-split.end .call-menu {
+  left: auto;
+  right: -68px;
+  transform: none;
+}
+/*
+ * Narrow windows (docs/calls.md): no control is ever squeezed. With „Mehr“ the bar needs 538;
+ * below, „Chats“ loses its word (476), then the controls move together (436, then 362).
  */
 .call-controls > * {
   flex-shrink: 0;
@@ -2767,11 +2823,17 @@ button.who-row:focus-visible {
     display: none;
   }
   /* The menus hang on the bar, centred in the window: centred on their button they would leave it. */
-  .call-controls .call-devices {
+  .call-controls .call-devices,
+  .call-controls .call-split {
     position: static;
   }
   .call-controls .call-menu {
     bottom: 88px;
+  }
+  .call-controls .call-split.end .call-menu {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
   }
 }
 @media (max-width: 500px) {
@@ -2808,10 +2870,16 @@ button.who-row:focus-visible {
   box-shadow: 0 8px 28px rgb(0 0 0 / 0.45);
   color: #e9e9e9;
 }
-.call-menu-section + .call-menu-section {
+.call-menu-section + .call-menu-section,
+.call-menu-foot {
   border-top: 1px solid rgb(255 255 255 / 0.08);
   margin-top: 6px;
   padding-top: 6px;
+}
+.call-menu-item:focus-visible,
+.call-menu-action:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
 }
 .call-menu-title {
   padding: 6px 10px 4px;
@@ -4111,6 +4179,63 @@ a.settings-row:focus-visible {
 }
 .settings-choices .choice {
   padding-left: 10px;
+}
+/* „Audio und Video“: the line under a heading, and the test under a list of devices. */
+.settings-sub {
+  margin: -4px 0 0;
+  padding: 0 14px 6px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+.settings-choices .choice .ellipsis {
+  min-width: 0;
+}
+.media-test {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 14px 12px;
+}
+/* In a narrow window the words of a button wrap instead of leaving it. */
+.media-test .pill-btn {
+  height: auto;
+  min-height: 32px;
+  padding: 6px 16px;
+}
+.media-test p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+.media-hint {
+  color: var(--text-muted);
+}
+.media-error {
+  color: var(--danger);
+}
+.media-meter {
+  width: min(320px, 100%);
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  overflow: hidden;
+}
+.media-meter-bar {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.media-preview {
+  display: block;
+  width: min(320px, 100%);
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  background: #000;
+  object-fit: cover;
 }
 .swatches {
   display: grid;

@@ -137,7 +137,7 @@ export interface State {
   settings: SettingsPage | null
 }
 
-export type SettingsPage = 'general' | 'appearance' | 'categories' | 'about'
+export type SettingsPage = 'general' | 'appearance' | 'media' | 'categories' | 'about'
 
 let state: State = {
   session: 'loading',

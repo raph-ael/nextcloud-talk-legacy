@@ -125,6 +125,7 @@ const api: TalkApi = {
   hangUp: () => ipcRenderer.invoke('talk:hangUp'),
   setCallMuted: (muted) => ipcRenderer.invoke('talk:setCallMuted', muted),
   setCameraEnabled: (on) => ipcRenderer.invoke('talk:setCameraEnabled', on),
+  ensureMedia: (kind) => ipcRenderer.invoke('talk:ensureMedia', kind),
   screenSources: () => ipcRenderer.invoke('talk:screenSources'),
   chooseScreen: (sourceId) => ipcRenderer.invoke('talk:chooseScreen', sourceId),
   setScreenShare: (on) => ipcRenderer.invoke('talk:setScreenShare', on),

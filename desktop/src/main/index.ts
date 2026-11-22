@@ -1714,6 +1714,8 @@ function registerIpc(): void {
     callOwner?.session.setCameraEnabled(on)
     return true
   })
+  // Before a test in „Audio und Video“ (docs/settings.md); outside macOS always true.
+  ipcMain.handle('talk:ensureMedia', (_e, kind: 'microphone' | 'camera') => (kind === 'camera' ? ensureCamera() : ensureMicrophone('test')))
   ipcMain.handle('talk:setScreenShare', (_e, on: boolean) => callOwner?.session.setScreenShare(on))
   ipcMain.handle('talk:currentCall', () => {
     const rt = callOwner

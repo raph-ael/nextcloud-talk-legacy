@@ -35,6 +35,8 @@ export interface MediaState {
   camera: MediaStream | null
   /** We are speaking (publisher level): frame around the self preview. */
   selfSpeaking: boolean
+  /** A call has the microphone (startAudio came, no stopAudio yet): tests outside calls end. */
+  inCall: boolean
 }
 
 let ms: MediaState = {
@@ -45,6 +47,7 @@ let ms: MediaState = {
   cameraId: stored(CAMERA_KEY),
   camera: null,
   selfSpeaking: false,
+  inCall: false,
 }
 const listeners = new Set<() => void>()
 
@@ -116,6 +119,23 @@ function errName(err: unknown): string {
   return (err as DOMException)?.name ?? ''
 }
 
+/**
+ * getUserMedia for one kind with the chosen device ('' follows the system default).
+ * Electron opens the default device for a merely ideal `deviceId`, so the chosen one is
+ * asked for exactly; when it is gone (unplugged), the default takes over.
+ */
+async function openDevice(kind: DeviceKind, deviceId: string, rest: MediaTrackConstraints): Promise<MediaStream> {
+  const get = (c: MediaTrackConstraints) =>
+    navigator.mediaDevices.getUserMedia(kind === 'audio' ? { audio: c, video: false } : { audio: false, video: c })
+  if (!deviceId) return get(rest)
+  try {
+    return await get({ ...rest, deviceId: { exact: deviceId } })
+  } catch (err) {
+    if (errName(err) !== 'OverconstrainedError') throw err
+    return get(rest)
+  }
+}
+
 // --- Microphone -------------------------------------------------------------------------
 
 /** startAudio came and no stopAudio yet. */
@@ -129,14 +149,7 @@ let micPicked = false
 /** Label of the microphone used last in this call (also after it ended). */
 let micLabel: string | null = null
 
-export function microphoneConstraints(deviceId = ms.microphoneId): MediaTrackConstraints {
-  return {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-    ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
-  }
-}
+const MIC_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
 
 export function currentTrack(kind: DeviceKind): MediaStreamTrack | null {
   return kind === 'audio' ? mic : cam
@@ -163,7 +176,7 @@ function openMic(gen: number): Promise<{ ok: true } | { ok: false; err: unknown 
     if (!inCall || gen !== micGen) return { ok: true as const }
     let track: MediaStreamTrack | undefined
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints(), video: false })
+      const stream = await openDevice('audio', ms.microphoneId, MIC_CONSTRAINTS)
       track = stream.getAudioTracks()[0]
       if (!track) throw new DOMException('Kein Mikrofon gefunden', 'NotFoundError')
     } catch (err) {
@@ -250,6 +263,7 @@ export function chooseMicrophone(deviceId: string): void {
 
 export function callStarted(): void {
   inCall = true
+  setMedia({ inCall: true })
   void acquireMic(false)
   void applySpeaker(false)
 }
@@ -269,7 +283,7 @@ export function callStopped(): void {
   camGen++
   stopCamera()
   cameraLost = null
-  setMedia({ micError: null, camError: null, selfSpeaking: false })
+  setMedia({ micError: null, camError: null, selfSpeaking: false, inCall: false })
 }
 
 // --- Camera -----------------------------------------------------------------------------
@@ -283,14 +297,7 @@ let camOpening = false
 /** Unplugged while on: switched on again when the device comes back within 60 s. */
 let cameraLost: { deviceId: string; until: number } | null = null
 
-function camConstraints(deviceId = ms.cameraId): MediaTrackConstraints {
-  return {
-    ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    frameRate: { ideal: 30 },
-  }
-}
+const CAM_CONSTRAINTS: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
 
 export function cameraText(err: unknown): string {
   switch (errName(err)) {
@@ -313,7 +320,7 @@ function openCam(gen: number, deviceId = ms.cameraId): Promise<{ ok: true } | { 
     if (!camWanted || gen !== camGen) return { ok: true as const }
     let track: MediaStreamTrack | undefined
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: camConstraints(deviceId) })
+      const stream = await openDevice('video', deviceId, CAM_CONSTRAINTS)
       track = stream.getVideoTracks()[0]
       if (!track) throw new DOMException('Keine Kamera gefunden', 'NotFoundError')
     } catch (err) {
@@ -451,13 +458,13 @@ export function chooseCamera(deviceId: string): void {
 
 // --- Speaker ----------------------------------------------------------------------------
 
-/** Call audio elements; the engine registers them, they always play on `sinkId`. */
-const outputs = new Set<HTMLMediaElement>()
+/** Call audio elements (the engine registers them) and the tones: they always play on `sinkId`. */
+const outputs = new Set<HTMLMediaElement | AudioContext>()
 /** The device the call plays on now (resolved: the chosen one, else the current default). */
 let sinkId = ''
 let sinkLabel: string | null = null
 
-export function addOutput(el: HTMLMediaElement): void {
+export function addOutput(el: HTMLMediaElement | AudioContext): void {
   outputs.add(el)
   void applySink(el, sinkId)
 }
@@ -525,6 +532,9 @@ let watching = false
 export function watchDevices(): void {
   if (watching) return
   watching = true
+  // From the start, not only from the first call: the test tone of the settings and the
+  // ringtone play on the chosen speaker (docs/settings.md, „Audio und Video“).
+  void applySpeaker(false)
   // Bluetooth devices (AirPods) come and go in several steps: act once it is quiet.
   navigator.mediaDevices.addEventListener('devicechange', () => {
     if (deviceTimer) clearTimeout(deviceTimer)
@@ -598,19 +608,14 @@ export async function listDevices(): Promise<Devices> {
   }
 }
 
-/** Camera preview in the device menu while our camera is off; the caller stops it. */
+/** Camera preview (device menu, settings) while our camera is off; the caller stops it. */
 export function openCameraPreview(deviceId: string): Promise<MediaStream> {
-  return serial(() =>
-    navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { ...(deviceId ? { deviceId: { ideal: deviceId } } : {}), width: { ideal: 320 }, height: { ideal: 180 } },
-    }),
-  )
+  return serial(() => openDevice('video', deviceId, { width: { ideal: 320 }, height: { ideal: 180 } }))
 }
 
-/** A recording microphone outside calls (voice messages): the chosen device, in the queue. */
+/** A microphone outside calls (voice messages, the test of the settings): the chosen device, in the queue. */
 export function openMicrophone(extra: MediaTrackConstraints = {}): Promise<MediaStream> {
-  return serial(() => navigator.mediaDevices.getUserMedia({ audio: { ...microphoneConstraints(), ...extra }, video: false }))
+  return serial(() => openDevice('audio', ms.microphoneId, { ...MIC_CONSTRAINTS, ...extra }))
 }
 
 // --- Own speaking frame -----------------------------------------------------------------

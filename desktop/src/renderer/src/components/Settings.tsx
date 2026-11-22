@@ -5,7 +5,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { AppInfo, SortOrder, UpdateCheck } from '@shared/core'
 import { closeSettings, MAX_ACCOUNTS, setSettingsPage, setSortOrder, startAddAccount, useStore, type SettingsPage } from '../store'
-import { toast } from '../call/store'
+import { toast, useCall } from '../call/store'
+import { chooseCamera, chooseMicrophone, chooseSpeaker } from '../call/devices'
+import { CameraPreview, deviceOptions, MicLevel, useDevices, useMedia } from '../call/DeviceControls'
+import { playTestTone } from '../call/tones'
 import { setSplitChats, useAppearance } from '../appearance'
 import { AccentSwatches, AppearancePreview, LayoutChoice, ThemeChoice } from './AppearanceControls'
 import { Avatar } from './Avatar'
@@ -19,6 +22,7 @@ const IS_MAC = navigator.platform.startsWith('Mac')
 const TITLES: Record<Exclude<SettingsPage, 'categories'>, string> = {
   general: 'Allgemein',
   appearance: 'Darstellung',
+  media: 'Audio und Video',
   about: 'Über Wolkenfunk',
 }
 
@@ -68,6 +72,7 @@ export function Settings() {
   const rows: { page: SettingsPage; label: string; icon: ReactNode }[] = [
     { page: 'general', label: 'Allgemein', icon: <GearIcon /> },
     { page: 'appearance', label: 'Darstellung', icon: <BrushIcon /> },
+    { page: 'media', label: 'Audio und Video', icon: <MicIcon /> },
     ...(categories ? [{ page: 'categories' as const, label: 'Kategorien', icon: <ChatIcon /> }] : []),
     { page: 'about', label: 'Über Wolkenfunk', icon: <InfoIcon /> },
   ]
@@ -124,6 +129,7 @@ export function Settings() {
             <div className="settings">
               {page === 'general' && <GeneralPage />}
               {page === 'appearance' && <AppearancePage />}
+              {page === 'media' && <MediaPage />}
               {page === 'about' && <AboutPage />}
             </div>
           </div>
@@ -315,6 +321,69 @@ function AppearancePage() {
   )
 }
 
+/** One kind of device as a radio list like „Design“: „Systemstandard“, then the devices. */
+function DeviceChoice(p: { labelledBy: string; list: MediaDeviceInfo[] | undefined; current: string; choose: (id: string) => void }) {
+  return (
+    <div className="choice-list settings-choices" role="radiogroup" aria-labelledby={p.labelledBy}>
+      {deviceOptions(p.list).map((d) => (
+        <button
+          key={d.id || 'default'}
+          role="radio"
+          aria-checked={p.current === d.id}
+          className="choice"
+          title={d.label}
+          onClick={() => p.choose(d.id)}
+        >
+          <span className={`radio${p.current === d.id ? ' on' : ''}`} aria-hidden />
+          <span className="ellipsis">{d.label}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * „Audio und Video“: choose and test microphone, speaker and camera; the same choice as at
+ * the arrows in the call. No device goes on by itself, and a test ends with the page (the
+ * page goes when the settings close) and when the call view covers it.
+ */
+function MediaPage() {
+  const media = useMedia()
+  const devices = useDevices()
+  const covered = useCall((s) => !!s.call && !s.minimized && s.call.state !== 'incoming')
+  return (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-heading" id="settings-microphone">
+          Mikrofon
+        </h3>
+        <p className="settings-sub">Für Anrufe und Sprachnachrichten</p>
+        <DeviceChoice labelledBy="settings-microphone" list={devices?.microphones} current={media.microphoneId} choose={chooseMicrophone} />
+        <MicLevel page covered={covered} />
+      </section>
+      <section className="settings-section">
+        <h3 className="settings-heading" id="settings-speaker">
+          Lautsprecher
+        </h3>
+        <p className="settings-sub">Für Anrufe und Klingeltöne</p>
+        <DeviceChoice labelledBy="settings-speaker" list={devices?.speakers} current={media.speakerId} choose={chooseSpeaker} />
+        <div className="media-test">
+          <button className="pill-btn" onClick={playTestTone}>
+            Testton abspielen
+          </button>
+        </div>
+      </section>
+      <section className="settings-section">
+        <h3 className="settings-heading" id="settings-camera">
+          Kamera
+        </h3>
+        <DeviceChoice labelledBy="settings-camera" list={devices?.cameras} current={media.cameraId} choose={chooseCamera} />
+        <CameraPreview page covered={covered} />
+      </section>
+    </>
+  )
+}
+
 type UpdateState = { state: 'idle' } | { state: 'checking' } | UpdateCheck
 
 /** „Über Wolkenfunk“: version, core, update check where the app updates itself, links. */
@@ -401,6 +470,12 @@ export const GearIcon = () => (
 const BrushIcon = () => (
   <Icon>
     <path d="M19.5 4.5l-8 8M9.5 12.5c-2 0-3.5 1.5-3.5 3.5 0 1.2-.8 2.3-2 2.5 1 1 2.4 1.5 4 1.5 2.5 0 4.5-2 4.5-4.5z" />
+  </Icon>
+)
+const MicIcon = () => (
+  <Icon>
+    <rect x="9" y="3.5" width="6" height="10.5" rx="3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5" />
   </Icon>
 )
 const ChatIcon = () => (
