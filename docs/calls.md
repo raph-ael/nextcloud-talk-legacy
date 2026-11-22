@@ -242,6 +242,8 @@ MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
   - Bezeichnung „Kamera einschalten“ / „Kamera ausschalten“.
   - Desktop-Kürzel Strg/⌘+Shift+V.
   - Am Handy stehen die Knöpfe 20 auseinander, mit „Mehr“ (sechs Knöpfe) 12.
+  - Am Desktop gibt es keinen Knopf „Ausgabe“. Dort tragen Kamera und Stumm je einen Pfeil
+    für die Gerätewahl („Desktop-Geräte wie bei Meet“).
 - **Während des Anrufs in andere Chats:**
   - Der Knopf „Chats“ (Sprechblase, am Desktop mit Beschriftung) verkleinert die
     Anrufansicht. Dasselbe tun der Pfeil oben links („Zu den Chats“) und unter Android die
@@ -279,8 +281,27 @@ MCU-Runde. Kamera an ist dadurch sofort da, und Reconnects ändern nichts.
     Hinweis mit „Erneut versuchen“.
   - Wird die Kamera abgezogen, geht sie aus. Kommt sie binnen 60 s wieder, geht sie wieder
     an.
-  - Das Gerätemenü hat Mikrofon (mit Pegel), Lautsprecher (mit Testton) und Kamera (mit
-    Vorschau).
+  - **Gerätewahl an Stumm und Kamera:** Beide Knöpfe tragen rechts einen kleinen Pfeil nach
+    oben. Der Pfeil ist ein eigener Knopf, mit dem Hauptknopf zu einer Form verbunden. Der
+    Hauptknopf schaltet wie bisher, der Pfeil öffnet ein Menü über der Leiste.
+    | Pfeil | Bezeichnung | Menü |
+    |---|---|---|
+    | an Stumm | „Mikrofon und Lautsprecher wählen“ | Abschnitt „Mikrofon“ mit Pegel, Abschnitt „Lautsprecher“ mit „Testton abspielen“ |
+    | an Kamera | „Kamera wählen“ | Abschnitt „Kamera“ mit Vorschau |
+    - Jeder Abschnitt beginnt mit „Systemstandard“, darunter die Geräte. Das gewählte hat
+      ein Häkchen. Eine Auswahl wechselt den laufenden Anruf sofort.
+    - Der Pegel zeigt das Mikrofon des Anrufs, stumm bleibt er leer.
+    - Die Vorschau zeigt das laufende Bild. Ist die Kamera aus, kommt sie erst mit „Vorschau
+      anzeigen“ (das Kameralicht geht nicht an, nur weil das Menü aufgeht).
+    - Ganz unten steht in beiden Menüs, durch eine Linie getrennt, „Audio- und
+      Videoeinstellungen“. Der Eintrag schließt das Menü, verkleinert die Anrufansicht und
+      öffnet die Einstellungsseite „Audio und Video“ (`docs/settings.md`). Der Anruf läuft
+      weiter.
+    - Es ist höchstens ein Menü offen. Ein Klick daneben, Esc oder ein zweiter Klick auf den
+      Pfeil schließt es. Solange es offen ist, ist der Pfeil hervorgehoben.
+    - Nach dem Ende des Anrufs sind die Pfeile gesperrt wie die anderen Knöpfe.
+    - In schmalen Fenstern gelten die Stufen von oben (560, 500, 440). Die Pfeile werden
+      nicht gestaucht, die Menüs bleiben ganz im Fenster.
   - Vollbild per Knopf und Doppelklick.
 
 ## Bildschirmfreigabe
@@ -348,7 +369,7 @@ Verbindungen. Die Kamera-/Ton-Verbindung bleibt davon unberührt.
 - Höchstens 2,5 Mbit/s, `degradationPreference: maintain-resolution`, VP8.
 
 **Oberfläche:**
-- **Desktop-Leiste:** Ausgabe · Kamera · **Teilen** · Mehr · Stumm · Auflegen.
+- **Desktop-Leiste:** Chats · Kamera mit Pfeil · **Teilen** · Mehr · Stumm mit Pfeil · Auflegen.
   - Der Knopf heißt „Bildschirm teilen“, aktiv „Teilen beenden“.
   - Ohne `canShareScreen` ist er ausgegraut.
   - Kürzel Strg/⌘+Shift+E.

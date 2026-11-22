@@ -27,6 +27,7 @@ Darin liegt „Darstellung“ mit Design und Akzentfarbe. Dazu kommt ein Menü a
    |---|---|---|
    | Allgemein | nur Desktop | Zahnrad |
    | Darstellung | alle | Pinsel bzw. Palette |
+   | Audio und Video | nur Desktop | Mikrofon |
    | Benachrichtigungen | nur Android und iOS | Glocke |
    | Kategorien | nur Desktop, nur bei `categoriesSupported` | Sprechblase |
    | Über Wolkenfunk | alle | Info-Kreis |
@@ -74,6 +75,41 @@ Unter dem Kopf steht der Abschnitt „Konten“ mit den anderen Konten und „Ko
 - der grüne Anruf-Punkt
 - das Anruf-Fenster, das immer dunkel ist
 - das App-Icon
+
+### „Audio und Video“ (Desktop)
+
+Hier wählt und testet man Mikrofon, Lautsprecher und Kamera. Dieselbe Wahl steht im Anruf an den Pfeilen neben „Stumm“ und „Kamera“ (`docs/calls.md`, „Desktop-Geräte wie bei Meet“). Beide Stellen zeigen immer denselben Stand.
+
+| Abschnitt | Untertitel | Auswahl | Test |
+|---|---|---|---|
+| **„Mikrofon“** | „Für Anrufe und Sprachnachrichten“ | „Systemstandard“, darunter die Mikrofone | Knopf „Mikrofon testen“ |
+| **„Lautsprecher“** | „Für Anrufe und Klingeltöne“ | „Systemstandard“, darunter die Lautsprecher | Knopf „Testton abspielen“ |
+| **„Kamera“** | keiner | „Systemstandard“, darunter die Kameras | Knopf „Vorschau anzeigen“ |
+
+**Auswahl:**
+- Eine Radioliste wie „Design“. „Systemstandard“ ist die Vorgabe.
+- Ein Gerät ohne Namen heißt „Gerät n“. Lange Namen werden gekürzt, nie umbrochen.
+- Jede Auswahl gilt sofort und bleibt gespeichert. Im laufenden Anruf wechselt sie das Gerät sofort.
+- Steckt man ein Gerät an oder ab, aktualisieren sich die Listen von selbst.
+
+**Kein Gerät geht von allein an.** Das Öffnen der Seite schaltet weder Mikrofon noch Kamera ein. Verlässt man die Seite oder die Einstellungen, gehen beide wieder aus.
+
+**„Mikrofon testen“:**
+- Der Knopf öffnet das gewählte Mikrofon. An seiner Stelle erscheinen der Pegelbalken, darunter gedämpft „Sprich etwas, der Balken zeigt deinen Pegel.“ und der Knopf „Test beenden“.
+- Wählt man währenddessen ein anderes Mikrofon, läuft der Test mit dem neuen weiter.
+- Im laufenden Anruf gibt es keinen Knopf: Der Balken zeigt sofort das Mikrofon des Anrufs. Stummgeschaltet bleibt er leer, der Satz darunter lautet dann „Stummgeschaltet“.
+- Beginnt ein Anruf während des Tests, endet der Test, und der Balken zeigt das Mikrofon des Anrufs.
+
+**„Testton abspielen“** spielt den kurzen Ton aus dem Anruf auf dem gewählten Lautsprecher. Das gilt auch direkt nach dem Start der App: Der gewählte Lautsprecher wird beim Start aufgelöst, nicht erst beim ersten Anruf.
+
+**„Vorschau anzeigen“:**
+- Der Knopf öffnet die gewählte Kamera. An seiner Stelle erscheinen das gespiegelte Bild (16:9, höchstens 320 breit) und der Knopf „Vorschau beenden“.
+- Wählt man währenddessen eine andere Kamera, wechselt das Bild.
+- Ist im laufenden Anruf die eigene Kamera an, zeigt die Seite ohne Knopf das laufende Bild.
+
+**Fehler** stehen als Text unter dem Knopf, mit den Sätzen aus dem Anruf („Kein Zugriff auf das Mikrofon“, „Kein Mikrofon gefunden“, „Das Mikrofon wird von einer anderen App benutzt“, ebenso für die Kamera). Der Knopf bleibt für einen neuen Versuch.
+
+**macOS:** Vor „Mikrofon testen“ und „Vorschau anzeigen“ läuft die Abfrage der Systemfreigabe wie vor einem Anruf, bei Ablehnung mit dem Hinweis auf die Systemeinstellungen (Text beim Mikrofon: „Für den Test braucht Wolkenfunk das Mikrofon. …“).
 
 ### „Benachrichtigungen“ (Android und iOS)
 
@@ -183,6 +219,8 @@ Die Ausnahme ist die „Sortierung“: Sie gehört zum Konto und liegt auf dem S
 
 Fehlt der Wert oder ist er unbekannt, gelten `system`, `blau`, `bubbles` bzw. `true`.
 
+**Gerätewahl am Desktop:** Mikrofon, Lautsprecher und Kamera liegen nicht in `settings.json`, sondern im Speicher des Fensters (`localStorage`), unter `callMicrophone`, `callSpeaker` und `callCamera`. Der Wert ist die Gerätekennung, ohne Eintrag gilt der Systemstandard. Die Kennungen gehören zu diesem Speicher und wären ohne ihn wertlos.
+
 **Desktop:**
 - Die IPC-Aufrufe sind:
   - `appearance()` mit `{theme, accent, layout, splitChats}`
@@ -190,6 +228,7 @@ Fehlt der Wert oder ist er unbekannt, gelten `system`, `blau`, `bubbles` bzw. `t
   - `setLayout(layout)`
   - `setSplitChats(on)`
   - `setupDone()` mit `true` oder `false` und `finishSetup()` für die Einrichtung beim ersten Start
+  - `ensureMedia(kind)` mit `microphone` oder `camera` für die Systemfreigabe vor einem Test; außerhalb von macOS immer `true`
 - Jede Änderung der Darstellung meldet das Ereignis `appearanceChanged`.
 - Der Renderer setzt `data-layout` auf `<html>`.
 
@@ -312,6 +351,9 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
 | Bildkarten der Einrichtung (Desktop) | Radiogruppe „Ansicht“, jede Karte mit ihrem Namen |
 | „Gruppen und Direktchats trennen“ | Schalter mit Titel und Zustand (Desktop `role="switch"`, Android `Switch`, iOS `Toggle`) |
 | Sortierung | Radiogruppe „Sortierung“ |
+| Geräte-Auswahl (Desktop) | Radiogruppen „Mikrofon“, „Lautsprecher“ und „Kamera“ |
+| Pegelbalken (Desktop) | für Bedienhilfen ausgeblendet, der Satz darunter erklärt ihn |
+| Kamera-Vorschau (Desktop) | „Vorschau der Kamera“ |
 | Zahnrad oben in der Chatliste (Desktop) | „Einstellungen“ |
 | Chat-Zeile | zusätzliche Aktion „Chat-Menü“ (Android `customActions`, iOS `accessibilityActions` bzw. das Kontextmenü, Desktop `aria-haspopup="menu"`) |
 | Durchgestrichene Glocke | „stummgeschaltet“, im Label der Zeile |
@@ -328,6 +370,7 @@ Nur in `talk-ffi`, auf dem Desktop schon vorhanden:
   - Alle 10 Farben in hell und dunkel: Knöpfe, eigene Blase, Schalter, Badge, Links.
   - Nach einem Neustart sind die Werte noch da.
   - Einrichtung beim ersten Start (Desktop), mit einem leeren Datenordner: Sie erscheint, die Bildkarten folgen der Auswahl, „Weiter“ und „Zurück“ wechseln die Schritte. Nach „Weiter“ und einem Neustart kommt nur die Anmeldung, ohne „Weiter“ kommt die Einrichtung wieder. Mit einem vorhandenen Konto erscheint sie nie, auch nicht nach dem Abmelden.
+  - „Audio und Video“ (Desktop): Nach dem Öffnen der Seite ist kein Gerät offen. „Mikrofon testen“, „Testton abspielen“ und „Vorschau anzeigen“ arbeiten mit dem gewählten Gerät, nach dem Verlassen der Seite sind Mikrofon und Kamera wieder frei. Die Wahl steht nach einem Neustart noch und stimmt mit den Menüs im Anruf überein. Für Tests ohne echte Geräte taugen Chromiums künstliche Geräte (Startoption `--use-fake-device-for-media-stream`).
   - Das Chat-Menü komplett, jeder Eintrag.
   - Stumm-Anzeige und Badge-Zählung wie in der Tabelle oben.
 - **Kern:** `cargo test -p talk-core -p talk-demo` (Ende-zu-Ende gegen den Demo-Server).
