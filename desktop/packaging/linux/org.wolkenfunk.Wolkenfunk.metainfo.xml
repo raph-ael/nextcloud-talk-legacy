@@ -81,6 +81,14 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.13" date="2026-11-22" type="development">
+      <description>
+        <p>Desktop: Neue Einstellungsseite „Audio und Video“. Dort wählst du Mikrofon, Lautsprecher und Kamera und probierst sie aus, mit Pegelanzeige, Testton und Vorschau. Kein Gerät geht dabei von allein an.</p>
+        <p>Im Anruf tragen „Stumm“ und „Kamera“ jetzt einen kleinen Pfeil. Darüber wechselst du Mikrofon, Lautsprecher und Kamera im laufenden Anruf. Der Knopf mit dem Lautsprecher entfällt.</p>
+        <p>Behoben: Ein gewähltes Mikrofon oder eine gewählte Kamera wurde am Desktop nicht benutzt, es lief immer das Standardgerät. Das betraf Anrufe und Sprachnachrichten.</p>
+        <p>Klingeltöne spielen schon vor dem ersten Anruf auf dem gewählten Lautsprecher.</p>
+      </description>
+    </release>
     <release version="0.6.12" date="2026-11-21" type="development">
       <description>
         <p>Desktop: Beim ersten Start fragt Wolkenfunk vor der Anmeldung, wie deine Chats aussehen sollen: als Sprechblasen oder kompakt. Zwei kleine Bilder zeigen den Unterschied.</p>
