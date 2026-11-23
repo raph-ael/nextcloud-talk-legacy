@@ -330,6 +330,36 @@ Gegen `talk-demo`: `curl -d token=lena -d text=Arbeitet -d silent=1 http://127.0
 5. Eine normale Nachricht löschen: „Diese Nachricht wurde gelöscht.“ bleibt wie bisher.
 6. Eine Nachricht, die per Bearbeiten wächst (nicht still): Die Liste bleibt am Ende, „bearbeitet“ steht da.
 
+## Eingabefeld vergrößern (Desktop)
+
+Am Desktop wächst das Eingabefeld mit dem Text bis 72 px, danach scrollt es. Für lange Texte lässt es sich vergrößern, nach dem Muster von Signal Desktop: mit einer kleinen Lasche über dem Eingabebereich. Android und iOS haben das nicht, dort wächst das Feld mit dem Text.
+
+| Punkt | Regel |
+|---|---|
+| Lasche | 48 × 24 px, mittig an der Oberkante des Eingabebereichs, 18 px ragen darüber hinaus in die Nachrichtenliste. Fläche in der Hintergrundfarbe (`bg`), oben 12 px Rundung, unten gerade. Darin ein flacher Pfeil nach oben in `muted`, als eigene gezeichnete Linie, kein fremdes Asset. |
+| Sichtbar | Die Lasche ist unsichtbar. Sie blendet in 200 ms ein, solange die Maus über dem Eingabebereich ist oder die Lasche den Tastaturfokus hat. Ohne Maus (Touch-Bildschirm) ist sie immer sichtbar. Mit der Textmenge hat das nichts zu tun. |
+| Groß | Das Feld ist fest 212 px hoch, in niedrigen Fenstern höchstens 40 % der Fensterhöhe. Längerer Text scrollt im Feld. Der Pfeil zeigt nach unten. |
+| Klein | Das Feld wächst mit dem Text bis 72 px. Der Pfeil zeigt nach oben. |
+| Zurück auf klein | Nach dem Senden, nach dem Speichern oder Abbrechen einer Bearbeitung und beim Wechsel des Chats. Der Zustand wird nicht gespeichert. |
+| Wo | Beim Schreiben und beim Bearbeiten einer Nachricht. Nicht bei laufender Sprachaufnahme und nicht bei einem Sprach-Entwurf: Dort gibt es kein Textfeld. |
+| Fokus | Ein Klick auf die Lasche lässt Fokus und Schreibmarke im Feld. |
+| Erwähnungen | Die Marken hinter dem Text und die Liste nach „@“ (docs/mentions.md) sitzen im großen Feld wie im kleinen. |
+
+**Barrierefreiheit**
+- Bezeichnung und Tooltip: „Eingabefeld vergrößern“, im großen Zustand „Eingabefeld verkleinern“.
+- Die Lasche ist ein Knopf und per Tab erreichbar. Leertaste und Eingabe schalten um.
+
+### Test
+1. Ohne Maus über dem Eingabebereich ist die Lasche unsichtbar, mit Maus sichtbar und mittig, in hell und dunkel.
+2. Langen Text tippen, Klick auf die Lasche: Das Feld ist 212 px hoch, der Pfeil zeigt nach unten, die Schreibmarke bleibt im Feld. Zweiter Klick: wieder klein.
+3. Nach dem Senden, nach einem Chatwechsel, nach Speichern und nach Abbrechen einer Bearbeitung ist das Feld klein.
+4. Eine lange Nachricht bearbeiten und vergrößern.
+5. Im großen Feld „@“ tippen: Die Liste steht über dem Feld, die Marke liegt genau hinter dem Namen, auch nach dem Scrollen im Feld.
+6. Mit Antwortleiste und angehängter Datei sitzt die Lasche an der Oberkante des Eingabebereichs und verdeckt nichts Bedienbares.
+7. Während einer Sprachaufnahme und bei einem Sprach-Entwurf gibt es keine Lasche.
+8. Fenster 380 breit und 480 hoch: Die Nachrichtenliste bleibt sichtbar, die Lasche stößt nicht an „Zum Ende springen“.
+9. Tab erreicht die Lasche, sie wird sichtbar, Leertaste und Eingabe schalten um.
+
 ## Bild von „Notizen an mich“
 
 Für den Chat „Notizen an mich“ liefert der Server ein Emoji-Bild. Die Clients zeigen stattdessen ein eigenes und rufen dafür nichts vom Server ab.
