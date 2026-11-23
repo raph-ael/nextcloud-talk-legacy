@@ -86,6 +86,9 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   const [error, setError] = useState('')
   const [emoji, setEmoji] = useState(false)
   const [saving, setSaving] = useState(false)
+  /** The field at its large height (docs/chat.md „Eingabefeld vergrößern“); not kept. */
+  const [large, setLarge] = useState(false)
+  const wasLarge = useRef(false)
   const editingRef = useRef(editing)
   editingRef.current = editing
   const input = useRef<HTMLTextAreaElement | null>(null)
@@ -112,6 +115,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     setPicks(pickDrafts.get(key) ?? NO_PICKS)
     setFiles(fileDrafts.get(key) ?? [])
     setError('')
+    setLarge(false)
     input.current?.focus()
     void loadDraft(token)
     return () => {
@@ -129,8 +133,10 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
         void cancelRecording()
       } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'y') {
         e.preventDefault()
-        if (recording) void sendRecording(replyTo).then(onSent)
-        else if (!editing && !voiceDraft && !text.trim() && files.length === 0) void startRecording(token)
+        if (recording) {
+          setLarge(false)
+          void sendRecording(replyTo).then(onSent)
+        } else if (!editing && !voiceDraft && !text.trim() && files.length === 0) void startRecording(token)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -142,6 +148,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
   useEffect(() => {
     setSaving(false)
     if (!editing) {
+      // Saved or cancelled: small again.
+      setLarge(false)
       setText(textDrafts.get(key) ?? '')
       setPicks(pickDrafts.get(key) ?? NO_PICKS)
       input.current?.focus()
@@ -192,16 +200,47 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     layer.scrollTop = el.scrollTop
   }
 
-  // Auto-grow up to the CSS max-height, then scroll (like Signal).
+  /** Scrolls the field so that the caret is in its visible part. */
+  function revealCaret() {
+    const el = input.current
+    if (!el?.parentElement || el.scrollHeight <= el.clientHeight) return
+    // The text up to the caret with the breaks of the field: where it ends, the caret stands.
+    const probe = document.createElement('div')
+    probe.className = 'composer-backdrop'
+    probe.style.cssText = `bottom: auto; visibility: hidden; width: ${el.clientWidth}px`
+    probe.textContent = el.value.slice(0, el.selectionEnd)
+    const mark = probe.appendChild(document.createElement('span'))
+    mark.textContent = '\u200b'
+    el.parentElement.appendChild(probe)
+    const top = mark.offsetTop
+    const bottom = top + mark.offsetHeight
+    probe.remove()
+    const pad = parseFloat(getComputedStyle(el).paddingTop)
+    if (top - pad < el.scrollTop) el.scrollTop = top - pad
+    else if (bottom + pad > el.scrollTop + el.clientHeight) el.scrollTop = bottom + pad - el.clientHeight
+  }
+
+  // Auto-grow up to the CSS max-height, then scroll (like Signal). Large, the height is fixed
+  // by the CSS.
   useLayoutEffect(() => {
     const el = input.current
     if (!el) return
-    el.style.height = 'auto'
-    const height = el.scrollHeight + el.offsetHeight - el.clientHeight
-    el.style.height = `${height}px`
-    el.style.overflowY = height > el.offsetHeight ? 'auto' : 'hidden'
+    if (large) {
+      el.style.height = ''
+      el.style.overflowY = 'auto'
+    } else {
+      el.style.height = 'auto'
+      const height = el.scrollHeight + el.offsetHeight - el.clientHeight
+      el.style.height = `${height}px`
+      el.style.overflowY = height > el.offsetHeight ? 'auto' : 'hidden'
+    }
+    // Another height shows another part of the text.
+    if (wasLarge.current !== large) {
+      wasLarge.current = large
+      revealCaret()
+    }
     syncBackdrop()
-  }, [text, marked])
+  }, [text, marked, large])
   // Another width breaks the lines anew.
   useEffect(() => {
     const el = input.current
@@ -343,6 +382,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     updatePicks(NO_PICKS)
     updateFiles(() => [])
     setEmoji(false)
+    setLarge(false)
     if (queued.length > 0) {
       void sendFiles(
         token,
@@ -447,8 +487,35 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
     })
   }
 
+  // Without a text field (a recording, a voice draft) there is nothing to enlarge.
+  const voiceBar = !editing && (recording || voiceDraft)
+  const resizeLabel = large ? 'Eingabefeld verkleinern' : 'Eingabefeld vergrößern'
+
   return (
     <div className="composer">
+      {!voiceBar && (
+        <button
+          className="composer-resize"
+          aria-label={resizeLabel}
+          title={resizeLabel}
+          aria-pressed={large}
+          // The focus and the caret stay in the field.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setLarge((v) => !v)}
+        >
+          {/* A flat arrow, 12 wide and 4 high: up, and down while the field is large. */}
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+            <path
+              d={large ? 'M6 10l6 4 6-4' : 'M6 14l6-4 6 4'}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
       {editing ? (
         <div className="reply-bar edit-bar" role="group" aria-label="Nachricht bearbeiten">
           <div className="quote">
@@ -508,6 +575,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
           rec={recording}
           onCancel={() => void cancelRecording()}
           onSend={() => {
+            setLarge(false)
             void sendRecording(replyTo).then(onSent)
             onCancelReply()
           }}
@@ -517,6 +585,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
           draft={voiceDraft}
           onDiscard={() => void discardDraft(token)}
           onSend={() => {
+            setLarge(false)
             void sendDraft(token, replyTo).then(onSent)
             onCancelReply()
           }}
@@ -568,7 +637,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, Props>(function Composer
               if (typeof ref === 'function') ref(el)
               else if (ref) ref.current = el
             }}
-            className="composer-input"
+            className={`composer-input${large ? ' large' : ''}`}
             rows={1}
             placeholder={files.length && !editing ? 'Bildunterschrift hinzufügen' : 'Nachricht'}
             value={text}
