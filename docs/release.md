@@ -79,16 +79,47 @@ Im Repo steht kein Schlüssel und kein Passwort. Die Skripte lesen sie aus der U
 | Mac-Host für den macOS-Build | SSH-Ziel | `MAC_HOST` |
 | Upload | SSH-Zugang zum Paket-Server | `PKG_HOST`, `PKG_REMOTE` |
 | iOS | Codemagic (App-Store-Connect-API-Key, Distribution-Zertifikat) | nur dort hinterlegt |
+| Windows signieren | GitHub-Repo: Secrets und eine Variable, siehe „Windows signieren“ | nur dort hinterlegt |
 
 **Alle Schlüssel sichern**, etwa im Passwortmanager:
 - Ohne den Android-Schlüssel lassen sich installierte APKs nicht mehr aktualisieren.
 - Ohne den APT-Schlüssel muss jeder Nutzer die Paketquelle neu einrichten.
 
 **Noch nicht signiert:**
-- Windows: SmartScreen zeigt „Unbekannter Herausgeber“.
-- macOS: Gatekeeper fragt beim ersten Öffnen.
+- Windows: SmartScreen zeigt „Unbekannter Herausgeber“, solange die Signierung aus ist (siehe unten).
+- macOS: Gatekeeper fragt beim ersten Öffnen. Das kommt mit einer Developer-ID später.
 
-Beides kommt mit eigenen Zertifikaten später.
+## Windows signieren
+
+Die Windows-CI signiert mit Azure Artifact Signing (früher Trusted Signing), dem Zertifikat des Herausgebers. Dann zeigt Windows den Herausgeber statt „Unbekannter Herausgeber“.
+
+**Schalter:** die Repo-Variable `WIN_SIGN`.
+- `1`: Der Build signiert. Schlägt das Signieren fehl, schlägt der Build fehl.
+- Alles andere oder nicht gesetzt: Der Build bleibt unsigniert, wie bisher.
+
+**Repo-Secrets** (GitHub → Settings → Secrets and variables → Actions). Im Repo steht keiner dieser Werte:
+
+| Secret | Inhalt |
+|---|---|
+| `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | Anmeldung des Dienstkontos, das nur signieren darf |
+| `WIN_SIGN_ENDPOINT` | Adresse des Signierdiensts in der Region des Kontos |
+| `WIN_SIGN_ACCOUNT` | Name des Signierkontos |
+| `WIN_SIGN_PROFILE` | Name des Zertifikatprofils |
+| `WIN_SIGN_PUBLISHER` | Name im Zertifikat (CN), genau so geschrieben |
+
+**Ablauf:**
+1. electron-builder signiert selbst (`win.azureSignOptions`, zusammengesetzt in `desktop/scripts/win-sign-config.cjs`): erst das Programm, dann Deinstallationsprogramm und Installer.
+2. Erst danach entstehen Blockmap und `latest.yml`. Die Prüfsummen passen also zum signierten Installer. Deshalb wird nicht nachträglich signiert.
+3. Der Schritt „Signature“ prüft Programm und Installer: Signatur gültig, mit Zeitstempel, auf den erwarteten Namen.
+
+**Zu wissen:**
+- **Zeitstempel:** Die Zertifikate gelten nur wenige Tage und erneuern sich von selbst. Der Zeitstempel hält die Signatur darüber hinaus gültig.
+- **Updates:** Eine signierte Version nimmt nur Updates an, deren Installer auf denselben Namen signiert ist. Eine unsignierte Version nimmt jedes Update an, das zur Prüfsumme in `latest.yml` passt.
+  - Nach der ersten signierten Version bleibt `WIN_SIGN` also auf `1`.
+  - Ändert sich der Name im Zertifikat, müssen die Nutzer einmal von Hand neu installieren.
+- **Secret läuft ab:** Das Secret des Dienstkontos hat ein Ablaufdatum. Danach schlägt der Build fehl, bis ein neues hinterlegt ist.
+- **SmartScreen** kann bei den ersten Downloads trotz Signatur noch warnen, bis die Signatur bekannt ist.
+- **Prüfen am Gerät:** Rechtsklick auf die `.exe` → Eigenschaften → Digitale Signaturen. Unter Linux: `osslsigncode verify Wolkenfunk-Setup-X.Y.Z.exe`.
 
 ## Icons und Screenshots
 - **Icons:** `python3 design/icon/build-icons.py` erzeugt alle Icons aus `design/icon/wolkenfunk-symbolic.svg`: Desktop, Tray, Android, iOS und Webseite. Die Ergebnisse sind eingecheckt, der Build braucht kein Werkzeug.

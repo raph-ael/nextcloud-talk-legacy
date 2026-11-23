@@ -1,5 +1,7 @@
 # Windows build of the desktop app: NSIS installer (per user, no admin) plus latest.yml for
-# electron-updater. Unsigned on purpose: SmartScreen shows "Unbekannter Herausgeber".
+# electron-updater. Signed with Azure Artifact Signing when the repository variable WIN_SIGN
+# is 1 (see docs/release.md, "Windows signieren"); otherwise unsigned, and SmartScreen shows
+# "Unbekannter Herausgeber".
 # desktop/scripts/release-windows.sh downloads the artifact of the run for tag v<version>.
 name: Desktop Windows
 
@@ -51,7 +53,48 @@ jobs:
 
       - run: npx electron-vite build
 
-      - run: npx electron-builder --win --publish never
+      # electron-builder signs the app, the uninstaller and the installer itself, before it writes
+      # the blockmap and latest.yml, so their checksums fit the signed installer. A failed
+      # signature fails the build: no unsigned installer leaves a run that should sign.
+      # The secrets reach this step only.
+      - name: Installer
+        env:
+          WIN_SIGN: ${{ vars.WIN_SIGN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          WIN_SIGN_ENDPOINT: ${{ secrets.WIN_SIGN_ENDPOINT }}
+          WIN_SIGN_ACCOUNT: ${{ secrets.WIN_SIGN_ACCOUNT }}
+          WIN_SIGN_PROFILE: ${{ secrets.WIN_SIGN_PROFILE }}
+          WIN_SIGN_PUBLISHER: ${{ secrets.WIN_SIGN_PUBLISHER }}
+        run: |
+          if [ "$WIN_SIGN" = 1 ]; then
+            npx electron-builder --win --publish never --config scripts/win-sign-config.cjs
+          else
+            echo "WIN_SIGN is not 1: unsigned build"
+            npx electron-builder --win --publish never
+          fi
+
+      # App and installer carry a valid, timestamped signature (the certificates live only a few
+      # days, the timestamp keeps the signature valid) in the name the app expects of its updates.
+      - name: Signature
+        if: vars.WIN_SIGN == '1'
+        shell: pwsh
+        env:
+          WIN_SIGN_PUBLISHER: ${{ secrets.WIN_SIGN_PUBLISHER }}
+        run: |
+          $files = @(Get-Item dist/win-unpacked/Wolkenfunk.exe) + @(Get-ChildItem dist -Filter 'Wolkenfunk-Setup-*.exe')
+          if ($files.Count -lt 2) { throw 'installer not found' }
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            if ($s.Status -ne 'Valid') { throw "$($f.Name): signature is $($s.Status)" }
+            if (-not $s.TimeStamperCertificate) { throw "$($f.Name): no timestamp" }
+            if ($s.SignerCertificate.GetNameInfo('SimpleName', $false) -cne $env:WIN_SIGN_PUBLISHER) { throw "$($f.Name): signed with another name" }
+            "$($f.Name): signed and timestamped"
+          }
+          if (-not (Select-String -Path dist/win-unpacked/resources/app-update.yml -Pattern '^publisherName:' -Quiet)) {
+            throw 'app-update.yml has no publisherName: the app would not check its updates'
+          }
 
       # The unpacked app starts and stays up: the main process loads native/talk_node.node at
       # startup, so its window (seen through the DevTools port) only exists if that worked.
