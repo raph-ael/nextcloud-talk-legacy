@@ -1,10 +1,8 @@
-// Startseite: zeigt den Download für das eigene Betriebssystem als Hauptknopf.
-// Ohne dieses Skript (oder bei unbekanntem System) bleiben alle Plattformen sichtbar.
-// Läuft nur im Browser, sendet nichts.
+// Zeigt den Download für das eigene Betriebssystem als Hauptknopf und hebt dessen Kachel hervor.
+// Ohne dieses Skript (oder bei unbekanntem System) bleibt der allgemeine Knopf, und alle
+// Kacheln sehen gleich aus. Läuft nur im Browser, sendet nichts.
 (function () {
   'use strict';
-  var box = document.getElementById('get');
-  if (!box) return;
 
   // userAgentData gibt es nur in Chromium-Browsern; sonst bleibt der User-Agent.
   var uad = navigator.userAgentData && navigator.userAgentData.platform;
@@ -19,11 +17,11 @@
   else if (/win/i.test(s)) os = 'windows';
   else if (/mac/i.test(s)) os = 'mac';
   else if (/linux/i.test(s)) os = 'linux'; // nicht X11: das melden auch die BSDs
+  if (!os) return;
 
-  var item = os && box.querySelector('[data-platform="' + os + '"]');
-  if (!item) return;
-  item.classList.add('is-match');
-  box.classList.add('is-detected');
-  var more = box.querySelector('[data-more]');
-  if (more) more.textContent = more.getAttribute('data-more');
+  var items = document.querySelectorAll('[data-platform="' + os + '"]');
+  for (var i = 0; i < items.length; i++) items[i].classList.add('is-match');
+
+  var box = document.getElementById('get');
+  if (box && box.querySelector('.is-match')) box.classList.add('is-detected');
 })();
