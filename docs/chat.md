@@ -340,14 +340,15 @@ Am Desktop wächst das Eingabefeld mit dem Text bis 72 px, danach scrollt es. F�
 | Sichtbar | Die Lasche ist unsichtbar. Sie blendet in 200 ms ein, solange die Maus über dem Eingabebereich ist oder die Lasche den Tastaturfokus hat. Ohne Maus (Touch-Bildschirm) ist sie immer sichtbar. Mit der Textmenge hat das nichts zu tun. |
 | Groß | Das Feld ist fest 212 px hoch, in niedrigen Fenstern höchstens 40 % der Fensterhöhe. Längerer Text scrollt im Feld. Der Pfeil zeigt nach unten. |
 | Klein | Das Feld wächst mit dem Text bis 72 px. Der Pfeil zeigt nach oben. |
-| Zurück auf klein | Nach dem Senden, nach dem Speichern oder Abbrechen einer Bearbeitung und beim Wechsel des Chats. Der Zustand wird nicht gespeichert. |
+| Zurück auf klein | Nach dem Senden (auch einer Sprachnachricht), nach dem Speichern oder Abbrechen einer Bearbeitung und beim Wechsel des Chats. Der Beginn einer Bearbeitung lässt den Zustand, ebenso das Abbrechen einer Aufnahme. Der Zustand wird nicht gespeichert. |
 | Wo | Beim Schreiben und beim Bearbeiten einer Nachricht. Nicht bei laufender Sprachaufnahme und nicht bei einem Sprach-Entwurf: Dort gibt es kein Textfeld. |
-| Fokus | Ein Klick auf die Lasche lässt Fokus und Schreibmarke im Feld. |
+| Fokus | Ein Klick auf die Lasche lässt Fokus und Schreibmarke im Feld. Per Tastatur umgeschaltet bleibt der Fokus auf der Lasche. Nach dem Umschalten scrollt das Feld so, dass die Schreibmarke sichtbar ist. |
 | Erwähnungen | Die Marken hinter dem Text und die Liste nach „@“ (docs/mentions.md) sitzen im großen Feld wie im kleinen. |
 
 **Barrierefreiheit**
 - Bezeichnung und Tooltip: „Eingabefeld vergrößern“, im großen Zustand „Eingabefeld verkleinern“.
 - Die Lasche ist ein Knopf und per Tab erreichbar. Leertaste und Eingabe schalten um.
+- Der Fokusring liegt in der Akzentfarbe 2 px nach innen.
 
 ### Test
 1. Ohne Maus über dem Eingabebereich ist die Lasche unsichtbar, mit Maus sichtbar und mittig, in hell und dunkel.
