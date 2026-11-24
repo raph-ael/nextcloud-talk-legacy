@@ -71,9 +71,9 @@ dunkle Bild über `prefers-color-scheme`, mit `width`/`height`, unterhalb des er
 - `stage.py` bricht ab, wenn ein Bild fehlt, und warnt, wenn das Seitenverhältnis nicht zu
   `width`/`height` passt (z. B. wenn sich die Größe der Mac-Bilder mit Fensterrahmen ändert).
 - Vorschau ohne die echten Bilder: `stage.py /tmp/wf --all --placeholders`.
-- `android-suche`, `android-erwaehnungen`, `android-standort` und `android-darstellung` stammen aus
-  den Aufnahmen für Google Play (1080×1920) und liegen nur hell vor. Sie erscheinen deshalb auch im
-  dunklen Design hell.
+- `android-suche`, `android-erwaehnungen`, `android-standort`, `android-darstellung` und
+  `android-benachrichtigung` haben das Format der Aufnahmen für Google Play (1080×1920), nicht
+  1080×2400 wie die übrigen Android-Bilder.
 - `screenshots/desktop-chat.png` ist das AppStream-Bild aus
   `desktop/packaging/linux/org.wolkenfunk.Wolkenfunk.metainfo.xml` (Flathub), keine Seite nutzt es.
 
