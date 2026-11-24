@@ -1,12 +1,12 @@
 {
   "name": "Wolkenfunk",
   "short_name": "Wolkenfunk",
-  "description": "Schnelle, native Clients für Nextcloud Talk.",
+  "description": "Der schnelle Messenger für deine Nextcloud.",
   "lang": "de",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F6F8FC",
+  "background_color": "#FFFFFF",
   "theme_color": "#1F63DE",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },

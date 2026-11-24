@@ -1,0 +1,17 @@
+# Wolkenfunk
+
+> Wolkenfunk ist ein schneller Messenger für Nextcloud Talk: kostenlose, quelloffene Apps für Windows, macOS, Linux und Android (iPhone folgt). Chats sind sofort da, auch ohne Netz, Anrufe klingeln wie ein Telefonat, und alle Nachrichten bleiben auf der eigenen Nextcloud.
+
+Wolkenfunk braucht ein Konto auf einer Nextcloud mit Talk 23 oder neuer (Nextcloud 33). Die Apps sprechen nur mit diesem Server; es gibt kein zusätzliches Konto und kein Tracking. Die Oberfläche ist deutsch. Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden. Lizenz: AGPL-3.0.
+
+## Seiten
+
+- [Startseite](https://wolkenfunk.org/): die drei Kernvorteile und Downloads für alle Systeme
+- [Funktionen](https://wolkenfunk.org/funktionen/): alle Funktionen im Einzelnen, von Chats und Anrufen bis zu mehreren Konten
+- [Herunterladen](https://wolkenfunk.org/download/): Pakete für Windows, macOS, Linux (Debian, Ubuntu, AppImage) und Android, mit Installationshinweisen
+
+## Weiteres
+
+- [Quellcode auf GitHub](https://github.com/raph-ael/nextcloud-talk-legacy)
+- [Impressum](https://wolkenfunk.org/impressum/)
+- [Datenschutz](https://wolkenfunk.org/datenschutz/)

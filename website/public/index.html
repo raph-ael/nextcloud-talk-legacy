@@ -3,10 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Wolkenfunk – der schnelle Messenger für deine Nextcloud</title>
-  <meta name="description" content="Wolkenfunk macht aus Nextcloud Talk einen schnellen Messenger: Chats sind sofort da, auch ohne Netz. Für Windows, macOS, Linux und Android, bald fürs iPhone. Open Source.">
-  <!-- Vor dem Launch: Zeile entfernen, dann darf die Seite in den Suchindex. -->
-  <meta name="robots" content="noindex">
+  <title>Wolkenfunk – der schnelle Messenger für Nextcloud Talk</title>
+  <meta name="description" content="Wolkenfunk macht aus Nextcloud Talk einen schnellen Messenger: Chats sind sofort da, auch ohne Netz. Kostenlos für Windows, macOS, Linux und Android.">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
   <link rel="canonical" href="https://wolkenfunk.org/">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -27,39 +26,97 @@
   <meta property="og:title" content="Wolkenfunk – der schnelle Messenger für deine Nextcloud">
   <meta property="og:description" content="Chats sind sofort da, auch ohne Netz. Anrufe klingeln wie ein Telefonat. Und deine Nachrichten bleiben auf deinem eigenen Server.">
   <meta property="og:image" content="https://wolkenfunk.org/og-image.png">
+  <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Wolkenfunk-Logo, darunter groß „Der schnelle Messenger für deine Nextcloud.“">
+  <meta property="og:image:alt" content="Wolkenfunk: „Der schnelle Messenger für deine Nextcloud.“ Daneben die App am Computer und auf dem Handy.">
   <meta name="twitter:card" content="summary_large_image">
-
-  <link rel="stylesheet" href="/styles.css?v=8">
+  <meta name="twitter:title" content="Wolkenfunk – der schnelle Messenger für deine Nextcloud">
+  <meta name="twitter:description" content="Chats sind sofort da, auch ohne Netz. Anrufe klingeln wie ein Telefonat. Und deine Nachrichten bleiben auf deinem eigenen Server.">
+  <meta name="twitter:image" content="https://wolkenfunk.org/og-image.png">
+  <meta name="twitter:image:alt" content="Wolkenfunk: „Der schnelle Messenger für deine Nextcloud.“ Daneben die App am Computer und auf dem Handy.">
 
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@graph": [
       {
+        "@type": "Organization",
+        "@id": "https://wolkenfunk.org/#herausgeber",
+        "name": "CODELABOR UG (haftungsbeschränkt)",
+        "url": "https://codelabor.io/"
+      },
+      {
         "@type": "WebSite",
         "@id": "https://wolkenfunk.org/#website",
         "url": "https://wolkenfunk.org/",
         "name": "Wolkenfunk",
-        "inLanguage": "de"
+        "description": "Der schnelle Messenger für deine Nextcloud.",
+        "inLanguage": "de",
+        "publisher": {
+          "@id": "https://wolkenfunk.org/#herausgeber"
+        }
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://wolkenfunk.org/#seite",
+        "url": "https://wolkenfunk.org/",
+        "name": "Wolkenfunk – der schnelle Messenger für Nextcloud Talk",
+        "description": "Wolkenfunk macht aus Nextcloud Talk einen schnellen Messenger: Chats sind sofort da, auch ohne Netz. Kostenlos für Windows, macOS, Linux und Android.",
+        "inLanguage": "de",
+        "isPartOf": {
+          "@id": "https://wolkenfunk.org/#website"
+        },
+        "primaryImageOfPage": {
+          "@type": "ImageObject",
+          "url": "https://wolkenfunk.org/og-image.png",
+          "width": 1200,
+          "height": 630
+        },
+        "about": {
+          "@id": "https://wolkenfunk.org/#app"
+        }
       },
       {
         "@type": "SoftwareApplication",
+        "@id": "https://wolkenfunk.org/#app",
         "name": "Wolkenfunk",
         "url": "https://wolkenfunk.org/",
         "description": "Der schnelle Messenger für deine Nextcloud: Chats und Anrufe über Nextcloud Talk, sofort da, auch ohne Netz.",
         "applicationCategory": "CommunicationApplication",
-        "operatingSystem": "Android, iOS, macOS, Windows, Linux",
+        "operatingSystem": "Windows, macOS, Linux, Android",
+        "softwareRequirements": "Konto auf einer Nextcloud mit Talk 23 oder neuer",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "EUR"
+        },
+        "isAccessibleForFree": true,
+        "inLanguage": "de",
         "license": "https://www.gnu.org/licenses/agpl-3.0.html",
-        "codeRepository": "https://github.com/raph-ael/nextcloud-talk-legacy",
         "image": "https://wolkenfunk.org/icon-512.png",
-        "downloadUrl": "https://wolkenfunk.org/download/"
+        "screenshot": "https://wolkenfunk.org/screenshots/mac-chats-hell.webp",
+        "downloadUrl": "https://wolkenfunk.org/download/",
+        "sameAs": "https://github.com/raph-ael/nextcloud-talk-legacy",
+        "publisher": {
+          "@id": "https://wolkenfunk.org/#herausgeber"
+        },
+        "featureList": [
+          "Chats ohne Wartezeit, auch ohne Netz",
+          "Sprach- und Videoanrufe, die wie ein Telefonat klingeln",
+          "Sprachnachrichten, Antworten und Reaktionen",
+          "Suche in allen Chats",
+          "Mehrere Konten",
+          "Kategorien und Favoriten",
+          "Helles und dunkles Design"
+        ]
       }
     ]
   }
   </script>
+
+  <script src="/platform.js"></script>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <a class="skip" href="#inhalt">Zum Inhalt springen</a>
@@ -84,26 +141,26 @@
           <li data-platform="any"><a class="button big" href="#geraete">Wolkenfunk laden</a><span class="hint">Für Windows, macOS, Linux und Android</span></li>
           <li data-platform="windows" data-pkg="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe">
             <a class="button big ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe">Für Windows laden</a>
-            <span class="button big soon" aria-disabled="true">Windows: bald</span>
+            <span class="button big soon off">Windows: bald</span>
             <span class="hint">Windows 10 und 11, 64-Bit</span>
           </li>
           <li data-platform="mac" data-pkg="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg">
             <a class="button big ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg">Für macOS laden</a>
-            <span class="button big soon" aria-disabled="true">macOS: bald</span>
+            <span class="button big soon off">macOS: bald</span>
             <span class="hint">macOS 12 oder neuer, Intel und Apple Silicon</span>
           </li>
           <li data-platform="linux" data-pkg="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb">
             <a class="button big ready" href="#geraete">Für Linux laden</a>
-            <span class="button big soon" aria-disabled="true">Linux: bald</span>
+            <span class="button big soon off">Linux: bald</span>
             <span class="hint">Debian, Ubuntu oder AppImage</span>
           </li>
           <li data-platform="android" data-pkg="https://pkg.wolkenfunk.org/android/wolkenfunk.apk">
             <a class="button big ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk">Für Android laden</a>
-            <span class="button big soon" aria-disabled="true">Android: bald</span>
+            <span class="button big soon off">Android: bald</span>
             <span class="hint">Android 8 oder neuer, als APK</span>
           </li>
           <li data-platform="ios">
-            <span class="button big" aria-disabled="true">iPhone: bald im App&nbsp;Store</span>
+            <span class="button big off">iPhone: bald im App&nbsp;Store</span>
             <span class="hint">Auf dem Computer und auf Android schon jetzt</span>
           </li>
           </ul>
@@ -111,8 +168,8 @@
         </div>
 
         <div class="shots">
-          <div class="shot-mac"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/mac-chats-dunkel.800w.webp 800w, /screenshots/mac-chats-dunkel.webp 1280w" sizes="(min-width: 1100px) 950px, 90vw"><img src="/screenshots/mac-chats-hell.webp" srcset="/screenshots/mac-chats-hell.800w.webp 800w, /screenshots/mac-chats-hell.webp 1280w" sizes="(min-width: 1100px) 950px, 90vw" width="1280" height="800" fetchpriority="high" decoding="async" alt="Wolkenfunk am Mac: links die Chatliste mit „Favoriten“ und den Kategorien „Familie &amp; Freunde“ und „Arbeit“, rechts der geöffnete Chat „Team Website“ mit der Linie „2 ungelesene Nachrichten“."></picture></div>
-          <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-chats-dunkel.400w.webp 400w, /screenshots/android-chats-dunkel.webp 1080w" sizes="(min-width: 1100px) 200px, 20vw"><img src="/screenshots/android-chats-hell.webp" srcset="/screenshots/android-chats-hell.400w.webp 400w, /screenshots/android-chats-hell.webp 1080w" sizes="(min-width: 1100px) 200px, 20vw" width="1080" height="2400" decoding="async" alt="Wolkenfunk auf einem Android-Handy: die Chatliste mit den Kategorien „Familie &amp; Freunde“ und „Arbeit“."></picture></div>
+          <div class="shot-mac"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/mac-chats-dunkel.480w.webp 480w, /screenshots/mac-chats-dunkel.720w.webp 720w, /screenshots/mac-chats-dunkel.960w.webp 960w, /screenshots/mac-chats-dunkel.webp 1280w" sizes="(min-width: 1100px) 947px, 88vw"><img src="/screenshots/mac-chats-hell.webp" srcset="/screenshots/mac-chats-hell.480w.webp 480w, /screenshots/mac-chats-hell.720w.webp 720w, /screenshots/mac-chats-hell.960w.webp 960w, /screenshots/mac-chats-hell.webp 1280w" sizes="(min-width: 1100px) 947px, 88vw" width="1280" height="800" fetchpriority="high" decoding="async" alt="Wolkenfunk am Mac: links die Chatliste mit „Favoriten“ und den Kategorien „Familie &amp; Freunde“ und „Arbeit“, rechts der geöffnete Chat „Team Website“ mit der Linie „2 ungelesene Nachrichten“."></picture></div>
+          <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-chats-dunkel.160w.webp 160w, /screenshots/android-chats-dunkel.240w.webp 240w, /screenshots/android-chats-dunkel.320w.webp 320w, /screenshots/android-chats-dunkel.480w.webp 480w, /screenshots/android-chats-dunkel.webp 1080w" sizes="(min-width: 1100px) 184px, 17vw"><img src="/screenshots/android-chats-hell.webp" srcset="/screenshots/android-chats-hell.160w.webp 160w, /screenshots/android-chats-hell.240w.webp 240w, /screenshots/android-chats-hell.320w.webp 320w, /screenshots/android-chats-hell.480w.webp 480w, /screenshots/android-chats-hell.webp 1080w" sizes="(min-width: 1100px) 184px, 17vw" width="1080" height="2400" decoding="async" alt="Wolkenfunk auf einem Android-Handy: die Chatliste mit den Kategorien „Familie &amp; Freunde“ und „Arbeit“."></picture></div>
         </div>
       </div>
     </section>
@@ -130,7 +187,7 @@
           </ul>
         </div>
         <div class="benefit-media">
-          <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-suche-dunkel.400w.webp 400w, /screenshots/android-suche-dunkel.640w.webp 640w, /screenshots/android-suche-dunkel.webp 1080w" sizes="(min-width: 860px) 290px, 70vw"><img src="/screenshots/android-suche-hell.webp" srcset="/screenshots/android-suche-hell.400w.webp 400w, /screenshots/android-suche-hell.640w.webp 640w, /screenshots/android-suche-hell.webp 1080w" sizes="(min-width: 860px) 290px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: Die Suche nach „Lange“ zeigt zwei Chats und drei Nachrichten, das Suchwort ist fett hervorgehoben."></picture></div>
+          <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-suche-dunkel.320w.webp 320w, /screenshots/android-suche-dunkel.480w.webp 480w, /screenshots/android-suche-dunkel.640w.webp 640w, /screenshots/android-suche-dunkel.800w.webp 800w, /screenshots/android-suche-dunkel.webp 1080w" sizes="(min-width: 440px) 267px, 61vw"><img src="/screenshots/android-suche-hell.webp" srcset="/screenshots/android-suche-hell.320w.webp 320w, /screenshots/android-suche-hell.480w.webp 480w, /screenshots/android-suche-hell.640w.webp 640w, /screenshots/android-suche-hell.800w.webp 800w, /screenshots/android-suche-hell.webp 1080w" sizes="(min-width: 440px) 267px, 61vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: Die Suche nach „Lange“ zeigt zwei Chats und drei Nachrichten, das Suchwort ist fett hervorgehoben."></picture></div>
         </div>
       </div>
     </section>
@@ -149,8 +206,8 @@
         </div>
         <div class="benefit-media">
           <div class="duo">
-            <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-ungelesen-dunkel.400w.webp 400w, /screenshots/android-ungelesen-dunkel.640w.webp 640w, /screenshots/android-ungelesen-dunkel.webp 1080w" sizes="(min-width: 860px) 240px, 43vw"><img src="/screenshots/android-ungelesen-hell.webp" srcset="/screenshots/android-ungelesen-hell.400w.webp 400w, /screenshots/android-ungelesen-hell.640w.webp 640w, /screenshots/android-ungelesen-hell.webp 1080w" sizes="(min-width: 860px) 240px, 43vw" width="1080" height="2400" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: der Chat „Gartenprojekt“ mit der Linie „5 ungelesene Nachrichten“ und einem Foto vom Hochbeet."></picture></div>
-            <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/ios-sprachnachricht-dunkel.400w.webp 400w, /screenshots/ios-sprachnachricht-dunkel.640w.webp 640w, /screenshots/ios-sprachnachricht-dunkel.webp 1206w" sizes="(min-width: 860px) 240px, 43vw"><img src="/screenshots/ios-sprachnachricht-hell.webp" srcset="/screenshots/ios-sprachnachricht-hell.400w.webp 400w, /screenshots/ios-sprachnachricht-hell.640w.webp 640w, /screenshots/ios-sprachnachricht-hell.webp 1206w" sizes="(min-width: 860px) 240px, 43vw" width="1206" height="2622" loading="lazy" decoding="async" alt="Wolkenfunk auf dem iPhone: der Chat „Familie“ mit einer Sprachnachricht von Hilde Lange."></picture></div>
+            <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-ungelesen-dunkel.240w.webp 240w, /screenshots/android-ungelesen-dunkel.320w.webp 320w, /screenshots/android-ungelesen-dunkel.480w.webp 480w, /screenshots/android-ungelesen-dunkel.640w.webp 640w, /screenshots/android-ungelesen-dunkel.webp 1080w" sizes="(min-width: 1100px) 220px, (min-width: 860px) 20vw, (min-width: 600px) 227px, 39vw"><img src="/screenshots/android-ungelesen-hell.webp" srcset="/screenshots/android-ungelesen-hell.240w.webp 240w, /screenshots/android-ungelesen-hell.320w.webp 320w, /screenshots/android-ungelesen-hell.480w.webp 480w, /screenshots/android-ungelesen-hell.640w.webp 640w, /screenshots/android-ungelesen-hell.webp 1080w" sizes="(min-width: 1100px) 220px, (min-width: 860px) 20vw, (min-width: 600px) 227px, 39vw" width="1080" height="2400" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: der Chat „Gartenprojekt“ mit der Linie „5 ungelesene Nachrichten“ und einem Foto vom Hochbeet."></picture></div>
+            <div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/ios-sprachnachricht-dunkel.240w.webp 240w, /screenshots/ios-sprachnachricht-dunkel.320w.webp 320w, /screenshots/ios-sprachnachricht-dunkel.480w.webp 480w, /screenshots/ios-sprachnachricht-dunkel.640w.webp 640w, /screenshots/ios-sprachnachricht-dunkel.webp 1206w" sizes="(min-width: 1100px) 220px, (min-width: 860px) 20vw, (min-width: 600px) 227px, 39vw"><img src="/screenshots/ios-sprachnachricht-hell.webp" srcset="/screenshots/ios-sprachnachricht-hell.240w.webp 240w, /screenshots/ios-sprachnachricht-hell.320w.webp 320w, /screenshots/ios-sprachnachricht-hell.480w.webp 480w, /screenshots/ios-sprachnachricht-hell.640w.webp 640w, /screenshots/ios-sprachnachricht-hell.webp 1206w" sizes="(min-width: 1100px) 220px, (min-width: 860px) 20vw, (min-width: 600px) 227px, 39vw" width="1206" height="2622" loading="lazy" decoding="async" alt="Wolkenfunk auf dem iPhone: der Chat „Familie“ mit einer Sprachnachricht von Hilde Lange."></picture></div>
           </div>
         </div>
       </div>
@@ -190,35 +247,35 @@
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
           <h3>Windows</h3>
           <p class="req">Windows 10 und 11</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe" aria-label="Wolkenfunk für Windows laden">Laden</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe" aria-label="Wolkenfunk für Windows laden">Laden</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="/download/#windows" aria-label="Hinweise zur Installation unter Windows">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="mac" data-pkg="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg>
           <h3>macOS</h3>
           <p class="req">macOS 12 oder neuer</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg" aria-label="Wolkenfunk für macOS laden">Laden</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg" aria-label="Wolkenfunk für macOS laden">Laden</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="/download/#mac" aria-label="Hinweise zur Installation unter macOS">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="linux" data-pkg="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M13 15h4"/></svg>
           <h3>Linux</h3>
           <p class="req">Debian, Ubuntu und alle anderen</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb" aria-label="Wolkenfunk für Debian und Ubuntu laden">.deb</a><a class="button small outline ready" data-pkg="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" href="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" aria-label="Wolkenfunk als AppImage laden">AppImage</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb" aria-label="Wolkenfunk als .deb für Debian und Ubuntu laden">.deb</a><a class="button small outline ready" data-pkg="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" href="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" aria-label="Wolkenfunk als AppImage laden">AppImage</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="/download/#linux" aria-label="Hinweise zur Installation unter Linux">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="android" data-pkg="https://pkg.wolkenfunk.org/android/wolkenfunk.apk">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
           <h3>Android</h3>
           <p class="req">Android 8 oder neuer</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-label="Wolkenfunk für Android laden">Laden</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-label="Wolkenfunk für Android laden">Laden</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="/download/#android" aria-label="Hinweise zur Installation unter Android">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="ios">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="3"/><path d="M10.5 5.5h3"/></svg>
           <h3>iPhone</h3>
           <p class="req">kommt in den App&nbsp;Store</p>
-          <p class="act"><span class="button small" aria-disabled="true">Bald</span></p>
+          <p class="act"><span class="button small off">Bald</span></p>
           <a class="more" href="/download/#ios" aria-label="Hinweise zur Installation unter iPhone">Hinweise&nbsp;›</a>
         </li>
         </ul>
@@ -265,6 +322,5 @@
       <p>Open Source unter <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>. Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden.</p>
     </div>
   </footer>
-  <script src="/platform.js?v=2"></script>
 </body>
 </html>

@@ -20,9 +20,15 @@ kommen nur die Originale.
 Neben einem Download-Knopf steht `<span data-version-of="URL"></span>`. Dort trägt es die
 Versionsnummer ein, die hinter dem festen Link liegt (aus SHA256SUMS im selben Ordner). Mit
 --all nimmt es die Version aus desktop/package.json, mit --none bleibt die Stelle leer.
+
+Das Stylesheet verliert Kommentare und Einrückung. Zuletzt hängt es an jeden Verweis auf eine eigene Datei (CSS, Skript, Schrift, Bild, Manifest)
+`?v=<Prüfsumme des Inhalts>`. Ändert sich eine Datei, ändert sich ihre Adresse; der Webserver
+darf alles mit `?v=` deshalb ein Jahr lang im Browser-Cache lassen. Von Hand zählt niemand
+mehr eine Versionsnummer hoch.
 """
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -41,6 +47,9 @@ SRC = re.compile(r'\s(?:src|srcset)="([^"]+)"')
 SIZE = re.compile(r'<img[^>]*\swidth="(\d+)"[^>]*\sheight="(\d+)"')
 # Verkleinerte Variante NAME.<breite>w.webp entsteht hier aus NAME.webp, liegt also nicht im Repo.
 VARIANT = re.compile(r"^(.+)\.(\d+)w\.webp$")
+# Verweis auf eine eigene Datei: beginnt mit /, steht in Anführungszeichen, in url(…) oder in
+# einer srcset-Liste. Adressen mit https:// davor (og:image, JSON-LD) passen nicht und bleiben fest.
+STATIC = re.compile(r'''(?<=["'\s,(])(/[A-Za-z0-9_./-]+\.(?:css|js|webp|png|svg|ico|woff2|webmanifest))(?=["'\s,)])''')
 
 
 def exists(url: str) -> bool:
@@ -131,6 +140,26 @@ def check_images(dest: Path, pages: list[Path], placeholders: bool) -> None:
         sys.exit("fehlende Bilder (Vorschau mit --placeholders):\n  " + "\n  ".join(missing))
 
 
+def slim_css(f: Path) -> None:
+    """Kommentare, Einrückung und Leerzeilen raus; die Regeln selbst bleiben unverändert."""
+    text = re.sub(r"/\*.*?\*/", "", f.read_text(), flags=re.S)
+    f.write_text("\n".join(ln.strip() for ln in text.splitlines() if ln.strip()) + "\n")
+
+
+def stamp(dest: Path, files: list[Path]) -> None:
+    """Hängt ?v=<Prüfsumme> an jeden Verweis auf eine vorhandene eigene Datei."""
+    def add(m: re.Match) -> str:
+        f = dest / m.group(1).lstrip("/")
+        if not f.is_file():
+            return m.group(1)
+        return f"{m.group(1)}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}"
+    for p in files:
+        text = p.read_text()
+        new = STATIC.sub(add, text)
+        if new != text:
+            p.write_text(new)
+
+
 def placeholder(f: Path, size: tuple[int, int]) -> None:
     from PIL import Image, ImageDraw
     dark = "-dunkel" in f.name
@@ -178,6 +207,11 @@ def main() -> None:
             if versions[m.group(1)] else m.group(0), new)
         if new != text:
             p.write_text(new)
+    for css in sorted(a.dest.glob("*.css")):
+        slim_css(css)
+    # Erst Stylesheet und Manifest (ihre Prüfsumme hängt von Schrift und Icons ab), dann die Seiten.
+    stamp(a.dest, sorted(a.dest.glob("*.css")) + sorted(a.dest.glob("*.webmanifest")))
+    stamp(a.dest, pages)
     print(f"→ {a.dest}")
 
 

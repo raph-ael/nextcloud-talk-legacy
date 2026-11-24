@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Funktionen – Wolkenfunk</title>
-  <meta name="description" content="Alles, was Wolkenfunk kann: Chats, Anrufe, Benachrichtigungen, Sprachnachrichten, Dateien, Kategorien, Suche und mehrere Konten. Einfach erklärt.">
-  <meta name="robots" content="noindex">
+  <title>Funktionen: Chats, Anrufe, Push und Suche – Wolkenfunk</title>
+  <meta name="description" content="Was Wolkenfunk kann: Chats, Sprach- und Videoanrufe, Push, Sprachnachrichten, Dateien, Kategorien, Suche ohne Netz und mehrere Konten für Nextcloud Talk.">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
   <link rel="canonical" href="https://wolkenfunk.org/funktionen/">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -15,7 +15,89 @@
   <link rel="icon" href="/favicon.ico" sizes="32x32">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="stylesheet" href="/styles.css?v=8">
+  <link rel="manifest" href="/site.webmanifest">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Wolkenfunk">
+  <meta property="og:locale" content="de_DE">
+  <meta property="og:url" content="https://wolkenfunk.org/funktionen/">
+  <meta property="og:title" content="Alles, was Wolkenfunk kann">
+  <meta property="og:description" content="Chats, Anrufe, Benachrichtigungen, Sprachnachrichten, Dateien, Kategorien, Suche und mehrere Konten. Einfach erklärt.">
+  <meta property="og:image" content="https://wolkenfunk.org/og-image.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Wolkenfunk: „Der schnelle Messenger für deine Nextcloud.“ Daneben die App am Computer und auf dem Handy.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Alles, was Wolkenfunk kann">
+  <meta name="twitter:description" content="Chats, Anrufe, Benachrichtigungen, Sprachnachrichten, Dateien, Kategorien, Suche und mehrere Konten. Einfach erklärt.">
+  <meta name="twitter:image" content="https://wolkenfunk.org/og-image.png">
+  <meta name="twitter:image:alt" content="Wolkenfunk: „Der schnelle Messenger für deine Nextcloud.“ Daneben die App am Computer und auf dem Handy.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://wolkenfunk.org/#herausgeber",
+        "name": "CODELABOR UG (haftungsbeschränkt)",
+        "url": "https://codelabor.io/"
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://wolkenfunk.org/#website",
+        "url": "https://wolkenfunk.org/",
+        "name": "Wolkenfunk",
+        "description": "Der schnelle Messenger für deine Nextcloud.",
+        "inLanguage": "de",
+        "publisher": {
+          "@id": "https://wolkenfunk.org/#herausgeber"
+        }
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://wolkenfunk.org/funktionen/#seite",
+        "url": "https://wolkenfunk.org/funktionen/",
+        "name": "Funktionen: Chats, Anrufe, Push und Suche – Wolkenfunk",
+        "description": "Was Wolkenfunk kann: Chats, Sprach- und Videoanrufe, Push, Sprachnachrichten, Dateien, Kategorien, Suche ohne Netz und mehrere Konten für Nextcloud Talk.",
+        "inLanguage": "de",
+        "isPartOf": {
+          "@id": "https://wolkenfunk.org/#website"
+        },
+        "primaryImageOfPage": {
+          "@type": "ImageObject",
+          "url": "https://wolkenfunk.org/og-image.png",
+          "width": 1200,
+          "height": 630
+        },
+        "breadcrumb": {
+          "@id": "https://wolkenfunk.org/funktionen/#pfad"
+        }
+      },
+      {
+        "@type": "BreadcrumbList",
+        "@id": "https://wolkenfunk.org/funktionen/#pfad",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Wolkenfunk",
+            "item": "https://wolkenfunk.org/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Funktionen",
+            "item": "https://wolkenfunk.org/funktionen/"
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <a class="skip" href="#inhalt">Zum Inhalt springen</a>
@@ -59,7 +141,7 @@
             <li><h3>KI-Agenten</h3><p>Arbeitet in deinem Talk ein KI-Agent mit, siehst du klein und grau, woran er gerade sitzt. Chats mit Agenten stehen in einem eigenen Abschnitt.</p></li>
           </ul>
         </div>
-        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-erwaehnungen-dunkel.400w.webp 400w, /screenshots/android-erwaehnungen-dunkel.640w.webp 640w, /screenshots/android-erwaehnungen-dunkel.webp 1080w" sizes="(min-width: 900px) 270px, 70vw"><img src="/screenshots/android-erwaehnungen-hell.webp" srcset="/screenshots/android-erwaehnungen-hell.400w.webp 400w, /screenshots/android-erwaehnungen-hell.640w.webp 640w, /screenshots/android-erwaehnungen-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: die Gruppe „Sommerfest“ mit Erwähnungen von „@Alle“, einer Gruppe, einem Team und einer Person, darunter eine Nachricht mit fünf Herzen als Reaktion."></picture></div></div>
+        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-erwaehnungen-dunkel.320w.webp 320w, /screenshots/android-erwaehnungen-dunkel.480w.webp 480w, /screenshots/android-erwaehnungen-dunkel.640w.webp 640w, /screenshots/android-erwaehnungen-dunkel.800w.webp 800w, /screenshots/android-erwaehnungen-dunkel.webp 1080w" sizes="(min-width: 420px) 248px, 59vw"><img src="/screenshots/android-erwaehnungen-hell.webp" srcset="/screenshots/android-erwaehnungen-hell.320w.webp 320w, /screenshots/android-erwaehnungen-hell.480w.webp 480w, /screenshots/android-erwaehnungen-hell.640w.webp 640w, /screenshots/android-erwaehnungen-hell.800w.webp 800w, /screenshots/android-erwaehnungen-hell.webp 1080w" sizes="(min-width: 420px) 248px, 59vw" width="1080" height="1920" fetchpriority="high" decoding="async" alt="Wolkenfunk auf Android: die Gruppe „Sommerfest“ mit Erwähnungen von „@Alle“, einer Gruppe, einem Team und einer Person, darunter eine Nachricht mit fünf Herzen als Reaktion."></picture></div></div>
       </div>
     </section>
 
@@ -99,7 +181,7 @@
             <li><h3>Ohne Google-Dienste <span class="tag">Android</span></h3><p>Auf Handys ohne Google-Dienste kommen Benachrichtigungen, solange die App geöffnet ist.</p></li>
           </ul>
         </div>
-        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-benachrichtigung-dunkel.400w.webp 400w, /screenshots/android-benachrichtigung-dunkel.640w.webp 640w, /screenshots/android-benachrichtigung-dunkel.webp 1080w" sizes="(min-width: 900px) 270px, 70vw"><img src="/screenshots/android-benachrichtigung-hell.webp" srcset="/screenshots/android-benachrichtigung-hell.400w.webp 400w, /screenshots/android-benachrichtigung-hell.640w.webp 640w, /screenshots/android-benachrichtigung-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Die Mitteilungsleiste von Android mit einer Benachrichtigung von Wolkenfunk: eine Nachricht von Lena Hoffmann, darunter die Knöpfe „Antworten“ und „Als gelesen markieren“."></picture></div></div>
+        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-benachrichtigung-dunkel.320w.webp 320w, /screenshots/android-benachrichtigung-dunkel.480w.webp 480w, /screenshots/android-benachrichtigung-dunkel.640w.webp 640w, /screenshots/android-benachrichtigung-dunkel.800w.webp 800w, /screenshots/android-benachrichtigung-dunkel.webp 1080w" sizes="(min-width: 420px) 248px, 59vw"><img src="/screenshots/android-benachrichtigung-hell.webp" srcset="/screenshots/android-benachrichtigung-hell.320w.webp 320w, /screenshots/android-benachrichtigung-hell.480w.webp 480w, /screenshots/android-benachrichtigung-hell.640w.webp 640w, /screenshots/android-benachrichtigung-hell.800w.webp 800w, /screenshots/android-benachrichtigung-hell.webp 1080w" sizes="(min-width: 420px) 248px, 59vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Die Mitteilungsleiste von Android mit einer Benachrichtigung von Wolkenfunk: eine Nachricht von Lena Hoffmann, darunter die Knöpfe „Antworten“ und „Als gelesen markieren“."></picture></div></div>
       </div>
     </section>
 
@@ -118,7 +200,7 @@
             <li><h3>Kontakte teilen <span class="tag">Android</span></h3><p>Teile einen Kontakt aus deinem Adressbuch und wähle vorher, welche Nummern und Adressen mitgehen.</p></li>
           </ul>
         </div>
-        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-standort-dunkel.400w.webp 400w, /screenshots/android-standort-dunkel.640w.webp 640w, /screenshots/android-standort-dunkel.webp 1080w" sizes="(min-width: 900px) 270px, 70vw"><img src="/screenshots/android-standort-hell.webp" srcset="/screenshots/android-standort-hell.400w.webp 400w, /screenshots/android-standort-hell.640w.webp 640w, /screenshots/android-standort-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: In der Gruppe „Sommerfest“ steht ein geteilter Standort als Karte, „Volkspark Friedrichshain, Berlin“, darunter ein geteilter Kontakt."></picture></div></div>
+        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-standort-dunkel.320w.webp 320w, /screenshots/android-standort-dunkel.480w.webp 480w, /screenshots/android-standort-dunkel.640w.webp 640w, /screenshots/android-standort-dunkel.800w.webp 800w, /screenshots/android-standort-dunkel.webp 1080w" sizes="(min-width: 420px) 248px, 59vw"><img src="/screenshots/android-standort-hell.webp" srcset="/screenshots/android-standort-hell.320w.webp 320w, /screenshots/android-standort-hell.480w.webp 480w, /screenshots/android-standort-hell.640w.webp 640w, /screenshots/android-standort-hell.800w.webp 800w, /screenshots/android-standort-hell.webp 1080w" sizes="(min-width: 420px) 248px, 59vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: In der Gruppe „Sommerfest“ steht ein geteilter Standort als Karte, „Volkspark Friedrichshain, Berlin“, darunter ein geteilter Kontakt."></picture></div></div>
       </div>
     </section>
 
@@ -127,7 +209,7 @@
         <div class="fgroup-text">
           <h2 id="h-ordnung">Ordnung und Suche</h2>
           <p class="lead">Auch mit vielen Chats behältst du den Überblick.</p>
-          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-chats-dunkel.800w.webp 800w, /screenshots/desktop-chats-dunkel.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)"><img src="/screenshots/desktop-chats-hell.webp" srcset="/screenshots/desktop-chats-hell.800w.webp 800w, /screenshots/desktop-chats-hell.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer: Chatliste mit „Favoriten“ und den Kategorien „Familie &amp; Freunde“ und „Arbeit“, daneben der geöffnete Chat „Team Website“."></picture></div>
+          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-chats-dunkel.480w.webp 480w, /screenshots/desktop-chats-dunkel.720w.webp 720w, /screenshots/desktop-chats-dunkel.960w.webp 960w, /screenshots/desktop-chats-dunkel.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)"><img src="/screenshots/desktop-chats-hell.webp" srcset="/screenshots/desktop-chats-hell.480w.webp 480w, /screenshots/desktop-chats-hell.720w.webp 720w, /screenshots/desktop-chats-hell.960w.webp 960w, /screenshots/desktop-chats-hell.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer: Chatliste mit „Favoriten“ und den Kategorien „Familie &amp; Freunde“ und „Arbeit“, daneben der geöffnete Chat „Team Website“."></picture></div>
           <ul class="flist">
             <li><h3>Kategorien</h3><p>Ordne Chats in eigene Kategorien wie „Familie &amp; Freunde“ oder „Arbeit“. Sie kommen von deiner Nextcloud und sind auf allen Geräten gleich, auch im Browser.</p></li>
             <li><h3>Favoriten</h3><p>Deine wichtigsten Chats stehen ganz oben.</p></li>
@@ -148,7 +230,7 @@
         <div class="fgroup-text">
           <h2 id="h-konten">Mehrere Konten</h2>
           <p class="lead">Verein, Arbeit, Familie: mehrere Nextclouds in einer App.</p>
-          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-konten-dunkel.800w.webp 800w, /screenshots/desktop-konten-dunkel.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)"><img src="/screenshots/desktop-konten-hell.webp" srcset="/screenshots/desktop-konten-hell.800w.webp 800w, /screenshots/desktop-konten-hell.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer: Das Kontomenü ist offen und zeigt zwei Konten auf verschiedenen Servern. Das aktive trägt einen Haken, das andere die Zahl 1 für Neues. Darunter „Konto hinzufügen“ und „Einstellungen“."></picture></div>
+          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-konten-dunkel.480w.webp 480w, /screenshots/desktop-konten-dunkel.720w.webp 720w, /screenshots/desktop-konten-dunkel.960w.webp 960w, /screenshots/desktop-konten-dunkel.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)"><img src="/screenshots/desktop-konten-hell.webp" srcset="/screenshots/desktop-konten-hell.480w.webp 480w, /screenshots/desktop-konten-hell.720w.webp 720w, /screenshots/desktop-konten-hell.960w.webp 960w, /screenshots/desktop-konten-hell.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer: Das Kontomenü ist offen und zeigt zwei Konten auf verschiedenen Servern. Das aktive trägt einen Haken, das andere die Zahl 1 für Neues. Darunter „Konto hinzufügen“ und „Einstellungen“."></picture></div>
           <ul class="flist">
             <li><h3>Bis zu fünf Konten</h3><p>Melde dich mit mehreren Nextcloud-Konten gleichzeitig an, auch auf verschiedenen Servern.</p></li>
             <li><h3>Wechsel über den Avatar</h3><p>Ein Tipp auf dein Bild oben links, und du bist im anderen Konto.</p></li>
@@ -166,7 +248,7 @@
         <div class="fgroup-text">
           <h2 id="h-darstellung">Darstellung</h2>
           <p class="lead">Wolkenfunk sieht so aus, wie du es magst.</p>
-          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-kompakt-dunkel.800w.webp 800w, /screenshots/desktop-kompakt-dunkel.webp 1280w" sizes="(min-width: 1124px) 740px, calc(100vw - 44px)"><img src="/screenshots/desktop-kompakt-hell.webp" srcset="/screenshots/desktop-kompakt-hell.800w.webp 800w, /screenshots/desktop-kompakt-hell.webp 1280w" sizes="(min-width: 1124px) 740px, calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer in der kompakten Ansicht: eine einzeilige Chatliste und die Nachrichten des Chats „Team Website“ untereinander statt in Sprechblasen."></picture></div>
+          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-kompakt-dunkel.480w.webp 480w, /screenshots/desktop-kompakt-dunkel.720w.webp 720w, /screenshots/desktop-kompakt-dunkel.960w.webp 960w, /screenshots/desktop-kompakt-dunkel.webp 1280w" sizes="(min-width: 1124px) 738px, (min-width: 900px) calc(100vw - 386px), calc(100vw - 44px)"><img src="/screenshots/desktop-kompakt-hell.webp" srcset="/screenshots/desktop-kompakt-hell.480w.webp 480w, /screenshots/desktop-kompakt-hell.720w.webp 720w, /screenshots/desktop-kompakt-hell.960w.webp 960w, /screenshots/desktop-kompakt-hell.webp 1280w" sizes="(min-width: 1124px) 738px, (min-width: 900px) calc(100vw - 386px), calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer in der kompakten Ansicht: eine einzeilige Chatliste und die Nachrichten des Chats „Team Website“ untereinander statt in Sprechblasen."></picture></div>
           <ul class="flist">
             <li><h3>Hell oder dunkel</h3><p>Helles Design, dunkles Design oder so, wie dein Gerät gerade eingestellt ist.</p></li>
             <li><h3>Zehn Akzentfarben</h3><p>Blau, Indigo, Violett, Pink, Rot, Orange, Bernstein, Grün, Petrol oder Schiefergrau.</p></li>
@@ -174,7 +256,7 @@
             <li><h3>Tastenkürzel <span class="tag">Computer</span></h3><p>Strg+N für eine neue Nachricht, Strg+K für die Suche, Alt+Pfeil zum Wechseln zwischen Chats. Am Mac mit ⌘ statt Strg.</p></li>
           </ul>
         </div>
-        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-darstellung-dunkel.400w.webp 400w, /screenshots/android-darstellung-dunkel.640w.webp 640w, /screenshots/android-darstellung-dunkel.webp 1080w" sizes="(min-width: 900px) 270px, 70vw"><img src="/screenshots/android-darstellung-hell.webp" srcset="/screenshots/android-darstellung-hell.400w.webp 400w, /screenshots/android-darstellung-hell.640w.webp 640w, /screenshots/android-darstellung-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: die Einstellungen zur Darstellung mit der Wahl zwischen „System“, „Hell“ und „Dunkel“ und zehn Akzentfarben."></picture></div></div>
+        <div class="fgroup-media"><div class="phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-darstellung-dunkel.320w.webp 320w, /screenshots/android-darstellung-dunkel.480w.webp 480w, /screenshots/android-darstellung-dunkel.640w.webp 640w, /screenshots/android-darstellung-dunkel.800w.webp 800w, /screenshots/android-darstellung-dunkel.webp 1080w" sizes="(min-width: 420px) 248px, 59vw"><img src="/screenshots/android-darstellung-hell.webp" srcset="/screenshots/android-darstellung-hell.320w.webp 320w, /screenshots/android-darstellung-hell.480w.webp 480w, /screenshots/android-darstellung-hell.640w.webp 640w, /screenshots/android-darstellung-hell.800w.webp 800w, /screenshots/android-darstellung-hell.webp 1080w" sizes="(min-width: 420px) 248px, 59vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: die Einstellungen zur Darstellung mit der Wahl zwischen „System“, „Hell“ und „Dunkel“ und zehn Akzentfarben."></picture></div></div>
       </div>
     </section>
 

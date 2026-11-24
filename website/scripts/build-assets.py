@@ -3,7 +3,7 @@
 aus dem Symbol-Icon design/icon/wolkenfunk-symbolic.svg.
 
 Voraussetzungen: rsvg-convert (librsvg2-bin), Python 3 mit Pillow,
-Schrift „Noto Sans“ (nur für og-image.png).
+Chrome oder Chromium (nur für og-image.png; das Bild zeigt zwei Screenshots der Webseite).
 
 Aufruf (aus dem Repo-Root oder website/):  python3 website/scripts/build-assets.py
 Die Ergebnisse landen in website/public/ und werden mit eingecheckt,
@@ -12,6 +12,7 @@ damit der Deploy kein Werkzeug braucht.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -67,6 +68,57 @@ def render(svg: str, out: Path, w: int, h: int | None = None) -> None:
     Path(tmp).unlink()
 
 
+OG_HTML = """<!doctype html><html lang="de"><meta charset="utf-8">
+<style>
+@font-face {{ font-family: "Inter"; font-weight: 100 900; src: url("{pub}/fonts/inter-latin.woff2") format("woff2"); }}
+* {{ box-sizing: border-box; margin: 0; }}
+html, body {{ width: 1200px; height: 630px; overflow: hidden; }}
+body {{ font-family: "Inter", sans-serif; color: #1D1D1F; position: relative;
+  background: linear-gradient(135deg, #FFFFFF 0%, #FFFFFF 35%, #E6EEFB 100%); -webkit-font-smoothing: antialiased; }}
+.text {{ position: absolute; left: 72px; top: 0; bottom: 0; width: 530px;
+  display: flex; flex-direction: column; justify-content: center; }}
+.brand {{ display: flex; align-items: center; gap: 16px; font-size: 38px; font-weight: 600; letter-spacing: -0.02em; }}
+.brand svg {{ width: 68px; height: 68px; margin-left: -6px; }}
+h1 {{ margin-top: 44px; font-size: 63px; line-height: 1.06; letter-spacing: -0.035em; font-weight: 700; }}
+p {{ margin-top: 30px; font-size: 25px; line-height: 1.35; color: #6E6E73; letter-spacing: -0.01em; }}
+.mac {{ position: absolute; left: 626px; top: 96px; width: 650px; border-radius: 14px; display: block;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 30px 70px -20px rgba(20,40,90,.35), 0 10px 24px -10px rgba(20,40,90,.2); }}
+.phone {{ position: absolute; left: 968px; top: 200px; width: 196px; padding: 7px; border-radius: 30px;
+  background: #111114; box-shadow: 0 30px 60px -18px rgba(10,20,50,.5), 0 0 0 1px rgba(0,0,0,.2); }}
+.phone img {{ display: block; width: 100%; border-radius: 23px; }}
+</style>
+<div class="text">
+  <div class="brand"><svg viewBox="0 0 512 512">{glyph}</svg>Wolkenfunk</div>
+  <h1>Der schnelle Messenger für deine Nextcloud.</h1>
+  <p>Kostenlos für Windows, macOS,<br>Linux und Android</p>
+</div>
+<img class="mac" src="{pub}/screenshots/mac-chats-hell.webp" alt="">
+<div class="phone"><img src="{pub}/screenshots/android-chats-hell.webp" alt=""></div>
+</html>
+"""
+
+
+def og_image() -> None:
+    """Vorschaubild für geteilte Links: Text links, rechts die App am Mac und auf dem Handy.
+    Gesetzt in HTML mit der Schrift und den Bildern der Webseite, fotografiert mit Chrome."""
+    chrome = next((c for c in ("google-chrome", "chromium", "chromium-browser") if shutil.which(c)), None)
+    if not chrome:
+        print("og-image.png übersprungen: kein Chrome/Chromium gefunden", file=sys.stderr)
+        return
+    with tempfile.TemporaryDirectory() as d:
+        page, shot = Path(d) / "og.html", Path(d) / "og.png"
+        page.write_text(OG_HTML.format(pub=OUT.as_uri(), glyph=glyph(GLYPH_ON_LIGHT)))
+        subprocess.run([chrome, "--headless=new", "--no-sandbox", "--hide-scrollbars",
+                        "--allow-file-access-from-files", "--force-device-scale-factor=1",
+                        f"--user-data-dir={d}/profil", "--window-size=1200,630",
+                        f"--screenshot={shot}", page.as_uri()],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with Image.open(shot) as im:
+            if im.size != (1200, 630):
+                sys.exit(f"og-image: {im.size} statt 1200×630")
+            im.convert("RGB").save(OUT / "og-image.png", optimize=True)
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -99,20 +151,7 @@ def main() -> None:
         Image.open(big).save(OUT / "favicon.ico", sizes=[(16, 16), (32, 32), (48, 48)])
 
     # 4) og-image.png 1200×630 für Link-Vorschauen (Signal, Mastodon, Slack …)
-    og = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <defs><linearGradient id="og" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E9EEF8"/>
-  </linearGradient></defs>
-  <rect width="1200" height="630" fill="url(#og)"/>
-  <g transform="translate(88 96) scale(0.26)">{glyph(GLYPH_ON_LIGHT)}</g>
-  <g font-family="Noto Sans, sans-serif">
-    <text x="232" y="181" font-size="50" font-weight="600" fill="#1D1D1F" letter-spacing="-1">Wolkenfunk</text>
-    <text x="92" y="372" font-size="84" font-weight="700" fill="#1D1D1F" letter-spacing="-2.5">Der schnelle Messenger</text>
-    <text x="92" y="478" font-size="84" font-weight="700" fill="#1D1D1F" letter-spacing="-2.5">für deine Nextcloud.</text>
-    <text x="96" y="562" font-size="33" fill="#6E6E73">Windows · macOS · Linux · Android · bald iPhone</text>
-  </g>
-</svg>"""
-    render(og, OUT / "og-image.png", 1200, 630)
+    og_image()
 
     for p in sorted(OUT.glob("*")):
         if p.suffix in {".png", ".ico", ".svg"}:

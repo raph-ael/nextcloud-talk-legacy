@@ -1,4 +1,6 @@
-// Zeigt den Download für das eigene Betriebssystem als Hauptknopf und hebt dessen Kachel hervor.
+// Merkt sich das Betriebssystem als data-os am <html>-Element. styles.css zeigt damit den
+// passenden Download als Hauptknopf und hebt dessen Kachel hervor. Das Skript steht im <head>,
+// damit die Seite gleich richtig erscheint und nichts nachträglich verrutscht.
 // Ohne dieses Skript (oder bei unbekanntem System) bleibt der allgemeine Knopf, und alle
 // Kacheln sehen gleich aus. Läuft nur im Browser, sendet nichts.
 (function () {
@@ -17,11 +19,6 @@
   else if (/win/i.test(s)) os = 'windows';
   else if (/mac/i.test(s)) os = 'mac';
   else if (/linux/i.test(s)) os = 'linux'; // nicht X11: das melden auch die BSDs
-  if (!os) return;
 
-  var items = document.querySelectorAll('[data-platform="' + os + '"]');
-  for (var i = 0; i < items.length; i++) items[i].classList.add('is-match');
-
-  var box = document.getElementById('get');
-  if (box && box.querySelector('.is-match')) box.classList.add('is-detected');
+  if (os) document.documentElement.setAttribute('data-os', os);
 })();

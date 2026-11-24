@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Herunterladen – Wolkenfunk</title>
-  <meta name="description" content="Wolkenfunk herunterladen: für Windows, macOS, Linux (Debian, Ubuntu, AppImage) und Android, bald fürs iPhone. Mit Hinweisen zur Installation.">
-  <meta name="robots" content="noindex">
+  <title>Wolkenfunk herunterladen – Windows, macOS, Linux, Android</title>
+  <meta name="description" content="Wolkenfunk kostenlos herunterladen: der Messenger für Nextcloud Talk auf Windows, macOS, Linux (Debian, Ubuntu, AppImage) und Android. Mit Anleitung.">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
   <link rel="canonical" href="https://wolkenfunk.org/download/">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -15,7 +15,90 @@
   <link rel="icon" href="/favicon.ico" sizes="32x32">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="stylesheet" href="/styles.css?v=8">
+  <link rel="manifest" href="/site.webmanifest">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Wolkenfunk">
+  <meta property="og:locale" content="de_DE">
+  <meta property="og:url" content="https://wolkenfunk.org/download/">
+  <meta property="og:title" content="Wolkenfunk herunterladen">
+  <meta property="og:description" content="Kostenlos für Windows, macOS, Linux und Android, bald fürs iPhone. Mit Hinweisen zur Installation.">
+  <meta property="og:image" content="https://wolkenfunk.org/og-image.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Wolkenfunk: „Der schnelle Messenger für deine Nextcloud.“ Daneben die App am Computer und auf dem Handy.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Wolkenfunk herunterladen">
+  <meta name="twitter:description" content="Kostenlos für Windows, macOS, Linux und Android, bald fürs iPhone. Mit Hinweisen zur Installation.">
+  <meta name="twitter:image" content="https://wolkenfunk.org/og-image.png">
+  <meta name="twitter:image:alt" content="Wolkenfunk: „Der schnelle Messenger für deine Nextcloud.“ Daneben die App am Computer und auf dem Handy.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://wolkenfunk.org/#herausgeber",
+        "name": "CODELABOR UG (haftungsbeschränkt)",
+        "url": "https://codelabor.io/"
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://wolkenfunk.org/#website",
+        "url": "https://wolkenfunk.org/",
+        "name": "Wolkenfunk",
+        "description": "Der schnelle Messenger für deine Nextcloud.",
+        "inLanguage": "de",
+        "publisher": {
+          "@id": "https://wolkenfunk.org/#herausgeber"
+        }
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://wolkenfunk.org/download/#seite",
+        "url": "https://wolkenfunk.org/download/",
+        "name": "Wolkenfunk herunterladen – Windows, macOS, Linux, Android",
+        "description": "Wolkenfunk kostenlos herunterladen: der Messenger für Nextcloud Talk auf Windows, macOS, Linux (Debian, Ubuntu, AppImage) und Android. Mit Anleitung.",
+        "inLanguage": "de",
+        "isPartOf": {
+          "@id": "https://wolkenfunk.org/#website"
+        },
+        "primaryImageOfPage": {
+          "@type": "ImageObject",
+          "url": "https://wolkenfunk.org/og-image.png",
+          "width": 1200,
+          "height": 630
+        },
+        "breadcrumb": {
+          "@id": "https://wolkenfunk.org/download/#pfad"
+        }
+      },
+      {
+        "@type": "BreadcrumbList",
+        "@id": "https://wolkenfunk.org/download/#pfad",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Wolkenfunk",
+            "item": "https://wolkenfunk.org/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Herunterladen",
+            "item": "https://wolkenfunk.org/download/"
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+
+  <script src="/platform.js"></script>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <a class="skip" href="#inhalt">Zum Inhalt springen</a>
@@ -37,37 +120,37 @@
         <ul class="tiles">
         <li class="tile" data-platform="windows" data-pkg="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-          <h3>Windows</h3>
+          <h2>Windows</h2>
           <p class="req">Windows 10 und 11</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe" aria-label="Wolkenfunk für Windows laden">Laden</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe" aria-label="Wolkenfunk für Windows laden">Laden</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="#windows" aria-label="Hinweise zur Installation unter Windows">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="mac" data-pkg="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg>
-          <h3>macOS</h3>
+          <h2>macOS</h2>
           <p class="req">macOS 12 oder neuer</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg" aria-label="Wolkenfunk für macOS laden">Laden</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg" aria-label="Wolkenfunk für macOS laden">Laden</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="#mac" aria-label="Hinweise zur Installation unter macOS">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="linux" data-pkg="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M13 15h4"/></svg>
-          <h3>Linux</h3>
+          <h2>Linux</h2>
           <p class="req">Debian, Ubuntu und alle anderen</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb" aria-label="Wolkenfunk für Debian und Ubuntu laden">.deb</a><a class="button small outline ready" data-pkg="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" href="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" aria-label="Wolkenfunk als AppImage laden">AppImage</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb" aria-label="Wolkenfunk als .deb für Debian und Ubuntu laden">.deb</a><a class="button small outline ready" data-pkg="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" href="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage" aria-label="Wolkenfunk als AppImage laden">AppImage</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="#linux" aria-label="Hinweise zur Installation unter Linux">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="android" data-pkg="https://pkg.wolkenfunk.org/android/wolkenfunk.apk">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
-          <h3>Android</h3>
+          <h2>Android</h2>
           <p class="req">Android 8 oder neuer</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-label="Wolkenfunk für Android laden">Laden</a><span class="button small soon" aria-disabled="true">Bald</span></p>
+          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-label="Wolkenfunk für Android laden">Laden</a><span class="button small soon off">Bald</span></p>
           <a class="more" href="#android" aria-label="Hinweise zur Installation unter Android">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="ios">
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="3"/><path d="M10.5 5.5h3"/></svg>
-          <h3>iPhone</h3>
+          <h2>iPhone</h2>
           <p class="req">kommt in den App&nbsp;Store</p>
-          <p class="act"><span class="button small" aria-disabled="true">Bald</span></p>
+          <p class="act"><span class="button small off">Bald</span></p>
           <a class="more" href="#ios" aria-label="Hinweise zur Installation unter iPhone">Hinweise&nbsp;›</a>
         </li>
         </ul>
@@ -80,7 +163,7 @@
         <h2 id="h-windows"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Windows</h2>
         <div class="dl-body">
           <p>Für Windows 10 und 11, 64-Bit. Die Installation braucht keine Administratorrechte. Danach aktualisiert sich Wolkenfunk selbst.</p>
-          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Wolkenfunk-Setup.exe</a><span class="button soon" aria-disabled="true">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe"></span></p>
+          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Wolkenfunk-Setup.exe</a><span class="button soon off">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/windows/Wolkenfunk-Setup.exe"></span></p>
           <div class="callout">
             <strong>Windows warnt beim ersten Start</strong>
             <p>Das Installationsprogramm ist noch nicht signiert. Windows zeigt deshalb „Der Computer wurde durch Windows geschützt“ und einen unbekannten Herausgeber.</p>
@@ -100,7 +183,7 @@
         <h2 id="h-mac"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg>macOS</h2>
         <div class="dl-body">
           <p>Für macOS 12 oder neuer, auf Intel und Apple Silicon. Öffne die <code>.dmg</code> und ziehe Wolkenfunk in den Ordner „Programme“.</p>
-          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Wolkenfunk.dmg</a><span class="button soon" aria-disabled="true">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg"></span></p>
+          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Wolkenfunk.dmg</a><span class="button soon off">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/mac/Wolkenfunk.dmg"></span></p>
           <!-- Wortlaut aus macOS 26 (Tahoe), aufgenommen von desktop-macos. -->
           <div class="callout">
             <strong>macOS blockiert den ersten Start</strong>
@@ -126,7 +209,7 @@
           <div class="variant" data-pkg="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb">
             <h3>Debian und Ubuntu</h3>
             <p>Ab Debian 12 und Ubuntu 22.04, 64-Bit (x86_64). Lade das Paket herunter und installiere es per Doppelklick oder im Terminal. Dabei richtet es die Wolkenfunk-Paketquelle ein, Updates kommen danach mit den normalen Systemupdates.</p>
-            <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>wolkenfunk_amd64.deb</a><span class="button soon" aria-disabled="true">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb"></span></p>
+            <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>wolkenfunk_amd64.deb</a><span class="button soon off">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb"></span></p>
             <pre class="ready"><code>sudo apt install ./wolkenfunk_amd64.deb</code></pre>
             <details class="fold ready">
               <summary>Nur die Paketquelle einrichten</summary>
@@ -144,7 +227,7 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
           <div class="variant" data-pkg="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage">
             <h3>AppImage</h3>
             <p>Eine Datei für alle Distributionen, ohne Installation und ohne Administratorrechte. Das AppImage aktualisiert sich selbst.</p>
-            <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Wolkenfunk-x86_64.AppImage</a><span class="button soon" aria-disabled="true">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage"></span></p>
+            <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Wolkenfunk-x86_64.AppImage</a><span class="button soon off">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage"></span></p>
             <pre class="ready"><code>chmod +x Wolkenfunk-x86_64.AppImage
 ./Wolkenfunk-x86_64.AppImage</code></pre>
             <details class="fold">
@@ -156,7 +239,7 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
           <div class="variant">
             <h3>Flathub</h3>
             <p>Wolkenfunk kommt auf Flathub und ist dann direkt in GNOME Software, KDE Discover und anderen Software-Centern zu finden. Updates laufen dort automatisch.</p>
-            <p class="dl-act"><span class="button" aria-disabled="true">Bald auf Flathub</span></p>
+            <p class="dl-act"><span class="button off">Bald auf Flathub</span></p>
           </div>
         </div>
       </section>
@@ -165,7 +248,7 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
         <h2 id="h-android"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Android</h2>
         <div class="dl-body">
           <p>Für Android 8 oder neuer. Die APK läuft auf allen gängigen Geräten.</p>
-          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>wolkenfunk.apk</a><span class="button soon" aria-disabled="true">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"></span></p>
+          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>wolkenfunk.apk</a><span class="button soon off">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"></span></p>
           <div class="callout">
             <strong>Android fragt nach, bevor es installiert</strong>
             <ol>
@@ -187,7 +270,7 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
         <h2 id="h-ios"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="3"/><path d="M10.5 5.5h3"/></svg>iPhone</h2>
         <div class="dl-body">
           <p>Wolkenfunk fürs iPhone kommt in den App Store, für iOS 17 oder neuer.</p>
-          <p class="dl-act"><span class="button" aria-disabled="true">Bald im App Store</span></p>
+          <p class="dl-act"><span class="button off">Bald im App Store</span></p>
         </div>
       </section>
 
@@ -226,6 +309,5 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
       <p>Open Source unter <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>. Wolkenfunk ist ein unabhängiges Projekt und nicht mit der Nextcloud GmbH verbunden.</p>
     </div>
   </footer>
-  <script src="/platform.js?v=2"></script>
 </body>
 </html>
