@@ -4,7 +4,7 @@ Die Bilder für die Webseite und die Stores entstehen gegen den Demo-Server `cor
 
 ```
 scripts/screenshots/demo-server.sh start      # baut und startet talk-demo auf :8099
-scripts/screenshots/desktop.sh                # Linux-Desktop (Electron, CDP)
+scripts/screenshots/desktop.sh                # Linux-Desktop (Electron, CDP); mit Szenennamen nur diese, z. B. desktop.sh kompakt konten
 scripts/screenshots/mac.sh                    # macOS-Fenster mit Rahmen (vom Linux-Rechner aus, startet den Server auf dem Mac selbst)
 scripts/screenshots/android.sh                # Emulator
 scripts/screenshots/ios.sh                    # auf dem Mac-Host: Simulator
@@ -12,7 +12,7 @@ scripts/screenshots/demo-server.sh stop
 ```
 
 - **Login:** Jeder Benutzer und jedes Passwort gehen. Mit dem Benutzer `mira` zeigt der eigene Avatar „M“.
-- **Uhrzeiten:** Die Nachrichten liegen relativ zum Serverstart. Tagsüber starten, damit die heutigen Nachrichten auf „Heute“ fallen.
+- **Uhrzeiten:** Die Nachrichten liegen relativ zum Serverstart. Tagsüber starten, damit die heutigen Nachrichten auf „Heute“ fallen. Nachts hilft am Desktop eine andere Zeitzone für den ganzen Lauf, etwa `TZ=Pacific/Auckland scripts/screenshots/desktop.sh`: Server und App rechnen beide in Ortszeit.
 - **Cache leeren:** Vor jedem Lauf den Cache der App leeren, sonst stehen alte Zeiten drin.
 - **Inhalt ändern:** Texte und Personen stehen in `core/talk-demo/fixtures/`, Bilder und Ton erzeugt `fixtures/make-assets.py`.
 
@@ -26,7 +26,16 @@ Die Szenen sind auf allen Plattformen gleich:
 | `ungelesen` | „Gartenprojekt“ geöffnet an der Linie „5 ungelesene Nachrichten“, mit Bild |
 | `sprachnachricht` | „Familie“ mit der Sprachnachricht |
 
+Dazu kommen Szenen nur für den Desktop:
+
+| Name | Inhalt |
+|---|---|
+| `kompakt` | Die kompakte Ansicht, „Team Website“ offen |
+| `konten` | Zwei Konten auf zwei Servern, das Kontomenü offen, mit Zahl am zweiten Konto und am eigenen Avatar |
+
 Jede Szene gibt es `hell` und `dunkel`.
+
+**Servernamen im Kontomenü:** Im Menü steht unter dem Namen der Server. Damit dort weder `127.0.0.1` noch ein Port steht, bekommen die beiden Demo-Server erfundene Namen unter `.example`. Die Namen lösen nirgends auf: `demo-proxy.mjs` ist ein kleiner HTTP-Proxy, der jeden Namen an einen lokalen Port weiterreicht, und die App erreicht ihn über `http_proxy`. Am System ändert sich dabei nichts.
 
 ## Ausgabe
 

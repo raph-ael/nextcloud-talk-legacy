@@ -4,6 +4,8 @@
 //   node desktop-drive.mjs size W H     window content size in px
 //   node desktop-drive.mjs shot out.png screenshot of the page (= the window content)
 //   node desktop-drive.mjs pointer X Y  move the pointer there (off the messages: no hover bar)
+//   node desktop-drive.mjs layout compact|bubbles   the view, as „Einstellungen“ → „Darstellung“ sets it
+//   node desktop-drive.mjs accounts     a real click on the own avatar: with two accounts the menu opens
 import { writeFileSync } from 'node:fs'
 
 const PAGE = Number(process.env.CDP_PAGE_PORT ?? 9342)
@@ -54,7 +56,22 @@ switch (cmd) {
     await call(PAGE, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
     break
   }
+  case 'layout':
+    await call(PAGE, 'Runtime.evaluate', { expression: `window.talk.setLayout(${JSON.stringify(args[0])})`, awaitPromise: true })
+    break
+  case 'accounts': {
+    const r = await call(PAGE, 'Runtime.evaluate', {
+      expression: `(() => { const r = document.querySelector('.own-avatar[aria-haspopup=menu]')?.getBoundingClientRect();
+        return r ? [r.left + r.width / 2, r.top + r.height / 2] : null })()`,
+      returnByValue: true,
+    })
+    if (!r.result.value) throw new Error('no account menu: fewer than two accounts')
+    const [x, y] = r.result.value
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
+      await call(PAGE, 'Input.dispatchMouseEvent', { type, x, y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: 1 })
+    break
+  }
   default:
-    console.error('usage: desktop-drive.mjs size W H | shot out.png | pointer X Y')
+    console.error('usage: desktop-drive.mjs size W H | shot out.png | pointer X Y | layout compact|bubbles | accounts')
     process.exit(2)
 }
