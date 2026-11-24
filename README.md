@@ -39,7 +39,7 @@ Die App spricht nur mit deinem Server: kein zusätzliches Konto, kein Tracking.
 | **Debian, Ubuntu** | [wolkenfunk_amd64.deb](https://pkg.wolkenfunk.org/apt/wolkenfunk_amd64.deb) | ab Debian 12 und Ubuntu 22.04, x86_64 | mit den Systemupdates |
 | **Linux allgemein** | [Wolkenfunk-x86_64.AppImage](https://pkg.wolkenfunk.org/appimage/Wolkenfunk-x86_64.AppImage) | alle Distributionen, x86_64 | automatisch |
 | **Android** | [wolkenfunk.apk](https://pkg.wolkenfunk.org/android/wolkenfunk.apk) | Android 8 oder neuer | von Hand: neue APK darüber installieren |
-| **iOS** | bald im App Store | iPhone und iPad | |
+| **iOS** | bald im App Store | iPhone, iOS 17 oder neuer | |
 
 Die Links zeigen immer auf die neueste Version. Flathub ist in Vorbereitung.
 

@@ -100,13 +100,16 @@ def main() -> None:
 
     # 4) og-image.png 1200×630 für Link-Vorschauen (Signal, Mastodon, Slack …)
     og = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  {GRADIENT}
-  <rect width="1200" height="630" fill="url(#bg)"/>
-  <g transform="translate(96 155) scale(0.625)">{glyph("#FFFFFF")}</g>
-  <g font-family="Noto Sans, sans-serif" fill="#FFFFFF">
-    <text x="470" y="300" font-size="104" font-weight="700" letter-spacing="-2">Wolkenfunk</text>
-    <text x="474" y="372" font-size="38" fill-opacity="0.88">Schnelle, native Clients</text>
-    <text x="474" y="420" font-size="38" fill-opacity="0.88">für Nextcloud Talk</text>
+  <defs><linearGradient id="og" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E9EEF8"/>
+  </linearGradient></defs>
+  <rect width="1200" height="630" fill="url(#og)"/>
+  <g transform="translate(88 96) scale(0.26)">{glyph(GLYPH_ON_LIGHT)}</g>
+  <g font-family="Noto Sans, sans-serif">
+    <text x="232" y="181" font-size="50" font-weight="600" fill="#1D1D1F" letter-spacing="-1">Wolkenfunk</text>
+    <text x="92" y="372" font-size="84" font-weight="700" fill="#1D1D1F" letter-spacing="-2.5">Der schnelle Messenger</text>
+    <text x="92" y="478" font-size="84" font-weight="700" fill="#1D1D1F" letter-spacing="-2.5">für deine Nextcloud.</text>
+    <text x="96" y="562" font-size="33" fill="#6E6E73">Windows · macOS · Linux · Android · bald iPhone</text>
   </g>
 </svg>"""
     render(og, OUT / "og-image.png", 1200, 630)

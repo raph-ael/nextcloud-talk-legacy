@@ -16,9 +16,14 @@ Außerdem prüft es jedes lokale Bild (src/srcset): Fehlt eins, bricht es ab, au
 --placeholders. Weicht das Seitenverhältnis von width/height am <img> ab, warnt es.
 Verkleinerte Varianten für srcset (NAME.<breite>w.webp) erzeugt es aus NAME.webp; ins Repo
 kommen nur die Originale.
+
+Neben einem Download-Knopf steht `<span data-version-of="URL"></span>`. Dort trägt es die
+Versionsnummer ein, die hinter dem festen Link liegt (aus SHA256SUMS im selben Ordner). Mit
+--all nimmt es die Version aus desktop/package.json, mit --none bleibt die Stelle leer.
 """
 
 import argparse
+import json
 import re
 import shutil
 import sys
@@ -28,6 +33,8 @@ from pathlib import Path
 
 PUBLIC = Path(__file__).resolve().parents[1] / "public"
 ATTR = re.compile(r'data-pkg="([^"]+)"')
+VERSION_OF = re.compile(r'data-version-of="([^"]+)"></span>')
+VERSION = re.compile(r"\d+\.\d+\.\d+")
 # <picture> mit <source srcset> und <img src srcset width height>; lokale Pfade beginnen mit /.
 PICTURE = re.compile(r"<picture>(.*?)</picture>", re.S)
 SRC = re.compile(r'\s(?:src|srcset)="([^"]+)"')
@@ -46,6 +53,27 @@ def exists(url: str) -> bool:
     except OSError as e:
         print(f"  ! {url}: {e}", file=sys.stderr)
         return False
+
+
+def published_version(url: str) -> str | None:
+    """Version der Datei hinter dem festen Link. In SHA256SUMS steht dieselbe Prüfsumme noch
+    einmal unter dem Namen mit Versionsnummer; fehlt der feste Name dort, gilt die höchste."""
+    base, name = url.rsplit("/", 1)
+    req = urllib.request.Request(f"{base}/SHA256SUMS", headers={"User-Agent": "wolkenfunk-stage"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            lines = [ln.split(None, 1) for ln in r.read().decode().splitlines() if ln.strip()]
+    except OSError as e:
+        print(f"  ! {base}/SHA256SUMS: {e}", file=sys.stderr)
+        return None
+    sums = {n.strip().lstrip("*"): h for h, n in (ln for ln in lines if len(ln) == 2)}
+    same = [n for n, h in sums.items() if h == sums.get(name) and n != name]
+    found = [m[0] for n in (same or sums) if (m := VERSION.search(n.rsplit("/", 1)[-1]))]
+    return max(found, key=lambda v: tuple(map(int, v.split(".")))) if found else None
+
+
+def repo_version() -> str:
+    return json.loads((PUBLIC.parents[1] / "desktop" / "package.json").read_text())["version"]
 
 
 def local_refs(attr: str) -> list[str]:
@@ -138,9 +166,16 @@ def main() -> None:
     for u in urls:
         print(f"  {'verfügbar' if available[u] else 'bald     '}  {u}")
 
+    wanted = sorted({u for p in pages for u in VERSION_OF.findall(p.read_text())})
+    versions = {u: None if a.none else repo_version() if a.all else published_version(u) for u in wanted}
+    for u in wanted:
+        print(f"  Version {versions[u] or '–':9}  {u}")
     for p in pages:
         text = p.read_text()
         new = ATTR.sub(lambda m: m.group(0) + (" data-available" if available[m.group(1)] else ""), text)
+        new = VERSION_OF.sub(
+            lambda m: m.group(0).replace("></span>", f">Version {versions[m.group(1)]}</span>")
+            if versions[m.group(1)] else m.group(0), new)
         if new != text:
             p.write_text(new)
     print(f"→ {a.dest}")

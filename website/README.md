@@ -6,21 +6,30 @@ auf der Startseite); ohne JS zeigt die Seite einfach alle Plattformen.
 
 ```
 public/                 ausgelieferte Dateien
-  index.html            Startseite (SEO-Meta, Open Graph, JSON-LD), Download-Knopf je Plattform, Hero-Bilder
-  funktionen/           Funktionen mit Screenshots
-  platform.js           erkennt das Betriebssystem und zeigt nur dessen Knopf (CSP script-src 'self')
+  index.html            Startseite: Kernaussage, Download-Knopf fürs erkannte System, drei Vorteile,
+                        Kacheln je System, Kurzliste weiterer Funktionen (SEO-Meta, Open Graph, JSON-LD)
+  funktionen/           alle Funktionen in acht Gruppen, einfach erklärt, mit Marken „Android“/„Computer“
+  download/             Kacheln je System, darunter Installationshinweise, Versionsnummer und Update-Tabelle;
+                        Dateien liegen auf pkg.wolkenfunk.org
+  platform.js           erkennt das Betriebssystem: Hauptknopf der Startseite, hervorgehobene Kachel
+                        (CSP script-src 'self'); ohne JS bleibt ein allgemeiner Knopf
   404.html              Fehlerseite (siehe „Server“)
   impressum/, datenschutz/   Rechtliches (CODELABOR UG i.G., Angaben wie auf codelabor.io), bleiben noindex
-  download/             alle Plattformen mit Hinweisen und Update-Tabelle; Dateien liegen auf pkg.wolkenfunk.org
-  styles.css            Hell/Dunkel über prefers-color-scheme
+  styles.css            ein Stylesheet für alle Seiten, Hell/Dunkel über prefers-color-scheme
+  fonts/                Inter (variabel, lateinischer Zeichensatz, OFL) aus @fontsource-variable/inter;
+                        Apple-Geräte nehmen ihre Systemschrift
   screenshots/          Bilder vom Demo-Server (scripts/screenshots/README.md), nicht von Hand
   favicon.svg/.ico, apple-touch-icon.png, icon-*.png, og-image.png   ← generiert
   site.webmanifest, robots.txt, sitemap.xml, .well-known/security.txt
 scripts/
   build-assets.py       erzeugt alle Icons + og-image.png aus design/icon/wolkenfunk-symbolic.svg
-  stage.py              kopiert public/, markiert vorhandene Downloads, prüft Bilder, erzeugt kleine Varianten
+  stage.py              kopiert public/, markiert vorhandene Downloads, trägt Versionsnummern ein,
+                        prüft Bilder, erzeugt kleine Varianten
   deploy.sh             stage.py, dann rsync auf den Server (PKG_HOST), danach Statusprüfung
 ```
+
+Leiste, Fuß und die Symbole (eingebettetes SVG, Klasse `i`) stehen in jeder HTML-Datei: Wer sie
+ändert, ändert sie in allen sechs Seiten. Inline-Styles gehen wegen der CSP nicht.
 
 ## Lokal ansehen
 
@@ -38,6 +47,11 @@ einen Knopf (`.ready`) und einen „bald“-Platzhalter (`.soon`).
 `scripts/stage.py` prüft beim Ausspielen jede URL per HEAD und setzt bei 200 `data-available`.
 Ohne das gilt alles als „bald“, es gibt also nie einen Link auf eine fehlende Datei. Nach einem
 Release genügt `deploy.sh`, die Seite muss nicht angepasst werden.
+
+Neben den Knöpfen der Download-Seite steht `<span class="ver" data-version-of="URL"></span>`.
+`stage.py` trägt dort die Version ein, die hinter dem festen Link liegt: In `SHA256SUMS` steht
+dieselbe Prüfsumme noch einmal unter dem Dateinamen mit Versionsnummer. Mit `--all` nimmt es die
+Version aus `desktop/package.json`.
 
 ```sh
 website/scripts/stage.py /tmp/wf --all    # Vorschau: alles verfügbar (--none: alles „bald“)
@@ -57,6 +71,9 @@ dunkle Bild über `prefers-color-scheme`, mit `width`/`height`, unterhalb des er
 - `stage.py` bricht ab, wenn ein Bild fehlt, und warnt, wenn das Seitenverhältnis nicht zu
   `width`/`height` passt (z. B. wenn sich die Größe der Mac-Bilder mit Fensterrahmen ändert).
 - Vorschau ohne die echten Bilder: `stage.py /tmp/wf --all --placeholders`.
+- `android-suche`, `android-erwaehnungen`, `android-standort` und `android-darstellung` stammen aus
+  den Aufnahmen für Google Play (1080×1920) und liegen nur hell vor. Sie erscheinen deshalb auch im
+  dunklen Design hell.
 - `screenshots/desktop-chat.png` ist das AppStream-Bild aus
   `desktop/packaging/linux/org.wolkenfunk.Wolkenfunk.metainfo.xml` (Flathub), keine Seite nutzt es.
 
@@ -87,7 +104,7 @@ hinter dem Reverse-Proxy). `--delete`: was nicht in `public/` liegt, verschwinde
 - `lastmod` in `sitemap.xml` pflegen, bei neuen Seiten Einträge ergänzen.
 - `Expires` in `.well-known/security.txt` spätestens jährlich verlängern.
 - In `download/` und `funktionen/` ebenfalls `noindex` entfernen.
-- Wer `styles.css` oder `platform.js` ändert, zählt `?v=` in den HTML-Dateien hoch (Cache 1 h).
+- Wer `styles.css` oder `platform.js` ändert, zählt `?v=` in allen HTML-Dateien hoch (Cache 1 h).
 - Impressum nachziehen, sobald die UG eingetragen ist (HRB, ggf. USt-IdNr.; „i.G.“ streichen).
   Datenschutz anpassen, wenn weitere Skripte, Formulare oder Dienste Dritter dazukommen.
 

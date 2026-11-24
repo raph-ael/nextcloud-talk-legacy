@@ -4,17 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Funktionen – Wolkenfunk</title>
-  <meta name="description" content="Was Wolkenfunk kann: Chats mit Kategorien, Ungelesen-Linie, Sprachnachrichten, Anrufe mit Video und Bildschirmfreigabe – schnell, offline-first und Open Source.">
+  <meta name="description" content="Alles, was Wolkenfunk kann: Chats, Anrufe, Benachrichtigungen, Sprachnachrichten, Dateien, Kategorien, Suche und mehrere Konten. Einfach erklärt.">
   <meta name="robots" content="noindex">
   <link rel="canonical" href="https://wolkenfunk.org/funktionen/">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0B0B0D" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#151518" media="(prefers-color-scheme: dark)">
   <link rel="icon" href="/favicon.ico" sizes="32x32">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <link rel="stylesheet" href="/styles.css?v=7">
+  <link rel="stylesheet" href="/styles.css?v=8">
 </head>
 <body>
   <a class="skip" href="#inhalt">Zum Inhalt springen</a>
@@ -26,80 +27,194 @@
     </div>
   </header>
 
-  <main id="inhalt" class="wrap page features-page">
-    <h1>Funktionen</h1>
-    <p class="intro">Wolkenfunk ist ein Client für Nextcloud Talk: Du nutzt deinen eigenen Nextcloud-Server, Wolkenfunk macht daraus einen schnellen Messenger für Computer und Handy.</p>
-
-    <section class="feature" aria-labelledby="f-kategorien">
-      <div class="feature-text">
-        <h2 id="f-kategorien">Chats mit Kategorien</h2>
-        <p>Ordne deine Chats in eigene Kategorien wie „Familie &amp; Freunde“ oder „Arbeit“. Jede Kategorie lässt sich einklappen, Favoriten stehen oben. Die Kategorien kommen von deinem Talk-Server und sind auf allen Geräten gleich, auch im Browser.</p>
-        <p>Ungelesene Nachrichten und Erwähnungen siehst du direkt in der Liste. Ist eine Kategorie eingeklappt, zählt ihr Kopf, was darin neu ist. Die Chats sortierst du nach letzter Aktivität oder nach Namen.</p>
+  <main id="inhalt">
+    <section class="page-hero alt" aria-labelledby="h-funktionen">
+      <div class="wrap">
+        <div class="band-head">
+          <h1 id="h-funktionen">Alles, was Wolkenfunk kann.</h1>
+          <p class="lead">Wolkenfunk macht aus deiner Nextcloud einen Messenger für Handy und Computer. Hier steht im Einzelnen, was die App kann.</p>
+          <nav class="jump" aria-label="Abschnitte"><a href="#chats">Chats</a><a href="#anrufe">Anrufe</a><a href="#benachrichtigungen">Benachrichtigungen</a><a href="#medien">Dateien und Medien</a><a href="#ordnung">Ordnung und Suche</a><a href="#konten">Mehrere Konten</a><a href="#darstellung">Darstellung</a><a href="#datenschutz">Datenschutz</a></nav>
+          <p class="tiles-note">Steht nichts dabei, gilt ein Punkt für Android, Windows, macOS und Linux. <span class="tag">Android</span> und <span class="tag">Computer</span> heißen: bisher nur dort. Die iPhone-App folgt.</p>
+        </div>
       </div>
-      <div class="feature-shot wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-chats-dunkel.800w.webp 800w, /screenshots/desktop-chats-dunkel.webp 1280w" sizes="(min-width: 992px) 960px, calc(100vw - 32px)"><img src="/screenshots/desktop-chats-hell.webp" srcset="/screenshots/desktop-chats-hell.800w.webp 800w, /screenshots/desktop-chats-hell.webp 1280w" sizes="(min-width: 992px) 960px, calc(100vw - 32px)" width="1280" height="800" decoding="async" alt="Wolkenfunk am Computer: Chatliste mit „Favoriten“ und den Kategorien „Familie &amp; Freunde“ und „Arbeit“, daneben der geöffnete Chat „Team Website“."></picture></div>
     </section>
 
-    <section class="feature" aria-labelledby="f-ungelesen">
-      <div class="feature-text">
-        <h2 id="f-ungelesen">Ungelesen-Linie und Datum wie gewohnt</h2>
-        <p>Ein Chat öffnet sich dort, wo du aufgehört hast: Eine Linie zeigt, ab wo es Neues gibt, zum Beispiel „5 ungelesene Nachrichten“. Trenner mit „Heute“, „Gestern“ oder dem Datum gliedern den Verlauf.</p>
-        <p>Bilder erscheinen direkt im Chat und öffnen sich mit einem Tipp oder Klick in groß.</p>
+    <section class="fgroup has-phone" id="chats" aria-labelledby="h-chats">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-chats">Chats</h2>
+          <p class="lead">Schreiben, antworten, reagieren: alles dort, wo du es erwartest.</p>
+          <ul class="flist">
+            <li><h3>Weiterlesen, wo du warst</h3><p>Ein Chat öffnet sich an der Stelle, an der du aufgehört hast. Eine Linie zeigt, ab wo es Neues gibt, zum Beispiel „5 ungelesene Nachrichten“.</p></li>
+            <li><h3>Datum im Verlauf</h3><p>Trenner wie „Heute“, „Gestern“ oder „Mi.,&nbsp;11.&nbsp;Nov.“ gliedern den Verlauf. Ein runder Knopf bringt dich mit einem Tipp ans Ende.</p></li>
+            <li><h3>Antworten</h3><p>Antworte gezielt auf eine Nachricht. Sie steht dann als Zitat über deiner Antwort, und ein Tipp darauf springt zum Original.</p></li>
+            <li><h3>Reaktionen</h3><p>Herz, Daumen oder ein anderes Emoji: Reaktionen stehen klein unter der Nachricht. Ein Tipp darauf zeigt, wer reagiert hat.</p></li>
+            <li><h3>Gesendet und gelesen</h3><p>Ein Haken heißt gesendet, zwei Haken heißen gelesen.</p></li>
+            <li><h3>Bearbeiten</h3><p>Eigene Nachrichten änderst du noch 24 Stunden lang. Am Computer holt Pfeil nach oben im leeren Eingabefeld deine letzte Nachricht zurück.</p></li>
+            <li><h3>Löschen</h3><p>Eigene Nachrichten löschst du jederzeit, und zwar für alle im Chat. Moderatoren können in Gruppen auch Nachrichten anderer löschen.</p></li>
+            <li><h3>Erwähnungen mit „@“</h3><p>Tipp in einer Gruppe „@“, und du wählst aus Personen, Gruppen, Teams oder „Alle“. Wurdest du erwähnt, bringt dich der „@“-Knopf direkt zur Stelle.</p></li>
+            <li><h3>Formatierter Text</h3><p>Fett, kursiv, Listen, Zitate und Code erscheinen so, wie sie gemeint sind. Links kannst du antippen.</p></li>
+            <li><h3>Schreiben ohne Netz</h3><p>Was du offline schreibst, wartet und geht von selbst raus, sobald die Verbindung steht. Klappt es einmal nicht, tippst du auf „Erneut senden“.</p></li>
+            <li><h3>Gruppen</h3><p>Lege Gruppen an, gib ihnen Namen, Bild und Beschreibung und hol Leute dazu. Mit einem Gruppenlink kann jeder beitreten, der ihn hat.</p></li>
+            <li><h3>Großes Eingabefeld <span class="tag">Computer</span></h3><p>Für längere Texte ziehst du das Eingabefeld an einer Lasche größer.</p></li>
+            <li><h3>KI-Agenten</h3><p>Arbeitet in deinem Talk ein KI-Agent mit, siehst du klein und grau, woran er gerade sitzt. Chats mit Agenten stehen in einem eigenen Abschnitt.</p></li>
+          </ul>
+        </div>
+        <div class="fgroup-media"><div class="phone"><picture><img src="/screenshots/android-erwaehnungen-hell.webp" srcset="/screenshots/android-erwaehnungen-hell.400w.webp 400w, /screenshots/android-erwaehnungen-hell.640w.webp 640w, /screenshots/android-erwaehnungen-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: die Gruppe „Sommerfest“ mit Erwähnungen von „@Alle“, einer Gruppe, einem Team und einer Person, darunter eine Nachricht mit fünf Herzen als Reaktion."></picture></div></div>
       </div>
-      <div class="feature-shot phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/android-ungelesen-dunkel.400w.webp 400w, /screenshots/android-ungelesen-dunkel.webp 1080w" sizes="200px"><img src="/screenshots/android-ungelesen-hell.webp" srcset="/screenshots/android-ungelesen-hell.400w.webp 400w, /screenshots/android-ungelesen-hell.webp 1080w" sizes="200px" width="1080" height="2400" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: der Chat „Gartenprojekt“ mit der Linie „5 ungelesene Nachrichten“ und einem Foto vom Hochbeet."></picture></div>
     </section>
 
-    <section class="feature" aria-labelledby="f-sprache">
-      <div class="feature-text">
-        <h2 id="f-sprache">Sprachnachrichten</h2>
-        <p>Wenn Tippen zu lange dauert: Nimm eine Sprachnachricht auf und schick sie ab. Empfangene Sprachnachrichten spielst du direkt im Chat ab, mit Wellenform und Dauer.</p>
+    <section class="fgroup alt" id="anrufe" aria-labelledby="h-anrufe">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-anrufe">Anrufe</h2>
+          <p class="lead">Ein Anruf in Wolkenfunk klingelt wie ein Telefonat.</p>
+          <ul class="flist">
+            <li><h3>Sprache und Video</h3><p>Jeder Anruf beginnt als Sprachanruf. Die Kamera schaltest du dazu, wenn du magst.</p></li>
+            <li><h3>Zu zweit oder in der Gruppe</h3><p>Zu zweit füllt das Bild den Bildschirm, in der Gruppe siehst du alle in Kacheln.</p></li>
+            <li><h3>Klingeln wie ein Telefon</h3><p>Auf Android erscheint ein Anruf bildschirmfüllend, mit Annehmen und Ablehnen. Am Computer klingelt Wolkenfunk im Fenster.</p></li>
+            <li><h3>Lautsprecher, Kopfhörer, Bluetooth <span class="tag">Android</span></h3><p>Über „Ausgabe“ wechselst du zwischen Telefon, Lautsprecher, Kopfhörer und Bluetooth.</p></li>
+            <li><h3>Mikrofon und Kamera wählen <span class="tag">Computer</span></h3><p>Such dir Mikrofon, Lautsprecher und Kamera aus und teste sie vorher in den Einstellungen.</p></li>
+            <li><h3>Bildschirm teilen</h3><p>Am Computer zeigst du deinen Bildschirm. Zuschauen geht auf jedem Gerät, auf dem Handy auch vergrößert.</p></li>
+            <li><h3>Nebenbei in andere Chats schauen</h3><p>Über „Chats“ wird der Anruf klein, und du liest oder schreibst woanders. Ein Balken bringt dich zurück zum Anruf.</p></li>
+            <li><h3>Aufnehmen</h3><p>Moderatoren können einen Anruf aufnehmen, wenn eure Nextcloud das anbietet. Alle sehen dann den Hinweis „Aufnahme läuft“.</p></li>
+          </ul>
+        </div>
       </div>
-      <div class="feature-shot phone"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/ios-sprachnachricht-dunkel.400w.webp 400w, /screenshots/ios-sprachnachricht-dunkel.webp 1206w" sizes="200px"><img src="/screenshots/ios-sprachnachricht-hell.webp" srcset="/screenshots/ios-sprachnachricht-hell.400w.webp 400w, /screenshots/ios-sprachnachricht-hell.webp 1206w" sizes="200px" width="1206" height="2622" loading="lazy" decoding="async" alt="Wolkenfunk auf dem iPhone: der Chat „Familie“ mit einer Sprachnachricht von Hilde Lange."></picture></div>
     </section>
 
-    <section class="feature-grid" aria-label="Weitere Funktionen">
-      <article>
-        <h2>Nachrichten bearbeiten und löschen</h2>
-        <p>Eigene Nachrichten änderst du noch 24 Stunden lang, löschen kannst du sie jederzeit. Beides gilt für alle im Chat. Moderatoren können in Gruppen auch Nachrichten anderer löschen. Am Computer bearbeitest du mit Pfeil nach oben im leeren Eingabefeld deine letzte Nachricht. Das geht auf Android, Windows, macOS und Linux.</p>
-      </article>
-      <article>
-        <h2>Gruppen, Direktchats und kompakte Ansicht</h2>
-        <p>Gruppen und Einzelchats stehen in der Chatliste in eigenen Abschnitten, neben Favoriten und deinen Kategorien. Wer alles zusammen mag, schaltet das in der Darstellung ab. Am Computer gibt es außerdem eine kompakte Ansicht: eine einzeilige Chatliste und Nachrichten untereinander statt in Sprechblasen. Die Abschnitte gibt es auf Android, Windows, macOS und Linux, die kompakte Ansicht unter Windows, macOS und Linux.</p>
-      </article>
-      <article>
-        <h2>Erwähnungen mit „@“</h2>
-        <p>Tipp in einer Gruppe „@“, und eine Liste mit den Leuten im Chat erscheint, dazu Gruppen, Teams und „Alle“. Ein paar Buchstaben reichen. Erwähnungen sind in der Nachricht dezent hinterlegt, deine eigenen in deiner Akzentfarbe. Ein Tipp auf einen Namen öffnet den Direktchat. Wurdest du erwähnt, bringt dich der „@“-Knopf im Chat direkt zur Stelle. Das geht auf Android, Windows, macOS und Linux.</p>
-      </article>
-      <article>
-        <h2>KI-Agenten im Chat</h2>
-        <p>Arbeitet in deinem Talk ein KI-Agent mit, siehst du, woran er gerade sitzt: Sein Arbeitsstand steht klein und grau im Chat, schreibt sich fort und verschwindet, sobald die Antwort da ist. Chats mit Agenten stehen in der Chatliste von selbst im Abschnitt „KI-Agenten“. Das geht auf Android, Windows, macOS und Linux.</p>
-      </article>
-      <article>
-        <h2>Suche in allen Nachrichten</h2>
-        <p>Tipp ein paar Buchstaben ins Suchfeld, und die Treffer aus allen Chats stehen sofort da, auch ohne Netz. Mehrere Wörter dürfen in beliebiger Reihenfolge stehen, Wortteile reichen, und „hupf“ findet auch „Hüpfburg“. Ein Treffer öffnet den Chat genau an der Nachricht. Im Chat selbst springst du mit der Lupe von Treffer zu Treffer. Das geht auf Android, Windows, macOS und Linux.</p>
-      </article>
-      <article>
-        <h2>Dateien, Standort und Kontakte</h2>
-        <p>Schick Dateien jeder Art in den Chat, auch mehrere auf einmal und mit einer Beschreibung. Empfangene Dateien öffnen sich mit einem Tipp. Auf Android sendest du auch deinen Standort: Er erscheint im Chat als Karte, ein Tipp öffnet die Karten-App. Am Computer siehst du den Ort als Kachel mit Link zur Karte. Auf Android teilst du außerdem Kontakte aus deinem Adressbuch und wählst vorher, welche Nummern und Adressen mitgehen.</p>
-      </article>
-      <article>
-        <h2>Anrufe, Video und Bildschirm teilen</h2>
-        <p>Sprach- und Videoanrufe, zu zweit oder in der Gruppe. Ein Anruf klingelt wie ein Telefonat, die Kamera schaltest du bei Bedarf zu. Am Computer teilst du auch deinen Bildschirm. Während eines Anrufs schaust du über „Chats“ in andere Unterhaltungen, der Anruf läuft weiter.</p>
-      </article>
-      <article>
-        <h2>Mehrere Konten</h2>
-        <p>Melde dich mit mehreren Nextcloud-Konten gleichzeitig an, auch auf verschiedenen Servern. Über deinen Avatar oben links wechselst du zwischen ihnen. Die anderen Konten bleiben verbunden: Eine Zahl am Avatar zeigt, wo es Neues gibt, und Anrufe klingeln auch dort. Ein Klick bringt dich ins passende Konto.</p>
-      </article>
-      <article>
-        <h2>Schnell und offline-first</h2>
-        <p>Ein gemeinsamer Kern in Rust hält deine Chats lokal vor. Sie öffnen sofort, auch ohne Netz, und was du offline schreibst, geht raus, sobald die Verbindung wieder steht. Auf Android und iOS sind die Oberflächen nativ.</p>
-      </article>
-      <article>
-        <h2>Open Source</h2>
-        <p>Der Quellcode steht unter AGPL-3.0 auf <a href="https://github.com/raph-ael/nextcloud-talk-legacy">GitHub</a>. Deine Nachrichten liegen nur auf deinem eigenen Server: kein eigenes Konto, kein Tracking. Was die Apps darüber hinaus abrufen, etwa Kartenbilder zu einem Standort, steht im <a href="/datenschutz/">Datenschutz</a>.</p>
-      </article>
+    <section class="fgroup" id="benachrichtigungen" aria-labelledby="h-benachrichtigungen">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-benachrichtigungen">Benachrichtigungen</h2>
+          <p class="lead">Damit du nichts verpasst und nichts doppelt siehst.</p>
+          <ul class="flist">
+            <li><h3>Auch bei geschlossener App <span class="tag">Android</span></h3><p>Nachrichten und Anrufe kommen an, auch wenn Wolkenfunk gerade nicht offen ist.</p></li>
+            <li><h3>Direkt antworten <span class="tag">Android</span></h3><p>Antworte gleich aus der Benachrichtigung oder markiere den Chat als gelesen, ohne die App zu öffnen.</p></li>
+            <li><h3>Woanders gelesen, überall weg</h3><p>Liest du eine Nachricht auf einem anderen Gerät, verschwindet die Benachrichtigung von selbst.</p></li>
+            <li><h3>Für jeden Chat einstellbar</h3><p>Du wählst pro Chat: alle Nachrichten, nur Erwähnungen oder gar keine.</p></li>
+            <li><h3>„Nicht stören“</h3><p>Steht dein Status in der Nextcloud auf „Nicht stören“, bleibt Wolkenfunk still.</p></li>
+            <li><h3>Verpasste Anrufe</h3><p>Hat dich jemand nicht erreicht, steht das in einer Benachrichtigung.</p></li>
+            <li><h3>Reaktionen <span class="tag">Android</span></h3><p>Reagiert jemand auf deine Nachricht, erfährst du das.</p></li>
+            <li><h3>Am Computer <span class="tag">Computer</span></h3><p>Wolkenfunk benachrichtigt, solange es läuft. Die App bleibt dafür im Hintergrund und startet auf Wunsch gleich bei der Anmeldung. Ein Punkt am Symbol zeigt, dass es Neues gibt.</p></li>
+            <li><h3>Ohne Google-Dienste <span class="tag">Android</span></h3><p>Auf Handys ohne Google-Dienste kommen Benachrichtigungen, solange die App geöffnet ist.</p></li>
+          </ul>
+        </div>
+      </div>
     </section>
 
-    <p class="cta"><a class="button" href="/download/">Wolkenfunk herunterladen</a></p>
+    <section class="fgroup alt has-phone flip" id="medien" aria-labelledby="h-medien">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-medien">Dateien und Medien</h2>
+          <p class="lead">Fotos, Sprachnachrichten, Dateien: alles geht in den Chat.</p>
+          <ul class="flist">
+            <li><h3>Sprachnachrichten</h3><p>Nimm eine Sprachnachricht auf und schick sie ab. Empfangene hörst du direkt im Chat an, mit Wellenform und auf Wunsch schneller oder langsamer.</p></li>
+            <li><h3>Bilder</h3><p>Bilder erscheinen direkt im Chat. Ein Tipp öffnet sie groß, zum Hineinzoomen.</p></li>
+            <li><h3>Dateien senden</h3><p>Schick Dateien jeder Art, auch mehrere auf einmal und mit einer Beschreibung. Am Computer ziehst du sie einfach ins Fenster.</p></li>
+            <li><h3>Dateien öffnen</h3><p>Empfangene Dateien öffnen sich mit einem Tipp.</p></li>
+            <li><h3>Foto aufnehmen <span class="tag">Android</span></h3><p>Mach direkt aus dem Chat ein Foto und schick es ab.</p></li>
+            <li><h3>Standort senden <span class="tag">Android</span></h3><p>Dein Standort erscheint im Chat als Karte, ein Tipp öffnet die Karten-App. Am Computer siehst du den Ort als Kachel mit Link zur Karte.</p></li>
+            <li><h3>Kontakte teilen <span class="tag">Android</span></h3><p>Teile einen Kontakt aus deinem Adressbuch und wähle vorher, welche Nummern und Adressen mitgehen.</p></li>
+          </ul>
+        </div>
+        <div class="fgroup-media"><div class="phone"><picture><img src="/screenshots/android-standort-hell.webp" srcset="/screenshots/android-standort-hell.400w.webp 400w, /screenshots/android-standort-hell.640w.webp 640w, /screenshots/android-standort-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: In der Gruppe „Sommerfest“ steht ein geteilter Standort als Karte, „Volkspark Friedrichshain, Berlin“, darunter ein geteilter Kontakt."></picture></div></div>
+      </div>
+    </section>
+
+    <section class="fgroup" id="ordnung" aria-labelledby="h-ordnung">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-ordnung">Ordnung und Suche</h2>
+          <p class="lead">Auch mit vielen Chats behältst du den Überblick.</p>
+          <div class="fgroup-wide"><picture><source media="(prefers-color-scheme: dark)" srcset="/screenshots/desktop-chats-dunkel.800w.webp 800w, /screenshots/desktop-chats-dunkel.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)"><img src="/screenshots/desktop-chats-hell.webp" srcset="/screenshots/desktop-chats-hell.800w.webp 800w, /screenshots/desktop-chats-hell.webp 1280w" sizes="(min-width: 1124px) 1080px, calc(100vw - 44px)" width="1280" height="800" loading="lazy" decoding="async" alt="Wolkenfunk am Computer: Chatliste mit „Favoriten“ und den Kategorien „Familie &amp; Freunde“ und „Arbeit“, daneben der geöffnete Chat „Team Website“."></picture></div>
+          <ul class="flist">
+            <li><h3>Kategorien</h3><p>Ordne Chats in eigene Kategorien wie „Familie &amp; Freunde“ oder „Arbeit“. Sie kommen von deiner Nextcloud und sind auf allen Geräten gleich, auch im Browser.</p></li>
+            <li><h3>Favoriten</h3><p>Deine wichtigsten Chats stehen ganz oben.</p></li>
+            <li><h3>Gruppen und Direktchats</h3><p>Gruppen und Einzelchats stehen in eigenen Abschnitten. Wer lieber alles in einer Liste hat, schaltet das ab.</p></li>
+            <li><h3>Einklappen</h3><p>Jeder Abschnitt lässt sich einklappen. Sein Kopf zählt dann, was darin neu ist.</p></li>
+            <li><h3>Sortierung</h3><p>Nach letzter Aktivität oder nach Namen. Die Wahl gilt auf allen deinen Geräten.</p></li>
+            <li><h3>Suche in allen Chats</h3><p>Ein paar Buchstaben genügen, und die Treffer stehen da, auch ohne Netz. Wortteile reichen, die Reihenfolge ist egal, und „hupf“ findet auch „Hüpfburg“.</p></li>
+            <li><h3>Direkt zur Stelle</h3><p>Ein Treffer öffnet den Chat genau an der gefundenen Nachricht.</p></li>
+            <li><h3>Suche im Chat</h3><p>Mit der Lupe springst du in einem Chat von Treffer zu Treffer.</p></li>
+            <li><h3>Kategorien verwalten <span class="tag">Computer</span></h3><p>Umbenennen, löschen und neu ordnen geht am Computer.</p></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="fgroup alt" id="konten" aria-labelledby="h-konten">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-konten">Mehrere Konten</h2>
+          <p class="lead">Verein, Arbeit, Familie: mehrere Nextclouds in einer App.</p>
+          <ul class="flist">
+            <li><h3>Bis zu fünf Konten</h3><p>Melde dich mit mehreren Nextcloud-Konten gleichzeitig an, auch auf verschiedenen Servern.</p></li>
+            <li><h3>Wechsel über den Avatar</h3><p>Ein Tipp auf dein Bild oben links, und du bist im anderen Konto.</p></li>
+            <li><h3>Nichts verpassen</h3><p>Die anderen Konten bleiben verbunden. Eine Zahl am Avatar zeigt, wo es Neues gibt.</p></li>
+            <li><h3>Anrufe in allen Konten</h3><p>Ein Anruf klingelt, egal welches Konto gerade offen ist.</p></li>
+            <li><h3>Anmelden wie gewohnt</h3><p>Die Anmeldung läuft über den Browser, so wie du sie von deiner Nextcloud kennst.</p></li>
+            <li><h3>Sauber abmelden</h3><p>Beim Abmelden löscht die App alles, was sie von diesem Konto gespeichert hat.</p></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="fgroup has-phone" id="darstellung" aria-labelledby="h-darstellung">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-darstellung">Darstellung</h2>
+          <p class="lead">Wolkenfunk sieht so aus, wie du es magst.</p>
+          <ul class="flist">
+            <li><h3>Hell oder dunkel</h3><p>Helles Design, dunkles Design oder so, wie dein Gerät gerade eingestellt ist.</p></li>
+            <li><h3>Zehn Akzentfarben</h3><p>Blau, Indigo, Violett, Pink, Rot, Orange, Bernstein, Grün, Petrol oder Schiefergrau.</p></li>
+            <li><h3>Kompakte Ansicht <span class="tag">Computer</span></h3><p>Eine einzeilige Chatliste und Nachrichten untereinander statt in Sprechblasen. Für alle, die viel auf einmal sehen wollen.</p></li>
+            <li><h3>Tastenkürzel <span class="tag">Computer</span></h3><p>Strg+N für eine neue Nachricht, Strg+K für die Suche, Alt+Pfeil zum Wechseln zwischen Chats. Am Mac mit ⌘ statt Strg.</p></li>
+          </ul>
+        </div>
+        <div class="fgroup-media"><div class="phone"><picture><img src="/screenshots/android-darstellung-hell.webp" srcset="/screenshots/android-darstellung-hell.400w.webp 400w, /screenshots/android-darstellung-hell.640w.webp 640w, /screenshots/android-darstellung-hell.webp 1080w" sizes="(min-width: 900px) 270px, 70vw" width="1080" height="1920" loading="lazy" decoding="async" alt="Wolkenfunk auf Android: die Einstellungen zur Darstellung mit der Wahl zwischen „System“, „Hell“ und „Dunkel“ und zehn Akzentfarben."></picture></div></div>
+      </div>
+    </section>
+
+    <section class="fgroup alt" id="datenschutz" aria-labelledby="h-datenschutz">
+      <div class="wrap fgroup-in">
+        <div class="fgroup-text">
+          <h2 id="h-datenschutz">Datenschutz und Technik</h2>
+          <p class="lead">Wolkenfunk ist nur die App. Deine Nachrichten gehören auf deinen Server.</p>
+          <ul class="flist">
+            <li><h3>Nur dein Server</h3><p>Deine Nachrichten liegen auf deiner Nextcloud. Wolkenfunk hat kein eigenes Konto und keine eigene Cloud.</p></li>
+            <li><h3>Kein Tracking</h3><p>Die App wertet nicht aus, was du tust, und zeigt keine Werbung.</p></li>
+            <li><h3>Verschlüsselte Benachrichtigungen</h3><p>Benachrichtigungen aufs Handy sind so verschlüsselt, dass nur dein Gerät sie lesen kann.</p></li>
+            <li><h3>Chats auf dem Gerät</h3><p>Die App hält deine Chats auf dem Gerät bereit. Deshalb öffnet alles sofort, auch ohne Netz. Beim Abmelden wird dieser Speicher gelöscht.</p></li>
+            <li><h3>Offener Quellcode</h3><p>Wolkenfunk steht unter AGPL-3.0 auf <a href="https://github.com/raph-ael/nextcloud-talk-legacy">GitHub</a>. Jeder kann nachlesen, was die App macht.</p></li>
+            <li><h3>Ein Kern, eigene Apps</h3><p>Alle Apps teilen sich einen Kern in Rust. Auf Android und dem iPhone sind die Oberflächen nativ, am Computer läuft eine schlanke Desktop-App.</p></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="fgroup" aria-label="Stand und Voraussetzungen">
+      <div class="wrap">
+        <div class="fcards">
+          <div class="fcard">
+            <h2>Was noch fehlt</h2>
+            <ul>
+              <li>Die iPhone-App ist noch nicht im App Store.</li>
+              <li>Ende-zu-Ende-verschlüsselte Anrufe kann Wolkenfunk noch nicht.</li>
+              <li>Umfragen gibt es noch nicht.</li>
+              <li>Am Computer kommen Benachrichtigungen nur, solange Wolkenfunk läuft.</li>
+              <li>Die Oberfläche ist bisher nur deutsch.</li>
+            </ul>
+          </div>
+          <div class="fcard">
+            <h2>Was du brauchst</h2>
+            <p>Ein Konto auf einer Nextcloud mit Talk, zum Beispiel von deinem Verein, deiner Firma oder deiner Familie.</p>
+            <p>Für Admins: Wolkenfunk braucht Talk 23 oder neuer, das gehört zu Nextcloud 33. Kategorien gibt es ab Talk 24.</p>
+          </div>
+        </div>
+        <p class="band-foot"><a class="button" href="/download/">Wolkenfunk herunterladen</a></p>
+      </div>
+    </section>
   </main>
 
   <footer class="footer">
