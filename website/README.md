@@ -123,6 +123,15 @@ auf den Unterseiten der Pfad). Titel und Beschreibung stehen je Seite dreimal (`
 
 nginx-vhost und Betriebsdoku liegen auf dem PVE-Host unter `/root/claudes/wolkenfunk/`
 (`README.md`, `ops/ct122/nginx-wolkenfunk.org.conf`). Der vhost liefert `404.html` als
-Fehlerseite, komprimiert per gzip, setzt Sicherheits-Header (`nosniff`, `Referrer-Policy`,
-`X-Frame-Options`, `Permissions-Policy`) und Cache-Zeiten: HTML `no-cache`, CSS 1 h,
-Manifest 1 Tag, Bilder/Icons 7 Tage. Bei Icon-Änderungen ggf. Dateinamen wechseln.
+Fehlerseite, komprimiert per gzip und setzt Sicherheits-Header (`nosniff`, `Referrer-Policy`,
+`X-Frame-Options`, `Permissions-Policy`, `Strict-Transport-Security` für ein Jahr, ohne
+`includeSubDomains`).
+
+Cache-Zeiten:
+- Mit `?v=<Prüfsumme>` (setzt `stage.py` an jeden Verweis auf eine eigene Datei): ein Jahr,
+  `immutable`. Die Adresse hängt am Inhalt, eine geänderte Datei bekommt eine neue.
+- Ohne `?v=`: HTML `no-cache`, CSS und JS 1 h, Manifest 1 Tag, Bilder, Icons und Schrift 7 Tage.
+  Das gilt etwa für `og-image.png` und für Adressen, die jemand von Hand aufruft.
+
+Weiterleitungen auf den Pfad mit Schrägstrich (`/funktionen` → `/funktionen/`) kommen ohne
+Schema und Host, bleiben also auf https.
