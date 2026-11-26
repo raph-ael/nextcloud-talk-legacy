@@ -184,8 +184,8 @@ function selectionIn(bubble: Element): string {
 }
 
 const IS_MAC = navigator.platform.startsWith('Mac')
-// The marking as it was when the button went down: on the Mac the right click itself marks the
-// word under the pointer, and that is not a selection of the user.
+// The marking as it was when the button went down. It counts only if the click left it alone:
+// a right click beside it lifts it, and on the Mac marks the word under the pointer instead.
 let pressed: { bubble: Element; selection: string } | null = null
 
 /** A message being edited, with text and mentions for the input field (`editSource`). */
@@ -983,7 +983,8 @@ const MessageRow = memo(function MessageRow({
             onContextMenu={(e) => {
               e.preventDefault()
               const bubble = e.currentTarget
-              const selection = pressed?.bubble === bubble ? pressed.selection : selectionIn(bubble)
+              const now = selectionIn(bubble)
+              const selection = pressed?.bubble === bubble && pressed.selection !== now ? '' : now
               pressed = null
               // A link in the text, not the row of a file or a location.
               const a = (e.target as Element).closest('a[href]')

@@ -377,11 +377,12 @@ Das Menü (Rechtsklick auf die Nachricht oder „Mehr“) richtet sich nach der 
 | Standort | „Kopieren“ bleibt (`docs/attachments.md`), mit Markierung steht „Auswahl kopieren“ darüber. |
 
 - **Reihenfolge:** Antworten, Bearbeiten, Link kopieren, Auswahl kopieren bzw. Text kopieren, Bild öffnen, Im Browser öffnen, Löschen. Die Leiste der Reaktionen bleibt die oberste Zeile.
-- **Markierung:** Sie zählt, wenn sie nicht leer ist und mindestens zum Teil in dieser Nachricht liegt. Kopiert wird die ganze Markierung, auch wenn sie über mehrere Nachrichten reicht. Eine Markierung nur in einer anderen Nachricht zählt nicht.
-- **Vor dem Klick:** Als Markierung gilt, was schon markiert war, bevor die Maustaste gedrückt wurde. Am Mac markiert jeder Rechtsklick das Wort unter dem Zeiger, das soll nicht als Auswahl zählen. Der Text wird beim Öffnen des Menüs festgehalten.
+- **Markierung:** Sie zählt, wenn sie mehr als Leerraum enthält und mindestens zum Teil in dieser Nachricht liegt. Kopiert wird die ganze Markierung, auch wenn sie über mehrere Nachrichten reicht. Eine Markierung nur in einer anderen Nachricht zählt nicht.
+- **Vor dem Klick:** Die Markierung zählt nur, wenn sie schon vor dem Drücken der Maustaste da war und der Klick sie stehen lässt. Ein Rechtsklick neben die Markierung hebt sie auf, am Mac markiert er stattdessen das Wort unter dem Zeiger: Beides ist keine Auswahl, dann steht „Text kopieren“ da. So kopiert „Auswahl kopieren“ immer das, was sichtbar markiert ist. Der Text wird beim Öffnen des Menüs festgehalten.
 - **Link:** Gemeint sind Links im Text der Nachricht, auch die aus Markdown. Kopiert wird die Adresse, wie sie in der Nachricht steht, bei `[Text](Adresse)` also die Adresse. Datei- und Standortzeilen zählen nicht, dort bleibt es bei „Im Browser öffnen“ bzw. „Kopieren“.
 - **„Mehr“:** Für die Markierung gilt dieselbe Regel. Einen Link gibt es dort nicht.
 - Wartende, fehlgeschlagene und gelöschte Nachrichten behalten ihr Menü.
+- Ein Rechtsklick auf ein offenes Menü der App öffnet nichts.
 
 ### Menü des Betriebssystems
 
@@ -400,7 +401,7 @@ Wo die App kein eigenes Menü hat, öffnet der Rechtsklick ein Menü des Betrieb
 ### Test
 1. Zwei Wörter in einer Nachricht markieren, Rechtsklick darauf: „Auswahl kopieren“, in der Zwischenablage stehen genau die zwei Wörter.
 2. Ohne Markierung: „Text kopieren“ legt die ganze Nachricht ab.
-3. Markierung in Nachricht A, Rechtsklick auf Nachricht B: Bei B steht „Text kopieren“.
+3. Markierung in Nachricht A, Rechtsklick auf Nachricht B: Bei B steht „Text kopieren“. Ebenso beim Rechtsklick in A neben die Markierung.
 4. Rechtsklick auf einen Link im Text und auf einen Markdown-Link: „Link kopieren“ legt die Adresse ab. Auf dem übrigen Text derselben Nachricht fehlt der Eintrag.
 5. Link und Markierung zugleich: „Link kopieren“ steht über „Auswahl kopieren“.
 6. Datei, Bild, Standort, wartende und gelöschte Nachricht: Menü wie bisher.

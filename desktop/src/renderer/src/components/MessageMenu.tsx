@@ -126,7 +126,8 @@ export function MessageMenu({
   )
 
   return (
-    <div className="menu-layer" ref={layer}>
+    // A right click on the menu itself opens nothing, also not the menu of the operating system.
+    <div className="menu-layer" ref={layer} onContextMenu={(e) => e.preventDefault()}>
       <MenuList
         level={0}
         items={items}
