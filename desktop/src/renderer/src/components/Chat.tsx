@@ -185,7 +185,7 @@ function selectionIn(bubble: Element): string {
 
 const IS_MAC = navigator.platform.startsWith('Mac')
 // The marking as it was when the button went down. It counts only if the click left it alone:
-// a right click beside it lifts it, and on the Mac marks the word under the pointer instead.
+// a right click beside it lifts it before the menu opens.
 let pressed: { bubble: Element; selection: string } | null = null
 
 /** A message being edited, with text and mentions for the input field (`editSource`). */

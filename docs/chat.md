@@ -378,7 +378,7 @@ Das Menü (Rechtsklick auf die Nachricht oder „Mehr“) richtet sich nach der 
 
 - **Reihenfolge:** Antworten, Bearbeiten, Link kopieren, Auswahl kopieren bzw. Text kopieren, Bild öffnen, Im Browser öffnen, Löschen. Die Leiste der Reaktionen bleibt die oberste Zeile.
 - **Markierung:** Sie zählt, wenn sie mehr als Leerraum enthält und mindestens zum Teil in dieser Nachricht liegt. Kopiert wird die ganze Markierung, auch wenn sie über mehrere Nachrichten reicht. Eine Markierung nur in einer anderen Nachricht zählt nicht.
-- **Vor dem Klick:** Die Markierung zählt nur, wenn sie schon vor dem Drücken der Maustaste da war und der Klick sie stehen lässt. Ein Rechtsklick neben die Markierung hebt sie auf, am Mac markiert er stattdessen das Wort unter dem Zeiger: Beides ist keine Auswahl, dann steht „Text kopieren“ da. So kopiert „Auswahl kopieren“ immer das, was sichtbar markiert ist. Der Text wird beim Öffnen des Menüs festgehalten.
+- **Vor dem Klick:** Die Markierung zählt nur, wenn sie schon vor dem Drücken der Maustaste da war und der Klick sie stehen lässt. Ein Rechtsklick neben die Markierung hebt sie auf: Dann steht „Text kopieren“ da. So kopiert „Auswahl kopieren“ das, was beim Öffnen des Menüs sichtbar markiert ist. Der Text wird dabei festgehalten. Am Mac hebt ein Ctrl-Klick in die Markierung sie beim Loslassen auf, das Menü bleibt bei „Auswahl kopieren“ mit dem festgehaltenen Text.
 - **Link:** Gemeint sind Links im Text der Nachricht, auch die aus Markdown. Kopiert wird die Adresse, wie sie in der Nachricht steht, bei `[Text](Adresse)` also die Adresse. Datei- und Standortzeilen zählen nicht, dort bleibt es bei „Im Browser öffnen“ bzw. „Kopieren“.
 - **„Mehr“:** Für die Markierung gilt dieselbe Regel. Einen Link gibt es dort nicht.
 - Wartende, fehlgeschlagene und gelöschte Nachrichten behalten ihr Menü.
@@ -397,6 +397,7 @@ Wo die App kein eigenes Menü hat, öffnet der Rechtsklick ein Menü des Betrieb
 - Ein Klick auf einen Vorschlag ersetzt das Wort.
 - Am Mac heißen die Einträge wie im Menü „Bearbeiten“: „Widerrufen“ und „Einsetzen“ statt „Rückgängig“ und „Einfügen“.
 - „Alles auswählen“ gibt es nur in Eingabefeldern.
+- Am Mac markiert der Rechtsklick außerhalb von Nachrichten das Wort unter dem Zeiger, dort zeigt also auch ein Klick auf unmarkierten Text „Kopieren“. macOS hängt eigene Einträge an („Automatisch ausfüllen“, „Dienste“).
 
 ### Test
 1. Zwei Wörter in einer Nachricht markieren, Rechtsklick darauf: „Auswahl kopieren“, in der Zwischenablage stehen genau die zwei Wörter.
@@ -410,7 +411,7 @@ Wo die App kein eigenes Menü hat, öffnet der Rechtsklick ein Menü des Betrieb
 9. Eingabefeld: Rechtsklick auf ein falsch geschriebenes Wort zeigt Vorschläge, ein Klick ersetzt das Wort. Ausschneiden, Kopieren, Einfügen und Alles auswählen wirken.
 10. Markierte Gruppenbeschreibung: „Kopieren“. Link in den Einstellungen: „Link kopieren“. Rechtsklick ins Leere: kein Menü.
 11. Rechtsklick auf einen Chat in der Liste öffnet weiter das Chat-Menü.
-12. Mac: Rechtsklick auf ein Wort ohne vorherige Markierung zeigt „Text kopieren“, mit vorheriger Markierung „Auswahl kopieren“.
+12. Mac: Rechtsklick auf ein Wort ohne vorherige Markierung zeigt „Text kopieren“, Rechtsklick in eine Markierung „Auswahl kopieren“. Falsche Wörter für Punkt 9 mit echten Tasten tippen, eingeschleuster Text wird nicht geprüft.
 
 ## Bild von „Notizen an mich“
 
