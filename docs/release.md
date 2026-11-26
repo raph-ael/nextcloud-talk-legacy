@@ -91,9 +91,9 @@ Im Repo steht kein Schlüssel und kein Passwort. Die Skripte lesen sie aus der U
 - Ohne den Android-Schlüssel lassen sich installierte APKs nicht mehr aktualisieren.
 - Ohne den APT-Schlüssel muss jeder Nutzer die Paketquelle neu einrichten.
 
-**Noch nicht signiert:**
-- Windows: SmartScreen zeigt „Unbekannter Herausgeber“, solange die Signierung aus ist (siehe unten).
-- macOS: Gatekeeper fragt beim ersten Öffnen. Das kommt mit einer Developer-ID später.
+**Stand der Signaturen:**
+- Windows: signiert, seit `WIN_SIGN` auf `1` steht (siehe unten). Die Versionen bis 0.6.14 sind unsigniert, dort zeigt SmartScreen „Unbekannter Herausgeber“.
+- macOS: noch nicht signiert. Gatekeeper fragt beim ersten Öffnen. Das kommt mit einer Developer-ID später.
 
 ## Windows signieren
 
@@ -114,9 +114,12 @@ Die Windows-CI signiert mit Azure Artifact Signing (früher Trusted Signing), de
 | `WIN_SIGN_PUBLISHER` | Name im Zertifikat (CN), genau so geschrieben |
 
 **Ablauf:**
-1. electron-builder signiert selbst (`win.azureSignOptions`, zusammengesetzt in `desktop/scripts/win-sign-config.cjs`): erst das Programm, dann Deinstallationsprogramm und Installer.
+1. electron-builder signiert selbst (`win.azureSignOptions`, zusammengesetzt in `desktop/scripts/win-sign-config.cjs`): erst das Programm und die mitgelieferten Bibliotheken (`.dll` und unser Kern `talk_node.node`), dann Deinstallationsprogramm und Installer.
 2. Erst danach entstehen Blockmap und `latest.yml`. Die Prüfsummen passen also zum signierten Installer. Deshalb wird nicht nachträglich signiert.
-3. Der Schritt „Signature“ prüft Programm und Installer: Signatur gültig, mit Zeitstempel, auf den erwarteten Namen.
+3. Der Schritt „Signature“ prüft:
+   - Programm und Installer: Signatur gültig, mit Zeitstempel, auf den erwarteten Namen.
+   - Alle mitgelieferten Programme und Bibliotheken sind signiert.
+   - Der Updater nimmt den Installer als Update an (`desktop/scripts/win-verify-update.cjs`). Er vergleicht den Namen im Zertifikat mit dem Namen, den die App mitbringt. Ein Name mit Umlaut ist dabei schon gescheitert, deshalb prüft jeder Lauf es mit.
 
 **Zu wissen:**
 - **Zeitstempel:** Die Zertifikate gelten nur wenige Tage und erneuern sich von selbst. Der Zeitstempel hält die Signatur darüber hinaus gültig.
@@ -124,7 +127,8 @@ Die Windows-CI signiert mit Azure Artifact Signing (früher Trusted Signing), de
   - Nach der ersten signierten Version bleibt `WIN_SIGN` also auf `1`.
   - Ändert sich der Name im Zertifikat, müssen die Nutzer einmal von Hand neu installieren.
 - **Secret läuft ab:** Das Secret des Dienstkontos hat ein Ablaufdatum. Danach schlägt der Build fehl, bis ein neues hinterlegt ist.
-- **SmartScreen** kann bei den ersten Downloads trotz Signatur noch warnen, bis die Signatur bekannt ist.
+- **SmartScreen** kann bei den ersten Downloads trotz Signatur noch warnen, bis die Signatur bekannt ist. Dann steht dort aber der Herausgeber. Schneller geht es, wenn der Installer bei Microsoft eingereicht wird: https://www.microsoft.com/wdsi/filesubmission, als Softwareentwickler.
+- **Smart App Control** (Windows 11) blockiert Bibliotheken, die weder signiert noch weit verbreitet sind. Deshalb sind auch die Bibliotheken signiert.
 - **Prüfen am Gerät:** Rechtsklick auf die `.exe` → Eigenschaften → Digitale Signaturen. Unter Linux: `osslsigncode verify Wolkenfunk-Setup-X.Y.Z.exe`.
 
 ## Icons und Screenshots

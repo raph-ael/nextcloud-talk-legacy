@@ -18,6 +18,9 @@ module.exports = {
   ...base,
   win: {
     ...base.win,
+    // Besides the .exe files: the libraries next to the app and our own core (talk_node.node).
+    // Windows' Smart App Control blocks a library that is neither signed nor widely known.
+    signExts: ['.dll', '.node'],
     azureSignOptions: {
       // The name in the certificate (CN), exactly. It goes into the app, and the updater accepts
       // a later version only if its installer is signed with this name.

@@ -92,9 +92,17 @@ jobs:
             if ($s.SignerCertificate.GetNameInfo('SimpleName', $false) -cne $env:WIN_SIGN_PUBLISHER) { throw "$($f.Name): signed with another name" }
             "$($f.Name): signed and timestamped"
           }
-          if (-not (Select-String -Path dist/win-unpacked/resources/app-update.yml -Pattern '^publisherName:' -Quiet)) {
-            throw 'app-update.yml has no publisherName: the app would not check its updates'
+          # Every program and library the app ships, our own core included, is signed.
+          $inner = Get-ChildItem dist/win-unpacked -Recurse -File -Include *.exe, *.dll, *.node
+          foreach ($f in $inner) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            if ($s.Status -ne 'Valid') { throw "$($f.Name): signature is $($s.Status)" }
           }
+          "$($inner.Count) programs and libraries in the app: all signed"
+          # The installed app accepts the installer as an update (it compares the signer's name).
+          $setup = Get-ChildItem dist -Filter 'Wolkenfunk-Setup-*.exe' | Where-Object { $_.Name -notlike '*uninstaller*' } | Select-Object -First 1
+          node scripts/win-verify-update.cjs dist/win-unpacked/resources/app-update.yml $setup.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'the updater would refuse this installer' }
 
       # The unpacked app starts and stays up: the main process loads native/talk_node.node at
       # startup, so its window (seen through the DevTools port) only exists if that worked.
