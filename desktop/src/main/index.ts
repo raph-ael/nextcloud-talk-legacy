@@ -19,6 +19,7 @@ import { Readable } from 'node:stream'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import { callChanged, ensureCamera, ensureMicrophone, installSystem, recordingsChanged, unreadChanged } from './system'
 import { autostartAvailable, autostartOn, setAutostart, startedAtLogin } from './autostart'
+import { installContextMenu } from './context-menu'
 import { installScreenShare } from './screen'
 import { checkForUpdatesNow, installAutoUpdate, updatesActive } from './update'
 import {
@@ -1458,6 +1459,7 @@ function createWindow(): void {
       if (/^https?:\/\//.test(url)) void shell.openExternal(url)
     }
   })
+  installContextMenu(win)
 
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(join(__dirname, '../renderer/index.html'))

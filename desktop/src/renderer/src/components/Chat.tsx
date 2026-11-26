@@ -167,6 +167,27 @@ function deleteText(m: UiMessage): string {
   return m.attachment ? `${first} Die Datei selbst bleibt erhalten.` : first
 }
 
+/** What a message menu was opened on (docs/chat.md „Kopieren und Kontextmenü“). */
+interface MenuContext {
+  /** Address of the link under the pointer, as it stands in the message. */
+  link: string | null
+  /** The marked text when the marking touches the message, else empty. */
+  selection: string
+}
+
+/** The marked text when it is not empty and lies at least partly in this bubble, else empty. */
+function selectionIn(bubble: Element): string {
+  const selection = getSelection()
+  if (!selection || selection.isCollapsed || !selection.containsNode(bubble, true)) return ''
+  const text = selection.toString()
+  return text.trim() ? text : ''
+}
+
+const IS_MAC = navigator.platform.startsWith('Mac')
+// The marking as it was when the button went down: on the Mac the right click itself marks the
+// word under the pointer, and that is not a selection of the user.
+let pressed: { bubble: Element; selection: string } | null = null
+
 /** A message being edited, with text and mentions for the input field (`editSource`). */
 export interface Editing {
   msg: UiMessage
@@ -183,7 +204,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   // A mention of somebody without a chat yet: asks before it creates one.
   const [starting, setStarting] = useState<MentionView | null>(null)
   const [startBusy, setStartBusy] = useState(false)
-  const [menu, setMenu] = useState<{ msg: UiMessage; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<({ msg: UiMessage; x: number; y: number } & MenuContext) | null>(null)
   const [viewer, setViewer] = useState<UiMessage | null>(null)
   const [reacting, setReacting] = useState<{
     msg: UiMessage
@@ -548,7 +569,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
   }
 
   const jumpTo = useCallback((id: number) => void showMessage(room.token, id), [room.token])
-  const openMenu = useCallback((msg: UiMessage, x: number, y: number) => setMenu({ msg, x, y }), [])
+  const openMenu = useCallback((msg: UiMessage, x: number, y: number, ctx: MenuContext) => setMenu({ msg, x, y, ...ctx }), [])
   const closeMenu = useCallback(() => setMenu(null), [])
   const closeViewer = useCallback(() => setViewer(null), [])
   const closeReacting = useCallback(() => setReacting(null), [])
@@ -579,7 +600,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     )
   }
 
-  function menuItems(m: UiMessage): MenuItem[] {
+  function menuItems(m: UiMessage, { link, selection }: MenuContext): MenuItem[] {
     const items: MenuItem[] = []
     if (m.status) {
       items.push({ label: 'Erneut senden', onSelect: () => retry(m) })
@@ -589,6 +610,8 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
     if (m.kind === 'deleted') return items
     if (!room.readOnly) items.push({ label: 'Antworten', onSelect: () => reply(m) })
     if (canEdit(room, m)) items.push({ label: 'Bearbeiten', onSelect: () => void startEdit(m) })
+    if (link) items.push({ label: 'Link kopieren', onSelect: () => void navigator.clipboard.writeText(link) })
+    if (selection) items.push({ label: 'Auswahl kopieren', onSelect: () => void navigator.clipboard.writeText(selection) })
     const place = m.location
     if (place) {
       // Name and, in the second line, the link (docs/attachments.md).
@@ -597,7 +620,9 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
         onSelect: () => void navigator.clipboard.writeText(`${locationName(place)}\n${locationLink(place)}`),
       })
       items.push({ label: 'Im Browser öffnen', onSelect: () => window.open(locationLink(place), '_blank') })
-    } else if (m.text) items.push({ label: 'Text kopieren', onSelect: () => void navigator.clipboard.writeText(m.text) })
+    } else if (m.text && !selection) {
+      items.push({ label: 'Text kopieren', onSelect: () => void navigator.clipboard.writeText(m.text) })
+    }
     if (m.attachment?.link) {
       if (isImageAttachment(m.attachment)) items.push({ label: 'Bild öffnen', onSelect: () => setViewer(m) })
       items.push({ label: 'Im Browser öffnen', onSelect: () => window.open(m.attachment!.link, '_blank') })
@@ -731,7 +756,7 @@ export const Chat = forwardRef<HTMLTextAreaElement, { room: RoomView }>(function
           x={menu.x}
           y={menu.y}
           header={menuHeader(menu.msg)}
-          items={menuItems(menu.msg)}
+          items={menuItems(menu.msg, menu)}
           onClose={closeMenu}
         />
       )}
@@ -788,7 +813,7 @@ interface RowProps {
   onReply: (m: UiMessage) => void
   onReact: (m: UiMessage, bubble: HTMLElement, toggle: HTMLElement | null) => void
   onWhoReacted: (m: UiMessage) => void
-  onMenu: (m: UiMessage, x: number, y: number) => void
+  onMenu: (m: UiMessage, x: number, y: number, ctx: MenuContext) => void
   onOpenImage: (m: UiMessage) => void
   /** A click on the quote: to the quoted message. */
   onJump: (id: number) => void
@@ -951,9 +976,19 @@ const MessageRow = memo(function MessageRow({
             title={fullTime(msg.timestamp)}
             onDoubleClick={() => replyable && !image && onReply(msg)}
             onClick={() => msg.status === 'failed' && retry(msg)}
+            onMouseDown={(e) => {
+              const opensMenu = e.button === 2 || (IS_MAC && e.button === 0 && e.ctrlKey)
+              pressed = opensMenu ? { bubble: e.currentTarget, selection: selectionIn(e.currentTarget) } : null
+            }}
             onContextMenu={(e) => {
               e.preventDefault()
-              onMenu(msg, e.clientX, e.clientY)
+              const bubble = e.currentTarget
+              const selection = pressed?.bubble === bubble ? pressed.selection : selectionIn(bubble)
+              pressed = null
+              // A link in the text, not the row of a file or a location.
+              const a = (e.target as Element).closest('a[href]')
+              const link = a && a.closest('.text') && !a.closest('.file-row') ? a.getAttribute('href') : null
+              onMenu(msg, e.clientX, e.clientY, { link, selection })
             }}
           >
             {showAuthor && (
@@ -1049,7 +1084,8 @@ const MessageRow = memo(function MessageRow({
               title="Mehr"
               onClick={(e) => {
                 const r = e.currentTarget.getBoundingClientRect()
-                onMenu(msg, r.left, r.bottom + 4)
+                const bubble = e.currentTarget.closest('.msg')?.querySelector('.bubble')
+                onMenu(msg, r.left, r.bottom + 4, { link: null, selection: bubble ? selectionIn(bubble) : '' })
               }}
             >
               <svg viewBox="0 0 24 24" width="18" height="18">
