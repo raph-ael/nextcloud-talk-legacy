@@ -361,6 +361,56 @@ Am Desktop wächst das Eingabefeld mit dem Text bis 72 px, danach scrollt es. F�
 8. Fenster 380 breit und 480 hoch: Die Nachrichtenliste bleibt sichtbar, die Lasche stößt nicht an „Zum Ende springen“.
 9. Tab erreicht die Lasche, sie wird sichtbar, Leertaste und Eingabe schalten um.
 
+## Kopieren und Kontextmenü (Desktop)
+
+Am Desktop gibt es zwei Arten von Kontextmenü: das eigene Menü der App an einer Nachricht und an einem Chat in der Liste (`docs/settings.md`), und überall sonst ein Menü des Betriebssystems. Android und iOS sind davon nicht berührt.
+
+### Menü der Nachricht
+
+Das Menü (Rechtsklick auf die Nachricht oder „Mehr“) richtet sich nach der Markierung und nach dem, was unter dem Zeiger liegt.
+
+| Fall | Eintrag |
+|---|---|
+| Nichts markiert | „Text kopieren“: der ganze Text der Nachricht. |
+| Eine Markierung berührt die Nachricht | „Auswahl kopieren“ statt „Text kopieren“: nur der markierte Text. |
+| Der Zeiger steht auf einem Link im Text | zusätzlich „Link kopieren“, direkt über dem Kopier-Eintrag. |
+| Standort | „Kopieren“ bleibt (`docs/attachments.md`), mit Markierung steht „Auswahl kopieren“ darüber. |
+
+- **Reihenfolge:** Antworten, Bearbeiten, Link kopieren, Auswahl kopieren bzw. Text kopieren, Bild öffnen, Im Browser öffnen, Löschen. Die Leiste der Reaktionen bleibt die oberste Zeile.
+- **Markierung:** Sie zählt, wenn sie nicht leer ist und mindestens zum Teil in dieser Nachricht liegt. Kopiert wird die ganze Markierung, auch wenn sie über mehrere Nachrichten reicht. Eine Markierung nur in einer anderen Nachricht zählt nicht.
+- **Vor dem Klick:** Als Markierung gilt, was schon markiert war, bevor die Maustaste gedrückt wurde. Am Mac markiert jeder Rechtsklick das Wort unter dem Zeiger, das soll nicht als Auswahl zählen. Der Text wird beim Öffnen des Menüs festgehalten.
+- **Link:** Gemeint sind Links im Text der Nachricht, auch die aus Markdown. Kopiert wird die Adresse, wie sie in der Nachricht steht, bei `[Text](Adresse)` also die Adresse. Datei- und Standortzeilen zählen nicht, dort bleibt es bei „Im Browser öffnen“ bzw. „Kopieren“.
+- **„Mehr“:** Für die Markierung gilt dieselbe Regel. Einen Link gibt es dort nicht.
+- Wartende, fehlgeschlagene und gelöschte Nachrichten behalten ihr Menü.
+
+### Menü des Betriebssystems
+
+Wo die App kein eigenes Menü hat, öffnet der Rechtsklick ein Menü des Betriebssystems. Es zeigt nur, was gerade möglich ist. Ist nichts möglich, erscheint kein Menü.
+
+| Wo | Einträge |
+|---|---|
+| Eingabefeld (Nachricht, Suche, Anmeldung, Gruppenname und andere) | Bei einem als falsch markierten Wort zuerst die Vorschläge, ohne Vorschläge grau „Keine Vorschläge“, dann eine Trennlinie. Danach „Rückgängig“, „Wiederholen“, Trennlinie, „Ausschneiden“, „Kopieren“, „Einfügen“, Trennlinie, „Alles auswählen“. |
+| Markierter Text außerhalb einer Nachricht (etwa Gruppenname, Gruppenbeschreibung) | „Kopieren“ |
+| Link außerhalb einer Nachricht (etwa in den Einstellungen) | „Link kopieren“, nur für `http`, `https` und `mailto`. Mit Markierung steht „Kopieren“ darunter. |
+
+- Ein Klick auf einen Vorschlag ersetzt das Wort.
+- Am Mac heißen die Einträge wie im Menü „Bearbeiten“: „Widerrufen“ und „Einsetzen“ statt „Rückgängig“ und „Einfügen“.
+- „Alles auswählen“ gibt es nur in Eingabefeldern.
+
+### Test
+1. Zwei Wörter in einer Nachricht markieren, Rechtsklick darauf: „Auswahl kopieren“, in der Zwischenablage stehen genau die zwei Wörter.
+2. Ohne Markierung: „Text kopieren“ legt die ganze Nachricht ab.
+3. Markierung in Nachricht A, Rechtsklick auf Nachricht B: Bei B steht „Text kopieren“.
+4. Rechtsklick auf einen Link im Text und auf einen Markdown-Link: „Link kopieren“ legt die Adresse ab. Auf dem übrigen Text derselben Nachricht fehlt der Eintrag.
+5. Link und Markierung zugleich: „Link kopieren“ steht über „Auswahl kopieren“.
+6. Datei, Bild, Standort, wartende und gelöschte Nachricht: Menü wie bisher.
+7. Rechtsklick auf eine Erwähnung öffnet das Menü der Nachricht (`docs/mentions.md`).
+8. Markierung, dann „Mehr“: „Auswahl kopieren“.
+9. Eingabefeld: Rechtsklick auf ein falsch geschriebenes Wort zeigt Vorschläge, ein Klick ersetzt das Wort. Ausschneiden, Kopieren, Einfügen und Alles auswählen wirken.
+10. Markierte Gruppenbeschreibung: „Kopieren“. Link in den Einstellungen: „Link kopieren“. Rechtsklick ins Leere: kein Menü.
+11. Rechtsklick auf einen Chat in der Liste öffnet weiter das Chat-Menü.
+12. Mac: Rechtsklick auf ein Wort ohne vorherige Markierung zeigt „Text kopieren“, mit vorheriger Markierung „Auswahl kopieren“.
+
 ## Bild von „Notizen an mich“
 
 Für den Chat „Notizen an mich“ liefert der Server ein Emoji-Bild. Die Clients zeigen stattdessen ein eigenes und rufen dafür nichts vom Server ab.
