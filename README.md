@@ -43,15 +43,17 @@ Die App spricht nur mit deinem Server: kein zusätzliches Konto, kein Tracking.
 
 Die Links zeigen immer auf die neueste Version. Flathub ist in Vorbereitung.
 
-Wolkenfunk ist noch in Entwicklung, das hier sind frühe Testversionen. Windows und macOS warnen
-beim ersten Start, weil die Pakete noch nicht signiert sind. So kommst du daran vorbei:
+Wolkenfunk ist noch in Entwicklung, das hier sind frühe Testversionen. macOS warnt beim ersten
+Start, weil das Paket noch nicht signiert ist. Windows kann nachfragen, solange die Signatur neu
+ist. So kommst du daran vorbei:
 
 <details>
 <summary><b>Windows</b></summary>
 
-Die Installation braucht keine Administratorrechte. Windows zeigt beim ersten Start
-„Der Computer wurde durch Windows geschützt“ und einen unbekannten Herausgeber.
-Klicke auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“.
+Die Installation braucht keine Administratorrechte. Das Installationsprogramm ist signiert.
+Solange die Signatur neu ist, kann Windows trotzdem „Der Computer wurde durch Windows geschützt“
+zeigen, dann mit dem Namen des Herausgebers.
+Klicke in dem Fall auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“.
 
 Prüfsummen: [SHA256SUMS](https://pkg.wolkenfunk.org/windows/SHA256SUMS)
 </details>

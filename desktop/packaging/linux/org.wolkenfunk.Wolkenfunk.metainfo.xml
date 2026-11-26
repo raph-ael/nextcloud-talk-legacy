@@ -81,6 +81,12 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.15" date="2026-11-26" type="development">
+      <description>
+        <p>Windows: Das Installationsprogramm und die App sind jetzt signiert. Windows nennt den Herausgeber, statt vor einem unbekannten zu warnen.</p>
+        <p>Für die anderen Systeme ändert sich in dieser Version nichts.</p>
+      </description>
+    </release>
     <release version="0.6.14" date="2026-11-26" type="development">
       <description>
         <p>Desktop: Der Rechtsklick kopiert jetzt, was du meinst. Ist in einer Nachricht Text markiert, steht im Menü „Auswahl kopieren“ statt „Text kopieren“. Auf einem Link gibt es „Link kopieren“.</p>
