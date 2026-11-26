@@ -143,7 +143,7 @@
           <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
           <h2>Android</h2>
           <p class="req">Android 8 oder neuer</p>
-          <p class="act"><a class="button small ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-label="Wolkenfunk für Android laden">Laden</a><span class="button small soon off">Bald</span></p>
+          <p class="act"><a class="button small" href="https://play.google.com/store/apps/details?id=org.wolkenfunk.app" aria-label="Wolkenfunk bei Google Play laden">Google Play</a><a class="button small outline ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-label="Wolkenfunk für Android als APK laden">APK</a></p>
           <a class="more" href="#android" aria-label="Hinweise zur Installation unter Android">Hinweise&nbsp;›</a>
         </li>
         <li class="tile" data-platform="ios">
@@ -247,16 +247,17 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
       <section class="dl" id="android" data-pkg="https://pkg.wolkenfunk.org/android/wolkenfunk.apk" aria-labelledby="h-android">
         <h2 id="h-android"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Android</h2>
         <div class="dl-body">
-          <p>Für Android 8 oder neuer. Die APK läuft auf allen gängigen Geräten.</p>
-          <p class="dl-act"><a class="button ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>wolkenfunk.apk</a><span class="button soon off">Bald verfügbar</span><span class="ver" data-version-of="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"></span></p>
+          <p>Für Android 8 oder neuer. Am einfachsten lädst du Wolkenfunk bei Google Play, dann kommen neue Versionen von selbst. Die APK ist für Geräte ohne Google Play und läuft auf allen gängigen Geräten.</p>
+          <p class="dl-act"><a class="button" href="https://play.google.com/store/apps/details?id=org.wolkenfunk.app">Bei Google Play laden</a><a class="button outline ready" href="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>wolkenfunk.apk</a><span class="ver" data-version-of="https://pkg.wolkenfunk.org/android/wolkenfunk.apk"></span></p>
           <div class="callout">
-            <strong>Android fragt nach, bevor es installiert</strong>
+            <strong>Bei der APK fragt Android nach, bevor es installiert</strong>
             <ol>
               <li>Beim Öffnen der APK fragt Android, ob dein Browser oder Dateimanager Apps installieren darf. Erlaube das unter „Aus dieser Quelle zulassen“.</li>
               <li>Warnt Google Play Protect vor einer unbekannten App, wähle „Trotzdem installieren“.</li>
             </ol>
           </div>
           <p class="note">Die APK aktualisiert sich nicht selbst. Für eine neue Version lade sie erneut und installiere sie über die alte. Konto und Chats bleiben erhalten.</p>
+          <p class="note">Die Version bei Google Play und die APK tragen dieselbe Signatur. Du kannst also wechseln, ohne die App vorher zu löschen. Eine neue Version erscheint bei Google Play etwas später als hier, weil Google sie erst prüft.</p>
           <details class="fold">
             <summary>Kleinere Varianten, Signatur und Prüfsummen</summary>
             <p class="ready">Kleinere Varianten nur für einen Prozessortyp (<code>arm64-v8a</code> für aktuelle Geräte, <code>armeabi-v7a</code> für ältere) liegen <a href="https://pkg.wolkenfunk.org/android/">im Download-Ordner</a>.</p>
@@ -286,6 +287,7 @@ sudo apt update &amp;&amp; sudo apt install wolkenfunk</code></pre>
                 <tr><th scope="row">Debian und Ubuntu</th><td>mit den Systemupdates, über die Paketquelle</td></tr>
                 <tr><th scope="row">AppImage</th><td>automatisch: im Hintergrund geladen, beim Beenden installiert</td></tr>
                 <tr><th scope="row">Flathub</th><td>über Flathub bzw. das Software-Center</td></tr>
+                <tr><th scope="row">Android (Google Play)</th><td>automatisch, über Google Play</td></tr>
                 <tr><th scope="row">Android (APK)</th><td>von Hand: neue APK laden und darüber installieren</td></tr>
                 <tr><th scope="row">iPhone</th><td>über den App Store (bald)</td></tr>
               </tbody>

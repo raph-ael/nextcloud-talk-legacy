@@ -12,6 +12,7 @@ Wolkenfunk braucht ein Konto auf einer Nextcloud mit Talk 23 oder neuer (Nextclo
 
 ## Weiteres
 
+- [Wolkenfunk bei Google Play](https://play.google.com/store/apps/details?id=org.wolkenfunk.app)
 - [Quellcode auf GitHub](https://github.com/raph-ael/nextcloud-talk-legacy)
 - [Impressum](https://wolkenfunk.org/impressum/)
 - [Datenschutz](https://wolkenfunk.org/datenschutz/)

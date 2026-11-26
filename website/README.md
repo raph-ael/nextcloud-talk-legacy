@@ -55,6 +55,9 @@ einen Knopf (`.ready`) und einen „bald“-Platzhalter (`.soon`).
 Ohne das gilt alles als „bald“, es gibt also nie einen Link auf eine fehlende Datei. Nach einem
 Release genügt `deploy.sh`, die Seite muss nicht angepasst werden.
 
+Android hat zwei Wege: den Knopf zu Google Play (fester Link auf den Eintrag der App, ohne
+`data-pkg`, immer sichtbar) und daneben die APK wie oben. Die iPhone-App ist noch in keinem Store.
+
 Neben den Knöpfen der Download-Seite steht `<span class="ver" data-version-of="URL"></span>`.
 `stage.py` trägt dort die Version ein, die hinter dem festen Link liegt: In `SHA256SUMS` steht
 dieselbe Prüfsumme noch einmal unter dem Dateinamen mit Versionsnummer. Mit `--all` nimmt es die

@@ -232,6 +232,8 @@ a.button.outline:hover { background: var(--tint); filter: brightness(0.94); }
 .tile h2, .tile h3 { margin: 0; font-size: 1.2rem; letter-spacing: -0.01em; font-weight: 600; }
 .tile .req { margin: 0; font-size: 0.875rem; color: var(--muted); min-height: 2.9em; }
 .tile .act { margin: 10px 0 8px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+/* Zwei Knöpfe nebeneinander (Linux, Android) passen so in eine Kachel der Fünferreihe. */
+.tile .act .button.small { padding: 0 13px; }
 .tile .more { font-size: 0.875rem; }
 [data-os="windows"] .tile[data-platform="windows"], [data-os="mac"] .tile[data-platform="mac"],
 [data-os="linux"] .tile[data-platform="linux"], [data-os="android"] .tile[data-platform="android"],
