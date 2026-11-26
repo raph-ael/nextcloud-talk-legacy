@@ -25,16 +25,21 @@ if (names.length === 0) {
 
 // The name itself stays out of the log.
 const quiet = { info() {}, warn() {}, error() {}, debug() {} }
-verifySignature(names, path.resolve(installer), quiet).then(
-  (failure) => {
-    if (failure != null) {
-      console.error(`${path.basename(installer)}: the updater would refuse this installer`)
-      process.exit(1)
-    }
-    console.log(`${path.basename(installer)}: the updater accepts it as an update`)
-  },
-  (error) => {
-    console.error(`the updater's check could not run: ${error.message}`)
-    process.exit(1)
-  },
-)
+const file = path.resolve(installer)
+const name = path.basename(installer)
+
+async function main() {
+  // The check has to be able to say no: with PowerShell out of order it lets everything pass.
+  if ((await verifySignature(['Not The Publisher'], file, quiet)) == null) {
+    throw new Error(`${name}: the updater's check accepts any name, so it proves nothing here`)
+  }
+  if ((await verifySignature(names, file, quiet)) != null) {
+    throw new Error(`${name}: the updater would refuse this installer`)
+  }
+  console.log(`${name}: the updater accepts it as an update`)
+}
+
+main().catch((error) => {
+  console.error(error.message)
+  process.exit(1)
+})
