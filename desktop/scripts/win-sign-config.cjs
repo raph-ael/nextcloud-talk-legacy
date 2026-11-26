@@ -14,8 +14,19 @@ function need(name) {
 }
 for (const name of ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']) need(name)
 
+// electron-builder signs an extra resource only when it copies a folder, not a single file. So
+// the core is named here as "this file of the folder native/": same place in the app, but signed.
+const core = 'native/talk_node.node'
+if (!base.extraResources.some((r) => r.from === core && r.to === core)) {
+  throw new Error(`package.json no longer ships ${core} as an extra resource`)
+}
+const extraResources = base.extraResources.map((r) =>
+  r.from === core ? { from: 'native', to: 'native', filter: ['talk_node.node'] } : r,
+)
+
 module.exports = {
   ...base,
+  extraResources,
   win: {
     ...base.win,
     // Besides the .exe files: the libraries next to the app and our own core (talk_node.node).
