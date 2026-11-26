@@ -12,7 +12,8 @@ Für jeden Schritt gibt es ein Skript, von Hand kommt nichts dazu.
 | Linux | `.deb` mit APT-Paketquelle | pkg.wolkenfunk.org/apt | über `apt upgrade` |
 | Linux | AppImage | pkg.wolkenfunk.org/appimage | **aktualisiert sich selbst** (`latest-linux.yml`) |
 | Linux | Flatpak | Flathub (in Vorbereitung) | über Flathub bzw. das Software-Center |
-| Android | APK, signiert | pkg.wolkenfunk.org/android | keine (neue APK installieren; Play Store/F-Droid später) |
+| Android | App Bundle | Google Play | über Google Play |
+| Android | APK, signiert | pkg.wolkenfunk.org/android | keine (neue APK installieren) |
 | iOS | App Store | App Store Connect über Codemagic | über den App Store |
 
 Selbst aktualisieren sich nur Pakete ohne Paketverwaltung dahinter. Das prüft `desktop/src/main/update.ts`:
@@ -60,9 +61,13 @@ latest.json neueste Version je Kanal mit Größe und SHA-256
 
    5. schreibt zum Schluss `latest.json`.
 4. **Kanäle einzeln:** Bricht ein Kanal ab, geht es mit `ONLY=mac,windows scripts/release.sh X.Y.Z` weiter. Vorher Tag und Commit entfernen oder das Kanal-Skript direkt aufrufen. Jedes Kanal-Skript läuft auch allein, mit `DRY_RUN=1` und `SKIP_BUILD=1`.
-5. **iOS:** über Codemagic, Tag `ios-vX.Y.Z` oder manuell. Nur nach Absprache, TestFlight oder App Store nicht automatisch.
-6. **Flathub:** neue Version im Flathub-Repo eintragen (`desktop/packaging/flatpak/README.md`).
-7. **Prüfen:**
+5. **Google Play:** nur nach Absprache, nach dem echten Lauf.
+   - Aus dem Tag ein App Bundle bauen: `./gradlew :app:bundleRelease` in `android/`, signiert mit dem Upload-Schlüssel, mit `TALK_PUSH_PROXY_URL` wie bei der APK.
+   - Das Bundle über die Google Play Developer API in die Produktion laden. Google prüft die Version, danach erscheint sie von selbst.
+   - Google signiert die ausgelieferte App mit demselben Schlüssel wie unsere APK. Wer die APK hat, kann deshalb zu Google Play wechseln, ohne die App zu löschen, und umgekehrt.
+6. **iOS:** über Codemagic, Tag `ios-vX.Y.Z` oder manuell. Nur nach Absprache, TestFlight oder App Store nicht automatisch.
+7. **Flathub:** neue Version im Flathub-Repo eintragen (`desktop/packaging/flatpak/README.md`).
+8. **Prüfen:**
    - Alle festen Links liefern 200.
    - `latest.json` zeigt die neue Version.
    - Ein installiertes AppImage bzw. Windows meldet das Update und installiert es beim Beenden.
@@ -75,6 +80,7 @@ Im Repo steht kein Schlüssel und kein Passwort. Die Skripte lesen sie aus der U
 |---|---|---|
 | APT-Repo signieren | `~/.config/wolkenfunk/apt-gnupg` (GnuPG-Home, ed25519, siehe `desktop/packaging/README.md`) | `WOLKENFUNK_GNUPGHOME` |
 | Android-APK signieren | Keystore außerhalb des Repos | `WOLKENFUNK_KEYSTORE`, `WOLKENFUNK_KEYSTORE_PASSWORD`, `WOLKENFUNK_KEY_ALIAS`, `WOLKENFUNK_KEY_PASSWORD` |
+| App Bundle für Google Play signieren und hochladen | Upload-Schlüssel (eigener Keystore) und Dienstkonto für die API, beide außerhalb des Repos | dieselben `WOLKENFUNK_*`-Variablen, für diesen Bau auf den Upload-Schlüssel gesetzt |
 | Push in den mobilen Apps | Adresse des Push-Proxys (`push-proxy/`) und Firebase-Konfiguration | `TALK_PUSH_PROXY_URL` (auch in der Codemagic-Umgebung für iOS), `android/app/google-services.json` (nicht im Repo) |
 | Mac-Host für den macOS-Build | SSH-Ziel | `MAC_HOST` |
 | Upload | SSH-Zugang zum Paket-Server | `PKG_HOST`, `PKG_REMOTE` |

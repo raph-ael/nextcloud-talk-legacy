@@ -81,6 +81,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.6.14" date="2026-11-26" type="development">
+      <description>
+        <p>Desktop: Der Rechtsklick kopiert jetzt, was du meinst. Ist in einer Nachricht Text markiert, steht im Menü „Auswahl kopieren“ statt „Text kopieren“. Auf einem Link gibt es „Link kopieren“.</p>
+        <p>In Eingabefeldern öffnet der Rechtsklick ein Menü mit Ausschneiden, Kopieren und Einfügen. Bei einem rot unterstrichenen Wort stehen dort Vorschläge zur Rechtschreibung.</p>
+        <p>Das Eingabefeld lässt sich vergrößern. Ein kleiner Pfeil über dem Feld macht es für lange Nachrichten höher.</p>
+      </description>
+    </release>
     <release version="0.6.13" date="2026-11-22" type="development">
       <description>
         <p>Desktop: Neue Einstellungsseite „Audio und Video“. Dort wählst du Mikrofon, Lautsprecher und Kamera und probierst sie aus, mit Pegelanzeige, Testton und Vorschau. Kein Gerät geht dabei von allein an.</p>
