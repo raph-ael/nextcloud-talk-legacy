@@ -19,7 +19,9 @@ final class VoiceCapture: @unchecked Sendable {
     private var outFormat: AVAudioFormat?
     private var observers: [NSObjectProtocol] = []
     private var stopped = false
+    #if DEBUG
     private var fake: FakeMic?
+    #endif
 
     /// Sample rate the core recording was created with; input is converted to it.
     private let sampleRate: Double
@@ -89,7 +91,9 @@ final class VoiceCapture: @unchecked Sendable {
         queue.sync {
             stopped = true
         }
+        #if DEBUG
         fake?.stop()
+        #endif
         if engine.isRunning {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
